@@ -97,3 +97,36 @@ L0': Strategy research + backtest: target ROI >= X%, Sharpe >= Y on historical d
 | autonomous real-money spend gated by a human | ✅ да |
 | jurisdiction/ToS exposure reviewed | ✅ да |
 
+## p4-b2b-marketplace
+_B2B-маркетплейс восстановленного оборудования с выплатами продавцам_
+
+**Намеренная неточность:** "Sell refurbished gear and pay sellers automatically" — no measurable revenue target, unattended payouts with no cap or human gate, seller outreach without opt-in, warranty/liability law unreviewed.
+
+### 1) Как подан (размытая постановка)
+```
+L0: Marketplace + auto-payouts — target/caps/consent/law unspecified
+  ├─ policy_gate  ← {"measurable": false, "spend$": 800, "human": false, "outreach": true, "consent": false, "legal": true, "reviewed": false}
+  │   verdict: ⛔ block
+      ⛔ spend $800/action exceeds unattended cap $50 — requires human approval
+      ⛔ mass outreach without consent/opt-in — constitution requires consented audiences
+      ⛔ legal/jurisdiction/ToS exposure not reviewed — must be confirmed compliant first
+      🟡 no measurable acceptance target — goal is unverifiable as stated
+  └─ leaf_check   ← modules/tasks/loc/decisions … verdict: branch
+  ⇒ STOP — не декомпозируется, уходит на исправление
+```
+### 2) После того как плагин заставил уточнить
+```
+L0': GMV >= $20k/90d; payouts <= $50/action human-gated; opt-in seller outreach; warranty/liability ToS reviewed
+  ├─ policy_gate  ← {"measurable": true, "spend$": 50, "human": true, "outreach": true, "consent": true, "legal": true, "reviewed": true}
+  │   verdict: ✅ pass
+  └─ leaf_check   verdict: branch
+  ⇒ ✅ проходит в декомпозицию
+```
+### 3) Критическая сверка с шаблоном (что гейт ОБЯЗАН поймать)
+| Требование шаблона | Поймал плагин? |
+|---|---|
+| measurable acceptance target (GMV) | ✅ да |
+| unattended spend capped at $50/action | ✅ да |
+| seller outreach requires consent (opt-in) | ✅ да |
+| warranty/liability legal exposure reviewed | ✅ да |
+

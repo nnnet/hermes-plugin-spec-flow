@@ -54,6 +54,23 @@ class TestCleanRunPassesAudit:
         assert "Простыми словами" in rep  # plain-language column present
         assert "нарушений не найдено" in rep.lower() or "✅" in rep
 
+    def test_summary_counts_skill_and_profile_events(self, plugin, clean_trace):
+        # the counts come from the LOG (skill/profile fields), computed by code
+        s = plugin.tools.summarize_trace(clean_trace)
+        assert s["skill_events"]["spec-research"] >= 1
+        assert s["skill_events"]["spec-reviewer"] >= 1
+        assert s["profile_events"]["researcher"] >= 1
+        assert s["skills_missing"] == [] and s["profiles_missing"] == []
+
+    def test_report_renders_coverage_table(self, plugin, clean_trace):
+        rep = plugin.tools.build_run_report(clean_trace)
+        assert "Покрытие — посчитано кодом из лога" in rep
+        assert "`spec-research`" in rep and "`spec-reviewer`" in rep
+
+    def test_report_flags_unused_surface(self, plugin, flawed_trace):
+        rep = plugin.tools.build_run_report(flawed_trace)
+        assert "не использован" in rep  # partial trace -> gaps are visible
+
 
 class TestFlawedRunCaught:
     def test_audit_flags_violations(self, plugin, flawed_trace):

@@ -666,6 +666,14 @@ _PROFILE_ICON = {
     "spec-reviewer": "⚖️", "implementer": "🛠️", "verifier": "✅",
 }
 
+# The plugin's full surface — what a run CAN use. The report counts, from the
+# log alone, how many events each one actually produced.
+ALL_SKILLS = {
+    "spec-requirements", "spec-flow-decompose", "spec-contract", "spec-reviewer",
+    "spec-implement", "spec-integrate", "spec-research", "drift-gate", "respec-gate",
+}
+ALL_PROFILES = set(_PROFILE_ICON)
+
 
 def _ev(e: dict, k: str) -> Any:
     return e.get(k, "")
@@ -791,17 +799,26 @@ def audit_methodology(events: list[dict]) -> list[dict]:
 
 
 def summarize_trace(events: list[dict]) -> dict[str, Any]:
-    skills = {_ev(e, "skill") for e in events if _ev(e, "skill")}
-    profiles = {_ev(e, "profile") for e in events if _ev(e, "profile")}
     tasks = {_ev(e, "task") for e in events if _ev(e, "task")}
     gates: dict[str, int] = {}
+    skill_events: dict[str, int] = {}
+    profile_events: dict[str, int] = {}
     for e in events:
         g = _ev(e, "gate")
         if g:
             gates[g] = gates.get(g, 0) + 1
+        sk, pr = _ev(e, "skill"), _ev(e, "profile")
+        if sk:
+            skill_events[sk] = skill_events.get(sk, 0) + 1
+        if pr:
+            profile_events[pr] = profile_events.get(pr, 0) + 1
     x = _index_trace(events)
     return {
-        "events": len(events), "skills": sorted(skills), "profiles": sorted(profiles),
+        "events": len(events),
+        "skills": sorted(skill_events), "profiles": sorted(profile_events),
+        "skill_events": skill_events, "profile_events": profile_events,
+        "skills_missing": sorted(ALL_SKILLS - set(skill_events)),
+        "profiles_missing": sorted(ALL_PROFILES - set(profile_events)),
         "tasks": len(tasks), "gate_calls": gates,
         "revision_levels": {"spike": x["spike"], "continuous_revision": x["revision_fired"]},
         "complete": x["complete"],
@@ -960,10 +977,29 @@ def build_run_report(events: list[dict], level: int = 2, title: str = "spec-flow
     out.append("")
     out.append(render_footprints(events, level))
     out.append("")
-    out.append("## Сводка")
-    out.append(f"- Скиллы: {', '.join(s['skills'])}")
-    out.append(f"- Профили: {', '.join(s['profiles'])}")
+    out.append("## Покрытие — посчитано кодом из лога")
+    out.append("")
+    used_sk = len(ALL_SKILLS) - len(s["skills_missing"])
+    used_pr = len(ALL_PROFILES) - len(s["profiles_missing"])
+    out.append(f"Скиллы: **{used_sk}/{len(ALL_SKILLS)}** · "
+               f"Профили: **{used_pr}/{len(ALL_PROFILES)}** "
+               f"(события каждого посчитаны по полям `skill`/`profile` трейса)")
+    out.append("")
+    out.append("| Скилл | Событий | · | Профиль | Событий |")
+    out.append("|---|--:|---|---|--:|")
+    sk_rows = [(k, s["skill_events"].get(k, 0)) for k in sorted(ALL_SKILLS)]
+    pr_rows = [(k, s["profile_events"].get(k, 0)) for k in sorted(ALL_PROFILES)]
+    for i in range(max(len(sk_rows), len(pr_rows))):
+        sk = f"`{sk_rows[i][0]}` | {sk_rows[i][1] or '— не использован'}" \
+            if i < len(sk_rows) else " | "
+        pr = f"{_PROFILE_ICON.get(pr_rows[i][0], '')} `{pr_rows[i][0]}` | {pr_rows[i][1] or '— не использован'}" \
+            if i < len(pr_rows) else " | "
+        out.append(f"| {sk} | · | {pr} |")
+    out.append("")
     out.append(f"- Вызовы тулзов: " + ", ".join(f"{k}×{v}" for k, v in s["gate_calls"].items()))
+    if s["skills_missing"] or s["profiles_missing"]:
+        out.append(f"- ⚠️ Не использованы: "
+                   + ", ".join(f"`{k}`" for k in s["skills_missing"] + s["profiles_missing"]))
     return "\n".join(out) + "\n"
 
 

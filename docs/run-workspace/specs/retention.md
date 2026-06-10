@@ -1,8 +1,21 @@
 # Retention + purge job
 
-- **Level:** L2  ·  **Decision:** `leaf`
+- **Node:** `retention`  ·  **Level:** L2  ·  **Decision:** `leaf`
 - **Traces-to:** Time-series storage
 - **leaf_check reason:** within all thresholds
+- **Project acceptance target:** ingest >= 1000 events/s; p95 query < 200ms; 0 PII fields in storage.
+
+## Size estimate (leaf_check input)
+
+| metric | value |
+|---|---|
+| modules | 1 |
+| tasks | 2 |
+| interfaces | 1 |
+| estimated_loc | 60 |
+| open_decisions | 0 |
+| single_concern | True |
+| testable_criteria | True |
 
 ## Plan
 - bottom-up plan: DB → logic → API → tests

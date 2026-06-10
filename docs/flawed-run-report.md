@@ -33,7 +33,21 @@
 | 7 | 🛠️ implementer | implement child directly | implement child directly | · |
 | 8 | ✅ verifier | L0 integrate done = project COMPLETE | всё собрано и проверено — ПРОЕКТ ГОТОВ | 🏁 Готово |
 
-## Сводка
-- Скиллы: spec-flow-decompose, spec-implement, spec-integrate
-- Профили: implementer, spec-decomposer, verifier
+## Покрытие — посчитано кодом из лога
+
+Скиллы: **3/9** · Профили: **3/6** (события каждого посчитаны по полям `skill`/`profile` трейса)
+
+| Скилл | Событий | · | Профиль | Событий |
+|---|--:|---|---|--:|
+| `drift-gate` | — не использован | · | 🛠️ `implementer` | 4 |
+| `respec-gate` | — не использован | · | 🔬 `researcher` | — не использован |
+| `spec-contract` | — не использован | · | 📐 `spec-contract` | — не использован |
+| `spec-flow-decompose` | 3 | · | 🧩 `spec-decomposer` | 3 |
+| `spec-implement` | 4 | · | ⚖️ `spec-reviewer` | — не использован |
+| `spec-integrate` | 1 | · | ✅ `verifier` | 1 |
+| `spec-requirements` | — не использован | · |  |  |
+| `spec-research` | — не использован | · |  |  |
+| `spec-reviewer` | — не использован | · |  |  |
+
 - Вызовы тулзов: leaf_check×3, contract_check×1
+- ⚠️ Не использованы: `drift-gate`, `respec-gate`, `spec-contract`, `spec-requirements`, `spec-research`, `spec-reviewer`, `researcher`, `spec-contract`, `spec-reviewer`

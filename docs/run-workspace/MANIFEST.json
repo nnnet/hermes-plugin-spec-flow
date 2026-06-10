@@ -9,50 +9,50 @@
     {
       "path": "specs/l0.md",
       "type": "spec",
-      "bytes": 438,
-      "sha256": "31f6c369b42824d7"
+      "bytes": 985,
+      "sha256": "5f3263b214390f18"
     },
     {
       "path": "specs/consent.md",
       "type": "spec",
-      "bytes": 404,
-      "sha256": "a786383776bd1693"
+      "bytes": 1020,
+      "sha256": "016211835b8cdfb2"
     },
     {
       "path": "specs/consent_banner.md",
       "type": "spec",
-      "bytes": 363,
-      "sha256": "9f02819e2f3a4fc2"
+      "bytes": 714,
+      "sha256": "94f40e09992469e6"
     },
     {
       "path": "specs/anonymiser.md",
       "type": "spec",
-      "bytes": 371,
-      "sha256": "3f6d74c08579a433"
+      "bytes": 718,
+      "sha256": "88cd0efe96ce1a5b"
     },
     {
       "path": "specs/ingest.md",
       "type": "spec",
-      "bytes": 347,
-      "sha256": "b4a5047e31079834"
+      "bytes": 847,
+      "sha256": "dc91b0120bdbe0e0"
     },
     {
       "path": "specs/storage.md",
       "type": "spec",
-      "bytes": 351,
-      "sha256": "16547f717b0af801"
+      "bytes": 805,
+      "sha256": "9bbc2c024646b27d"
     },
     {
       "path": "specs/schema.md",
       "type": "spec",
-      "bytes": 352,
-      "sha256": "7158e673f4b8432c"
+      "bytes": 695,
+      "sha256": "45133d3b251e1548"
     },
     {
       "path": "specs/retention.md",
       "type": "spec",
-      "bytes": 347,
-      "sha256": "87feb646477fb456"
+      "bytes": 693,
+      "sha256": "47c7e107f8939a76"
     },
     {
       "path": "contracts/query.openapi.yaml",
@@ -63,26 +63,26 @@
     {
       "path": "specs/api.md",
       "type": "spec",
-      "bytes": 315,
-      "sha256": "1f113b2ebd7a8478"
+      "bytes": 818,
+      "sha256": "aef06389b7dd47a5"
     },
     {
       "path": "specs/ep_query.md",
       "type": "spec",
-      "bytes": 326,
-      "sha256": "cc0257b400ab5e89"
+      "bytes": 877,
+      "sha256": "c82a2739f905d9fe"
     },
     {
       "path": "specs/ep_export.md",
       "type": "spec",
-      "bytes": 327,
-      "sha256": "cb5394471e35c453"
+      "bytes": 673,
+      "sha256": "468b8f6abc62f924"
     },
     {
       "path": "specs/dashboard.md",
       "type": "spec",
-      "bytes": 350,
-      "sha256": "45cf037cd6c17618"
+      "bytes": 696,
+      "sha256": "1487e5a62c0d1f21"
     }
   ],
   "commits": 0,

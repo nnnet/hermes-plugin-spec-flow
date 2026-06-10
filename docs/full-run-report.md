@@ -80,7 +80,20 @@ _Нарушений методологии не обнаружено: все и�
 | 73 | ⚖️ spec-reviewer | respec-gate: change the cause first, version-bump, re-derive only affected subtree | сначала чиним причину (спеку/контракт), потом код | 📜 Правка спеки |
 | 74 | ✅ verifier | L0 integrate done = project COMPLETE | всё собрано и проверено — ПРОЕКТ ГОТОВ | 🏁 Готово |
 
-## Сводка
-- Скиллы: drift-gate, respec-gate, spec-contract, spec-flow-decompose, spec-implement, spec-integrate, spec-requirements, spec-research, spec-reviewer
-- Профили: implementer, researcher, spec-contract, spec-decomposer, spec-reviewer, verifier
+## Покрытие — посчитано кодом из лога
+
+Скиллы: **9/9** · Профили: **6/6** (события каждого посчитаны по полям `skill`/`profile` трейса)
+
+| Скилл | Событий | · | Профиль | Событий |
+|---|--:|---|---|--:|
+| `drift-gate` | 1 | · | 🛠️ `implementer` | 20 |
+| `respec-gate` | 2 | · | 🔬 `researcher` | 4 |
+| `spec-contract` | 1 | · | 📐 `spec-contract` | 1 |
+| `spec-flow-decompose` | 25 | · | 🧩 `spec-decomposer` | 30 |
+| `spec-implement` | 19 | · | ⚖️ `spec-reviewer` | 13 |
+| `spec-integrate` | 6 | · | ✅ `verifier` | 6 |
+| `spec-requirements` | 5 | · |  |  |
+| `spec-research` | 4 | · |  |  |
+| `spec-reviewer` | 11 | · |  |  |
+
 - Вызовы тулзов: policy_gate×1, leaf_check×12, contract_check×3, research_trigger_check×1
