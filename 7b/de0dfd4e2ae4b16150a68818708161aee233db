@@ -1,0 +1,52 @@
+tests/scenarios/p1_earn_for_living.yaml
+  s_1b99a7ec9e9aa9::t_32d11e30e542d0 1-25
+plugin.yaml
+  s_1b99a7ec9e9aa9::t_992b23db061c57 10,16-18
+docs/business-scenarios-report.md
+  s_1b99a7ec9e9aa9::t_cc44515a95a277 1-99
+tests/report.py
+  s_1b99a7ec9e9aa9::t_23a3fe462b4077 27
+  s_1b99a7ec9e9aa9::t_034c5d2627c0c6 120-125,127-128
+tests/scenarios/p2_sponsor_credits.yaml
+  s_1b99a7ec9e9aa9::t_32d11e30e542d0 1-23
+docs/test-report.md
+  s_1b99a7ec9e9aa9::t_cc44515a95a277 3
+tests/test_policy_scenarios.py
+  s_1b99a7ec9e9aa9::t_13a13cbb9c01d0 1-70
+tests/test_spec_flow.py
+  s_1b99a7ec9e9aa9::t_ee84061c84d4e0 209-253
+  s_1b99a7ec9e9aa9::t_088dd70ecf0636 20
+tests/README.md
+  s_1b99a7ec9e9aa9::t_4058ee629419a9 19-20
+  s_1b99a7ec9e9aa9::t_e2bcd0d5b4bff2 47-54
+tests/scenarios/p3_polymarket_platform.yaml
+  s_1b99a7ec9e9aa9::t_32d11e30e542d0 1-25
+tests/harness/scenarios.py
+  s_1b99a7ec9e9aa9::t_fb46258b941f02 1-171,173-194
+  s_1b99a7ec9e9aa9::t_eb69fbadbcfd38 172
+spec_flow_tools.py
+  s_1b99a7ec9e9aa9::t_f24639d3cd9d3b 554-638
+  s_1b99a7ec9e9aa9::t_2e4e7f37b32f65 90-101
+  s_1b99a7ec9e9aa9::t_e0fe6f9e972fab 118-128
+  s_1b99a7ec9e9aa9::t_d046f515b0925c 671-678
+__init__.py
+  s_1b99a7ec9e9aa9::t_a1d19e69a29572 28
+README.md
+  s_1b99a7ec9e9aa9::t_8c742d6465ad0f 34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "7bde0dfd4e2ae4b16150a68818708161aee233db",
+  "prompts": {},
+  "sessions": {
+    "s_1b99a7ec9e9aa9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5025e0d8-1d1b-4f97-8c52-eec971a58fbd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <zkowkmdx@sharklasers.com>"
+    }
+  }
+}
