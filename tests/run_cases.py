@@ -95,7 +95,7 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
     # (bundled autonomous one by default); with --decomposer llm the case's
     # predefined tree is DROPPED and the plugin builds it from the goal
     agents = {}
-    if depth == "execute":
+    if depth in ("execute", "product"):
         agents["implementer"] = auto_implementer.implement
     max_calls = eng.MAX_DECOMPOSE_CALLS
     if decomposer == "llm":
@@ -121,7 +121,32 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
 
     findings = tools.audit_methodology(events)
     summary = tools.summarize_trace(events)
+
+    # smart oracle report — built by PLUGIN code (tools.build_oracle_report)
+    # from the realized run + the case's declared `oracle:` block, NOT from a
+    # 1:1 tree comparison. Written into the run folder like every other report.
+    oracle_spec = case.get("oracle")
+    oracle_ok = None
+    if oracle_spec:
+        oracle_rep = tools.check_oracle(res, oracle_spec, summary)
+        oracle_ok = oracle_rep.ok
+        (case_dir / "oracle-report.md").write_text(
+            tools.build_oracle_report(res, oracle_spec, summary,
+                                      title=f"{case['name']} — oracle (depth={depth})"),
+            encoding="utf-8")
+
+    # product readiness report (depth=product) is written by the engine itself
+    # into workspace/PRODUCT-RESULTS.md; surface its verdict in the summary.
+    product_verdict = None
+    pr_path = case_dir / "workspace" / "PRODUCT-RESULTS.md"
+    if pr_path.exists():
+        head = pr_path.read_text(encoding="utf-8")[:400]
+        product_verdict = ("READY" if "✅" in head and "READY" in head
+                           else "NOT READY" if "NOT READY" in head else "—")
+
     return {
+        "oracle_ok": oracle_ok,
+        "product": product_verdict,
         "skills": f"{len(res.skills_used)}/{len(eng.ALL_SKILLS)}",
         "profiles": f"{len(res.profiles_used)}/{len(eng.ALL_PROFILES)}",
         "tasks": len(res.tasks),
@@ -156,18 +181,25 @@ def _summary_md(name: str, goal: str, depth: str, full: dict | None,
         gates = ", ".join(f"{k}×{v}" for k, v in full["gate_calls"].items())
         audit = ("✅ нарушений нет" if not full["audit_errors"] and not full["audit_warns"]
                  else f"❌ ошибок {full['audit_errors']}, предупреждений {full['audit_warns']}")
+        oracle = ("—" if full["oracle_ok"] is None
+                  else "✅ пройден" if full["oracle_ok"] else "❌ не пройден")
+        product = full["product"] or "— (глубина ниже product)"
         lines += ["## Полный прогон",
                   f"- скиллы: **{full['skills']}** · профили: **{full['profiles']}** · задач: **{full['tasks']}**",
                   f"- циклы: {loops}",
                   f"- вызовы гейтов: {gates}",
                   f"- завершён: {'✅' if full['complete'] else '❌'}",
-                  f"- методологический аудит: {audit}", ""]
+                  f"- методологический аудит: {audit}",
+                  f"- умный оракул (опорные точки/глубина/эпизоды): {oracle}",
+                  f"- готовность продукта: {product}", ""]
     lines += ["## Файлы",
               "- `workspace/` — артефакты прогона (конституция, спеки, контракты, MANIFEST)",
+              "- `workspace/PRODUCT-RESULTS.md` — вердикт готовности продукта (глубина `product`)",
               "- `workflow.md` — **дерево целей/задач** (версии, ↻ повторы, эпизоды) + журнал + таблица циклов",
-              "- `trace.jsonl` — сырой событийный поток (источник отчёта)",
+              "- `trace.jsonl` — сырой событийный поток (источник отчётов)",
               "- `log.txt` — журнал исполнения",
-              "- `report.md` — footprint + методологический аудит (строит сам плагин)",
+              "- `report.md` — footprint + методологический аудит (строит код плагина)",
+              "- `oracle-report.md` — умная проверка исхода (строит код плагина: `build_oracle_report`)",
               "- `policy-report.md` — ловля размытой постановки (если есть policy-разрез)", ""]
     return "\n".join(lines)
 
@@ -219,6 +251,10 @@ def main() -> int:
             audit = "audit ✅" if not full["audit_errors"] else f"audit ❌×{full['audit_errors']}"
             bits.append(f"skills {full['skills']}, profiles {full['profiles']}, "
                         f"tasks {full['tasks']}, {audit}")
+            if full["oracle_ok"] is not None:
+                bits.append("oracle ✅" if full["oracle_ok"] else "oracle ❌")
+            if full["product"]:
+                bits.append(f"product {full['product']}")
         print(f"  {name:24s} {' · '.join(bits)}")
         print(f"  {'':24s} → {case_dir.relative_to(PLUGIN_DIR)}/")
     return 0

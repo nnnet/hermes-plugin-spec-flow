@@ -6,3 +6,6 @@ docs/full-run-trace.jsonl
 
 # per-case run outputs (regenerate via tests/run_cases.py)
 tests/runs-out/
+
+# git worktrees created for parallel subagents
+.claude/worktrees/

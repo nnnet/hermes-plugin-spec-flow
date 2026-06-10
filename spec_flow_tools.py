@@ -43,6 +43,7 @@ import os
 import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 # Hermes provides ``tools.registry``; fall back to a no-op so the plugin
@@ -1160,3 +1161,202 @@ registry.register(
     check_fn=_check_specflow,
     emoji="📊",
 )
+
+
+# ---------------------------------------------------------------------------
+# Smart verification oracle (PLUGIN code — builds the oracle report itself)
+# ---------------------------------------------------------------------------
+# A scenario's `tree` is the INPUT that drives a run; re-using it as a 1:1
+# ground-truth equality check is circular. This oracle instead checks the
+# realized run against declared OUTCOME invariants (depth bounds, reference
+# anchor nodes that must reach done, which methodology episodes happened,
+# control-flow loop counts, coverage floors, research-before-implementation).
+# Like build_run_report, the report is produced by plugin code, not the harness.
+
+_ORACLE_EPISODE_TO_LOOP = {
+    "clarify": "clarify",
+    "review_critique": "review-fail",
+    "drift_respec": "drift-respec",
+    "drift_codefix": "drift-codefix",
+    "revision": "revision-respec",
+    "spike": None,        # detected from events, not loops
+    "contract": None,
+}
+_ORACLE_LOOP_KEY_TO_TYPE = {
+    "clarify": "clarify",
+    "review_fail": "review-fail",
+    "drift_respec": "drift-respec",
+    "drift_codefix": "drift-codefix",
+    "revision_respec": "revision-respec",
+}
+
+
+@dataclass
+class Expectation:
+    """A single checked invariant within an oracle report."""
+
+    name: str
+    ok: bool
+    reason: str
+    expected: Any = None
+    actual: Any = None
+
+
+@dataclass
+class OracleReport:
+    """Aggregate oracle result: per-expectation verdicts + a roll-up flag."""
+
+    expectations: list = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return all(e.ok for e in self.expectations)
+
+    @property
+    def failures(self) -> list:
+        return [e for e in self.expectations if not e.ok]
+
+    def add(self, name, ok, reason, expected=None, actual=None) -> None:
+        self.expectations.append(Expectation(name, ok, reason, expected, actual))
+
+
+def _oracle_realized_depth(run_result) -> int:
+    """Max nesting level the run actually decomposed to (root = 0)."""
+    tree = run_result.project.get("tree") or {}
+
+    def walk(node, depth):
+        kids = node.get("children") or []
+        return depth if not kids else max(walk(c, depth + 1) for c in kids)
+
+    return walk(tree, 0)
+
+
+def _oracle_done_ids(run_result) -> set:
+    return {tid for tid, t in run_result.tasks.items()
+            if getattr(t, "status", "") == "done"}
+
+
+def _oracle_loop_counts(run_result) -> dict:
+    counts: dict = {}
+    for loop in run_result.loops:
+        t = loop.get("type", "")
+        counts[t] = counts.get(t, 0) + 1
+    return counts
+
+
+def _oracle_episode_present(run_result, episode: str) -> bool:
+    loop_type = _ORACLE_EPISODE_TO_LOOP.get(episode)
+    if loop_type is not None:
+        return any(l.get("type") == loop_type for l in run_result.loops)
+    if episode == "spike":
+        return any(e.skill == "spec-research" and e.phase == "research"
+                   for e in run_result.events)
+    if episode == "contract":
+        return any(e.gate == "contract_check" for e in run_result.events)
+    return False
+
+
+def _oracle_first_tick(run_result, *, skill=None, phase=None):
+    ticks = [e.tick for e in run_result.events
+             if (skill is None or e.skill == skill)
+             and (phase is None or e.phase == phase)]
+    return min(ticks) if ticks else None
+
+
+def check_oracle(run_result, oracle_spec: dict, summary: dict) -> OracleReport:
+    """Evaluate a scenario's declared `oracle:` block against the realized run.
+    Checks semantic invariants (depth bounds, anchor nodes reaching done,
+    required episodes, minimum loop counts, coverage floors, research-before-
+    impl), NOT structural equality with the tree. Returns an OracleReport."""
+    spec = oracle_spec or {}
+    summary = summary or {}
+    rep = OracleReport()
+
+    depth = _oracle_realized_depth(run_result)
+    if "min_depth" in spec:
+        lo = int(spec["min_depth"])
+        rep.add("min_depth", depth >= lo,
+                f"realized depth {depth} {'>=' if depth >= lo else '<'} required {lo}",
+                expected=f">= {lo}", actual=depth)
+    if "max_depth" in spec:
+        hi = int(spec["max_depth"])
+        rep.add("max_depth", depth <= hi,
+                f"realized depth {depth} {'<=' if depth <= hi else '>'} allowed {hi}",
+                expected=f"<= {hi}", actual=depth)
+
+    done = _oracle_done_ids(run_result)
+    for anchor in spec.get("anchor_nodes", []) or []:
+        exists = anchor in run_result.tasks
+        is_done = anchor in done
+        rep.add(f"anchor:{anchor}", exists and is_done,
+                ("reached done" if exists and is_done
+                 else ("exists but not done" if exists else "missing from board")),
+                expected="done",
+                actual=getattr(run_result.tasks.get(anchor), "status", "absent"))
+
+    for episode in spec.get("expected_episodes", []) or []:
+        present = _oracle_episode_present(run_result, episode)
+        rep.add(f"episode:{episode}", present,
+                "occurred" if present else "never occurred",
+                expected=">= 1", actual="present" if present else "absent")
+
+    counts = _oracle_loop_counts(run_result)
+    for key, want in (spec.get("expected_loops") or {}).items():
+        loop_type = _ORACLE_LOOP_KEY_TO_TYPE.get(key, key)
+        have = counts.get(loop_type, 0)
+        rep.add(f"loops:{key}", have >= int(want),
+                f"{have} {'>=' if have >= int(want) else '<'} required {want}",
+                expected=f">= {want}", actual=have)
+
+    cov = spec.get("coverage") or {}
+    if "min_skills" in cov:
+        used = len(run_result.skills_used)
+        rep.add("coverage:skills", used >= int(cov["min_skills"]),
+                f"{used} skills used (missing per trace: {summary.get('skills_missing', [])})",
+                expected=f">= {cov['min_skills']}", actual=used)
+    if "min_profiles" in cov:
+        used = len(run_result.profiles_used)
+        rep.add("coverage:profiles", used >= int(cov["min_profiles"]),
+                f"{used} profiles used (missing per trace: {summary.get('profiles_missing', [])})",
+                expected=f">= {cov['min_profiles']}", actual=used)
+
+    if spec.get("research_before_impl"):
+        first_research = _oracle_first_tick(run_result, skill="spec-research")
+        first_impl = _oracle_first_tick(run_result, skill="spec-implement")
+        ok = (first_research is not None and first_impl is not None
+              and first_research < first_impl)
+        rep.add("research_before_impl", ok,
+                f"first research tick={first_research}, first impl tick={first_impl}",
+                expected="research < impl",
+                actual=f"{first_research} vs {first_impl}")
+
+    return rep
+
+
+def render_oracle(report: OracleReport) -> str:
+    """Render an OracleReport as a readable markdown table with a roll-up."""
+    head = "✅ PASS" if report.ok else "❌ FAIL"
+    n_ok = sum(1 for e in report.expectations if e.ok)
+    n = len(report.expectations)
+    lines = [
+        f"## Oracle verdict — {head} ({n_ok}/{n} expectations)",
+        "",
+        "| Expectation | Verdict | Expected | Actual | Reason |",
+        "|---|---|---|---|---|",
+    ]
+    for e in report.expectations:
+        mark = "✅" if e.ok else "❌"
+        lines.append(f"| `{e.name}` | {mark} | {e.expected} | {e.actual} | {e.reason} |")
+    return "\n".join(lines) + "\n"
+
+
+def build_oracle_report(run_result, oracle_spec: dict, summary: dict = None,
+                        title: str = "spec-flow oracle") -> str:
+    """Public report builder: evaluate the oracle and render a titled markdown
+    report — the oracle counterpart of build_run_report, produced by plugin
+    code from the realized run + the declared oracle spec."""
+    if summary is None:
+        summary = {}
+    rep = check_oracle(run_result, oracle_spec, summary)
+    body = render_oracle(rep)
+    return f"# {title}\n\n{body}"

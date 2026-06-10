@@ -151,3 +151,18 @@ oracle:
   # the full-surface case must exercise ALL skills and ALL profiles.
   coverage: {min_skills: 9, min_profiles: 6}
   research_before_impl: true
+
+# ---- product acceptance (depth=product) -------------------------------------
+# What "ready to use" means for this product. With only the bundled stub
+# implementer (no real built app / entrypoint) the product check honestly
+# reports NOT READY — a live implementer agent is what turns it green.
+acceptance:
+  # entrypoint intentionally omitted in the autonomous test: no real app is
+  # built, so readiness must NOT be faked green.
+  smoke:
+    - "service starts and answers GET /health -> 200"
+  e2e:
+    - "create listing -> search finds it -> place order -> invoice totals in cents"
+  metrics:
+    - "p95 checkout < 500ms over 100 requests"
+    - "payout error rate < 0.1%"
