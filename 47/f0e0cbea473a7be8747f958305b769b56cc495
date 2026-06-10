@@ -1,0 +1,34 @@
+docs/full-run-report.md
+  s_1b99a7ec9e9aa9::t_ce3e65458f907e 88
+  s_1b99a7ec9e9aa9::t_ff1240c11d50d2 3,13-87,89
+spec_flow_tools.py
+  s_1b99a7ec9e9aa9::t_5a94863f740099 850
+  s_1b99a7ec9e9aa9::t_a61c9a98d67ae0 939-944
+  s_1b99a7ec9e9aa9::t_c6ae763ba5d6b6 816-849,851-882,884-886,888-889,895-896,898-899
+docs/README.md
+  s_1b99a7ec9e9aa9::t_60683ef7d52fd9 1-27
+tests/harness/run_engine.py
+  s_1b99a7ec9e9aa9::t_5474e7552b9ef0 383-384
+docs/flawed-run-report.md
+  s_1b99a7ec9e9aa9::t_ff1240c11d50d2 21-34
+tests/test_run_report.py
+  s_1b99a7ec9e9aa9::t_f6955c579d6fe7 50-51
+.gitignore
+  s_1b99a7ec9e9aa9::t_3b7a7cab7fee71 3-5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "47f0e0cbea473a7be8747f958305b769b56cc495",
+  "prompts": {},
+  "sessions": {
+    "s_1b99a7ec9e9aa9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5025e0d8-1d1b-4f97-8c52-eec971a58fbd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <zkowkmdx@sharklasers.com>"
+    }
+  }
+}
