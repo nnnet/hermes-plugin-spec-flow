@@ -754,7 +754,9 @@ def render_log(res: RunResult, level: int = None) -> str:
     level = level if level is not None else getattr(res, "verbosity", DEFAULT_VERBOSITY)
     shown = [e for e in res.events if e.level <= level]
     widths = _column_widths(shown)
-    lines = ["```", f"TICK │ ACTOR · SKILL · [TASK] action → result   (verbosity={level})"]
+    header = (f"TICK │   {'ACTOR':<{widths['profile']}} · {'SKILL':<{widths['skill']}} · "
+              f"{'[TASK]':<{widths['task']}} ACTION → RESULT  «DETAIL»   (verbosity={level})")
+    lines = ["```", header]
     last_phase = None
     for e in shown:
         if e.phase != last_phase:
@@ -809,9 +811,9 @@ def render_mermaid(res: RunResult) -> str:
     classed: list[tuple[str, str]] = []
 
     def esc(s: str) -> str:
-        return str(s).replace('"', "'")
+        return str(s).replace("&", "&amp;").replace('"', "'")
 
-    def walk(node, parent=None):
+    def walk(node, parent=None, depth=0):
         nid = node["id"]
         t = res.tasks.get(nid)
         ver = f" v{t.version}" if t and t.version > 1 else ""
@@ -829,9 +831,11 @@ def render_mermaid(res: RunResult) -> str:
         if node.get("review_fails"):
             tags.append(f"review↻{node['review_fails']}")
         tagstr = ("<br/>⟨" + "⟩ ⟨".join(tags) + "⟩") if tags else ""
-        lines.append(f'    {nid}["{esc(node.get("title", nid))}{ver}{runs}{tagstr}"]')
+        # indentation mirrors the tree depth so the SOURCE also reads as a tree
+        pad = "    " * (depth + 1)
+        lines.append(f'{pad}{nid}["{esc(node.get("title", nid))}{ver}{runs}{tagstr}"]')
         if parent:
-            lines.append(f"    {parent} --> {nid}")
+            lines.append(f"{pad}{parent} --> {nid}")
         if node.get("drift"):
             classed.append((nid, "drift"))
         elif node.get("contract"):
@@ -841,7 +845,7 @@ def render_mermaid(res: RunResult) -> str:
         elif node.get("clarify"):
             classed.append((nid, "clarify"))
         for c in node.get("children", []):
-            walk(c, nid)
+            walk(c, nid, depth + 1)
 
     walk(proj["tree"])
     lines += [
@@ -921,7 +925,10 @@ def render_report(res: RunResult, level: int = None) -> str:
         "",
         "## Дерево задач — граф (mermaid)",
         "",
-        "> Цвет: 🔵 ресёрч/spike · 🟣 контракт · 🔴 эпизод дрейфа · 🟠 clarify.",
+        "> Цвет: 🔵 ресёрч/spike · 🟣 контракт · 🔴 эпизод дрейфа · 🟠 clarify. "
+        "Диаграмму рисует просмотрщик с поддержкой mermaid (GitHub, Obsidian, "
+        "VS Code + Markdown Preview Mermaid); без неё виден исходник графа — "
+        "иерархия задана рёбрами `родитель --> потомок` и отступами.",
         "",
         render_mermaid(res),
         "",
