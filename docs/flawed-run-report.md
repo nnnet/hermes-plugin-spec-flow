@@ -36,19 +36,19 @@
 
 ## Покрытие — посчитано кодом из лога
 
-Скиллы: **3/9** · Профили: **3/6** (события каждого посчитаны по полям `skill`/`profile` трейса)
+Скиллы: **3/9** · Профили: **3/7** (события каждого посчитаны по полям `skill`/`profile` трейса)
 
 | Скилл | Событий | · | Профиль | Событий |
 |---|--:|---|---|--:|
-| `drift-gate` | — не использован | · | 🛠️ `implementer` | 4 |
-| `respec-gate` | — не использован | · | 🔬 `researcher` | — не использован |
-| `spec-contract` | — не использован | · | 📐 `spec-contract` | — не использован |
-| `spec-flow-decompose` | 3 | · | 🧩 `spec-decomposer` | 3 |
-| `spec-implement` | 4 | · | ⚖️ `spec-reviewer` | — не использован |
-| `spec-integrate` | 1 | · | ✅ `verifier` | 1 |
-| `spec-requirements` | — не использован | · |  |  |
+| `drift-gate` | — не использован | · |  `approver` | — не использован |
+| `respec-gate` | — не использован | · | 🛠️ `implementer` | 4 |
+| `spec-contract` | — не использован | · | 🔬 `researcher` | — не использован |
+| `spec-flow-decompose` | 3 | · | 📐 `spec-contract` | — не использован |
+| `spec-implement` | 4 | · | 🧩 `spec-decomposer` | 3 |
+| `spec-integrate` | 1 | · | ⚖️ `spec-reviewer` | — не использован |
+| `spec-requirements` | — не использован | · | ✅ `verifier` | 1 |
 | `spec-research` | — не использован | · |  |  |
 | `spec-reviewer` | — не использован | · |  |  |
 
 - Вызовы тулзов: leaf_check×3, contract_check×1
-- ⚠️ Не использованы: `drift-gate`, `respec-gate`, `spec-contract`, `spec-requirements`, `spec-research`, `spec-reviewer`, `researcher`, `spec-contract`, `spec-reviewer`
+- ⚠️ Не использованы: `drift-gate`, `respec-gate`, `spec-contract`, `spec-requirements`, `spec-research`, `spec-reviewer`, `approver`, `researcher`, `spec-contract`, `spec-reviewer`
