@@ -1,0 +1,6 @@
+{
+  "endpoints": {
+    "POST /shorten": {"short_url": "string", "id": "integer"},
+    "GET /{code}": {"target": "string"}
+  }
+}

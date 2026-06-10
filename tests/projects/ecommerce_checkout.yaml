@@ -1,0 +1,56 @@
+# Deep project. Demonstrates the gate SPLITTING a coupled "frontend+backend"
+# step the architect was tempted to leave as one leaf (single_concern=false).
+name: ecommerce-checkout
+goal: "Checkout subsystem: cart + payment + a coupled checkout form."
+tree:
+  id: L0
+  title: "Checkout subsystem"
+  metrics: {modules: 5, tasks: 18, interfaces: 4, estimated_loc: 2000, open_decisions: 0, single_concern: false, testable_criteria: true}
+  expect: branch
+  children:
+    - id: cart
+      title: "Cart service"
+      contract: true
+      metrics: {modules: 2, tasks: 6, interfaces: 2, estimated_loc: 260, open_decisions: 0, single_concern: false, testable_criteria: true}
+      expect: branch
+      children:
+        - id: add_item
+          title: "POST /cart/items"
+          metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 70, open_decisions: 0, single_concern: true, testable_criteria: true}
+          expect: leaf
+        - id: remove_item
+          title: "DELETE /cart/items/{id}"
+          metrics: {modules: 1, tasks: 2, interfaces: 1, estimated_loc: 55, open_decisions: 0, single_concern: true, testable_criteria: true}
+          expect: leaf
+    - id: payment
+      title: "Payment service"
+      contract: true
+      metrics: {modules: 2, tasks: 7, interfaces: 2, estimated_loc: 320, open_decisions: 0, single_concern: false, testable_criteria: true}
+      expect: branch
+      children:
+        - id: charge
+          title: "POST /payments/charge"
+          metrics: {modules: 1, tasks: 4, interfaces: 1, estimated_loc: 95, open_decisions: 0, single_concern: true, testable_criteria: true}
+          expect: leaf
+        - id: refund
+          title: "POST /payments/refund"
+          metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 80, open_decisions: 0, single_concern: true, testable_criteria: true}
+          expect: leaf
+    - id: checkout_form
+      title: "Checkout form (coupled UI+API)"
+      metrics: {modules: 2, tasks: 5, interfaces: 2, estimated_loc: 150, open_decisions: 0, single_concern: false, testable_criteria: true}
+      expect: branch
+      children:
+        - id: form_ui
+          title: "Checkout form UI"
+          metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 80, open_decisions: 0, single_concern: true, testable_criteria: true}
+          expect: leaf
+        - id: form_api
+          title: "Checkout submit endpoint"
+          metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 75, open_decisions: 0, single_concern: true, testable_criteria: true}
+          expect: leaf
+expect_dag:
+  leaves: 6
+  integrates: 4
+  contracts: 2
+  max_depth: 2

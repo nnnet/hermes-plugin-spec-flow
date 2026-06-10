@@ -1,0 +1,5 @@
+{
+  "endpoints": {
+    "POST /shorten": {"short_url": "string", "id": "integer"}
+  }
+}

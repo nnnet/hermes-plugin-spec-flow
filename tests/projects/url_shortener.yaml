@@ -1,0 +1,36 @@
+# Medium project with an API branch carrying an L2 contract; leaves at depth 2.
+name: url-shortener
+goal: "A URL shortener service (DB + REST API + web UI)."
+tree:
+  id: L0
+  title: "URL shortener"
+  metrics: {modules: 4, tasks: 14, interfaces: 3, estimated_loc: 1200, open_decisions: 0, single_concern: false, testable_criteria: true}
+  expect: branch
+  children:
+    - id: db
+      title: "Persistence (codes table)"
+      metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 80, open_decisions: 0, single_concern: true, testable_criteria: true}
+      expect: leaf
+    - id: api
+      title: "REST API"
+      contract: true
+      metrics: {modules: 2, tasks: 7, interfaces: 2, estimated_loc: 300, open_decisions: 0, single_concern: false, testable_criteria: true}
+      expect: branch
+      children:
+        - id: shorten
+          title: "POST /shorten"
+          metrics: {modules: 1, tasks: 4, interfaces: 1, estimated_loc: 90, open_decisions: 0, single_concern: true, testable_criteria: true}
+          expect: leaf
+        - id: redirect
+          title: "GET /{code}"
+          metrics: {modules: 1, tasks: 2, interfaces: 1, estimated_loc: 50, open_decisions: 0, single_concern: true, testable_criteria: true}
+          expect: leaf
+    - id: web
+      title: "Minimal web form"
+      metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 85, open_decisions: 0, single_concern: true, testable_criteria: true}
+      expect: leaf
+expect_dag:
+  leaves: 4
+  integrates: 2
+  contracts: 1
+  max_depth: 2

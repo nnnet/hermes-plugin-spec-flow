@@ -1,0 +1,22 @@
+openapi: 3.0.0
+info: {title: URL shortener, version: 1.0.0}
+paths:
+  /shorten:
+    post:
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                properties:
+                  short_url: {type: string}
+                  id: {type: integer}
+  /{code}:
+    get:
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                properties:
+                  target: {type: string}

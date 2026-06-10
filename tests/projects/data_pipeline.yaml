@@ -1,0 +1,36 @@
+# Demonstrates an OPEN DECISION forcing expansion: 'transform' is small by LOC
+# but has an unresolved design decision, so the gate refuses to leaf it.
+name: data-pipeline
+goal: "ETL pipeline: ingest -> transform -> load."
+tree:
+  id: L0
+  title: "ETL pipeline"
+  metrics: {modules: 3, tasks: 10, interfaces: 2, estimated_loc: 600, open_decisions: 0, single_concern: false, testable_criteria: true}
+  expect: branch
+  children:
+    - id: ingest
+      title: "Source ingestion"
+      metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 80, open_decisions: 0, single_concern: true, testable_criteria: true}
+      expect: leaf
+    - id: transform
+      title: "Transform stage (schema undecided)"
+      metrics: {modules: 1, tasks: 4, interfaces: 1, estimated_loc: 90, open_decisions: 1, single_concern: true, testable_criteria: true}
+      expect: branch
+      children:
+        - id: parse
+          title: "Parse + validate"
+          metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 70, open_decisions: 0, single_concern: true, testable_criteria: true}
+          expect: leaf
+        - id: enrich
+          title: "Enrich + normalize"
+          metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 75, open_decisions: 0, single_concern: true, testable_criteria: true}
+          expect: leaf
+    - id: load
+      title: "Sink load"
+      metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 85, open_decisions: 0, single_concern: true, testable_criteria: true}
+      expect: leaf
+expect_dag:
+  leaves: 4
+  integrates: 2
+  contracts: 0
+  max_depth: 2

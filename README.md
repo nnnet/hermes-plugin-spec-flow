@@ -93,6 +93,26 @@ With the continuous revision lane on, the project is honestly spiral
 anti-thrash brakes (evidence threshold, re-open budget, manual confirmation on
 large blast radius) are what make it converge.
 
+## Testing (autonomous — no Hermes needed)
+
+The deterministic engine is fully testable offline: `tools.registry` and
+`toolsets` are stubbed and the seed commands degrade gracefully without the
+`hermes` binary.
+
+```bash
+python3 -m pytest tests/ -q        # 60 tests: unit + battle
+python3 tests/report.py            # human-readable report -> docs/test-report.md
+```
+
+The **battle tests** drive real projects (`tests/projects/*.yaml`) through the
+real `leaf_check`, build the realized kanban DAG and compare its branching
+graph against each project's ground-truth design; `contract_check` runs a real
+OpenAPI-vs-code validator (`tests/harness/openapi_diff.py`) over real fixtures;
+the research lane is replayed over event timelines. See
+[`docs/test-report.md`](docs/test-report.md) for the rendered result (ASCII
+decomposition trees with ✓/✗, a drift table and the lane timeline) and
+[`tests/README.md`](tests/README.md) for details.
+
 ## Version note
 
 This repo registers tools via `tools.registry.register`. A stock Hermes plugin

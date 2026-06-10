@@ -1,0 +1,13 @@
+openapi: 3.0.0
+info: {title: Cart, version: 1.0.0}
+paths:
+  /cart/items:
+    post:
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                properties:
+                  item_id: {type: string}
+                  count: {type: integer}

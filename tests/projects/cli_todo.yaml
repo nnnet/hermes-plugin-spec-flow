@@ -1,0 +1,22 @@
+# Small, shallow project: root splits into two single-concern leaves.
+name: cli-todo
+goal: "A local command-line todo app (storage + CLI)."
+tree:
+  id: L0
+  title: "CLI todo app"
+  metrics: {modules: 2, tasks: 6, interfaces: 1, estimated_loc: 220, open_decisions: 0, single_concern: false, testable_criteria: true}
+  expect: branch
+  children:
+    - id: storage
+      title: "JSON storage layer"
+      metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 70, open_decisions: 0, single_concern: true, testable_criteria: true}
+      expect: leaf
+    - id: cli
+      title: "argparse CLI commands"
+      metrics: {modules: 1, tasks: 4, interfaces: 1, estimated_loc: 90, open_decisions: 0, single_concern: true, testable_criteria: true}
+      expect: leaf
+expect_dag:
+  leaves: 2
+  integrates: 1
+  contracts: 0
+  max_depth: 1
