@@ -503,8 +503,10 @@ class Engine:
             iparents = child_ids + ([f"{nid}:contract"] if contract_here else [])
             self.task(integ, f"Integrate & verify {title}", "integrate", "verifier", "spec-integrate", parents=iparents)
             if contract_here:
-                # parallel subtree contract_check against the (respec'd) contract
-                res = self._contract(contract_here["fixed"], contract_here["code_drift"])
+                # parallel subtree contract_check against the (respec'd) contract;
+                # if the drift was code-wrong, the corrected code is what ships
+                res = self._contract(contract_here["fixed"],
+                                     contract_here.get("code_fixed", contract_here["code_drift"]))
                 self.emit("integrate", "verifier", "spec-integrate", integ,
                           "parallel contract_check across subtree", contract_here["fixed"],
                           "contract_check", res["status"], level=L_MILESTONE)
@@ -567,6 +569,18 @@ class Engine:
                 res2 = self._contract(contract_ctx["fixed"], contract_ctx["code_drift"])
                 self.emit("implement", "implementer", "spec-implement", impl,
                           "contract_check after respec", "matches corrected contract",
+                          "contract_check", res2["status"], level=L_MILESTONE)
+            elif classify == "code_wrong":
+                # the frozen L2 stands; the code is corrected and re-checked
+                self.emit("implement", "implementer", "spec-implement", impl,
+                          "code-wrong: fix code to match the frozen L2, re-run impl",
+                          contract_ctx["artifact"], level=L_MILESTONE)
+                self.loops.append({"type": "drift-codefix", "task": impl, "detail": drift_detail})
+                self.tasks[impl].runs += 1
+                res2 = self._contract(contract_ctx["artifact"],
+                                      contract_ctx.get("code_fixed", contract_ctx["code_drift"]))
+                self.emit("implement", "implementer", "spec-implement", impl,
+                          "contract_check after code fix", "matches frozen contract",
                           "contract_check", res2["status"], level=L_MILESTONE)
 
         # review critique loop
@@ -745,6 +759,7 @@ def render_summary(res: RunResult) -> str:
         "clarify": "🟡 clarify/block",
         "review-fail": "⚖️ критика ревью (FAIL→fix→re-run)",
         "drift-respec": "📐 дрейф контракта → drift-gate → respec",
+        "drift-codefix": "🛠️ дрейф: код неправ → исправление кода → re-check",
         "revision-respec": "🔬 ревизия research → respec-gate",
     }
     for l in res.loops:

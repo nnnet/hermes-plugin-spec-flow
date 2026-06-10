@@ -21,6 +21,9 @@ import pytest
 PLUGIN_DIR = Path(__file__).resolve().parent.parent  # spec-flow/
 _PKG = "spec_flow_pkg"
 
+# per-case run outputs contain deliberately-red test scaffolds — never collect
+collect_ignore_glob = ["runs-out"]
+
 
 class FakeRegistry:
     """Captures registry.register(**kw) calls keyed by tool name."""

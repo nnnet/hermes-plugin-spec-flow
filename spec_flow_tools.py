@@ -867,6 +867,10 @@ def _plain_outcome(e: dict) -> tuple[str, str]:
         return "💻🧪 Код+тест", "сначала тест, потом код — тест прошёл"
     if "contract_check after respec" in a:
         return "✅ Совпало", "код и контракт снова совпадают"
+    if "code-wrong" in a:
+        return "🔧 Чиним код", "контракт прав, код неправ → исправляем код"
+    if "contract_check after code fix" in a:
+        return "✅ Совпало", "код исправлен и снова совпадает с контрактом"
     if "parallel contract_check" in a:
         return "✅ Все контракты", "сверили все контракты ветки разом — ок"
     if "contract_check" in a:

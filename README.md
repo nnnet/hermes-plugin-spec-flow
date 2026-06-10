@@ -129,8 +129,11 @@ The deterministic engine is fully testable offline: `tools.registry` and
 `hermes` binary.
 
 ```bash
-python3 -m pytest tests/ -q        # 95 tests: unit + battle
+python3 -m pytest tests/ -q        # 125 tests: unit + battle
 python3 tests/report.py            # human-readable reports -> docs/*.md
+python3 tests/run_cases.py         # real runs: one timestamped workspace per case
+                                   #   -> tests/runs-out/<stamp>__<case>/ (artifacts,
+                                   #      trace, log, report, policy-report, SUMMARY)
 ```
 
 The **battle tests** drive real projects (`tests/projects/*.yaml`) through the

@@ -1,0 +1,23 @@
+openapi: 3.0.0
+info: {title: Marketplace billing API, version: 1.0.0}
+paths:
+  /invoices:
+    post:
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                properties:
+                  invoice_id: {type: string}
+                  total_cents: {type: integer}
+  /payouts/{seller_id}:
+    get:
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                properties:
+                  amount_cents: {type: integer}
+                  status: {type: string}

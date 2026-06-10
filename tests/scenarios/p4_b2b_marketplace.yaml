@@ -1,0 +1,126 @@
+# Project 4 — the FULL exercise case. Combines BOTH test surfaces:
+#   (a) the policy surface (imprecise/resolved variants, like p1-p3) — the
+#       deliberately vague L0 must be CAUGHT by policy_gate, not by a human;
+#   (b) the full-run surface (tree/constitution/revision) — a 4-level tree that
+#       drives EVERY skill, EVERY profile and EVERY control-flow path:
+#       * 2 clarify/block loops (branch 'auth' + leaf 'payouts')
+#       * 2 research spikes ('catalog' branch + 'notifications' leaf)
+#       * 2 frozen L2 contracts ('orders', 'billing')
+#       * BOTH drift classifications: contract_wrong ('ep_order_query' ->
+#         respec-gate) and code_wrong ('invoicing' -> code fix, contract stands)
+#       * review critique loops on 3 leaves (1x, 2x)
+#       * a 4-level branch ('catalog/listings/...')
+#       * continuous-revision lane invalidating 'billing' (version bump + re-derive)
+name: p4-b2b-marketplace
+goal: "B2B-маркетплейс восстановленного оборудования с выплатами продавцам"
+
+# ---- (a) policy surface -----------------------------------------------------
+imprecision: >
+  "Sell refurbished gear and pay sellers automatically" — no measurable revenue
+  target, unattended payouts with no cap or human gate, seller outreach without
+  opt-in, warranty/liability law unreviewed.
+imprecise:
+  title: "Marketplace + auto-payouts — target/caps/consent/law unspecified"
+  metrics: {modules: 7, tasks: 31, interfaces: 6, estimated_loc: 5200, open_decisions: 3, single_concern: false, testable_criteria: false}
+  policy: {measurable_target: false, spend_per_action_usd: 800, human_in_loop: false, involves_outreach: true, consent_obtained: false, legal_exposure: true, legality_reviewed: false}
+  expect_policy: block
+  expect_leaf: branch
+resolved:
+  title: "GMV >= $20k/90d; payouts <= $50/action human-gated; opt-in seller outreach; warranty/liability ToS reviewed"
+  metrics: {modules: 7, tasks: 31, interfaces: 6, estimated_loc: 5200, open_decisions: 0, single_concern: false, testable_criteria: true}
+  policy: {measurable_target: true, spend_per_action_usd: 50, human_in_loop: true, involves_outreach: true, consent_obtained: true, legal_exposure: true, legality_reviewed: true}
+  expect_policy: pass
+  expect_leaf: branch
+template_must_catch:
+  - measurable acceptance target (GMV)
+  - unattended spend capped at $50/action
+  - seller outreach requires consent (opt-in)
+  - warranty/liability legal exposure reviewed
+
+# ---- (b) full-run surface ---------------------------------------------------
+constitution:
+  - "Every payout is human-approved above the $50/action cap."
+  - "Sellers are contacted only after explicit opt-in."
+  - "Warranty and liability terms are reviewed before a category goes live."
+  - "No card data is stored; payments go through the PSP only."
+target: "GMV >= $20k in 90d; payout error rate < 0.1%; p95 checkout < 500ms."
+policy: {measurable_target: true, spend_per_action_usd: 50, human_in_loop: true, involves_outreach: true, consent_obtained: true, legal_exposure: true, legality_reviewed: true}
+
+tree:
+  id: L0
+  title: "B2B refurbished-gear marketplace"
+  metrics: {modules: 7, tasks: 31, interfaces: 6, estimated_loc: 5200, open_decisions: 0, single_concern: false, testable_criteria: true}
+  children:
+    - id: auth
+      title: "Accounts & access (buyers, sellers, ops)"
+      clarify: {decision: "Own auth vs delegated OIDC for B2B SSO?", resolution: "Delegated OIDC + service accounts for ops"}
+      metrics: {modules: 2, tasks: 6, interfaces: 2, estimated_loc: 260, open_decisions: 1, single_concern: false, testable_criteria: true}
+      children:
+        - id: signup
+          title: "Seller onboarding & verification"
+          review_fails: 1
+          metrics: {modules: 1, tasks: 4, interfaces: 1, estimated_loc: 90, open_decisions: 0, single_concern: true, testable_criteria: true}
+        - id: sessions
+          title: "Session & role management"
+          metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 70, open_decisions: 0, single_concern: true, testable_criteria: true}
+    - id: catalog
+      title: "Catalog & search"
+      spike: {question: "Faceted search: own index vs managed engine?", recommendation: "Managed engine, sync via outbox events"}
+      metrics: {modules: 2, tasks: 8, interfaces: 2, estimated_loc: 540, open_decisions: 0, single_concern: false, testable_criteria: true}
+      children:
+        - id: search
+          title: "Faceted search endpoint"
+          metrics: {modules: 1, tasks: 4, interfaces: 1, estimated_loc: 95, open_decisions: 0, single_concern: true, testable_criteria: true}
+        - id: listings
+          title: "Listings management"
+          metrics: {modules: 2, tasks: 5, interfaces: 1, estimated_loc: 210, open_decisions: 0, single_concern: false, testable_criteria: true}
+          children:
+            - id: listing_editor
+              title: "Listing editor (condition grading)"
+              metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 85, open_decisions: 0, single_concern: true, testable_criteria: true}
+            - id: media_upload
+              title: "Photo upload & processing"
+              review_fails: 2
+              metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 80, open_decisions: 0, single_concern: true, testable_criteria: true}
+    - id: orders
+      title: "Orders & checkout"
+      # contract-wrong drift: the frozen contract said total:integer, reality
+      # needs a string (decimal-safe) -> drift-gate -> respec-gate fixes the L2
+      contract: {artifact: orders.openapi.yaml, fixed: orders_fixed.openapi.yaml, code_drift: code_orders_drift.json}
+      metrics: {modules: 2, tasks: 7, interfaces: 2, estimated_loc: 380, open_decisions: 0, single_concern: false, testable_criteria: true}
+      children:
+        - id: ep_order_query
+          title: "GET /orders (list & totals)"
+          drift: {classify: contract_wrong}
+          review_fails: 1
+          metrics: {modules: 1, tasks: 4, interfaces: 1, estimated_loc: 95, open_decisions: 0, single_concern: true, testable_criteria: true}
+        - id: ep_order_export
+          title: "GET /orders/export"
+          metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 70, open_decisions: 0, single_concern: true, testable_criteria: true}
+    - id: billing
+      title: "Billing & seller payouts"
+      # code-wrong drift: code returned total_cents as string; the frozen L2
+      # stands, the CODE is fixed and re-checked (code_fixed)
+      contract: {artifact: billing.openapi.yaml, fixed: billing.openapi.yaml, code_drift: code_billing_drift.json, code_fixed: code_billing_fixed.json}
+      metrics: {modules: 2, tasks: 6, interfaces: 2, estimated_loc: 320, open_decisions: 0, single_concern: false, testable_criteria: true}
+      children:
+        - id: invoicing
+          title: "Invoicing (totals in cents)"
+          drift: {classify: code_wrong}
+          metrics: {modules: 1, tasks: 4, interfaces: 1, estimated_loc: 90, open_decisions: 0, single_concern: true, testable_criteria: true}
+        - id: payouts
+          title: "Seller payouts (human-gated)"
+          clarify: {decision: "Payout rail: SEPA batch vs PSP transfer API?", resolution: "PSP transfer API, batched daily, human approval > $50"}
+          metrics: {modules: 1, tasks: 4, interfaces: 1, estimated_loc: 95, open_decisions: 0, single_concern: true, testable_criteria: true}
+    - id: notifications
+      title: "Notifications (opt-in only)"
+      spike: {question: "Digest vs instant notifications for B2B buyers?", recommendation: "Daily digest default, instant for order events"}
+      metrics: {modules: 1, tasks: 4, interfaces: 1, estimated_loc: 85, open_decisions: 0, single_concern: true, testable_criteria: true}
+
+# Continuous research lane: a PSD2/PSP rule change invalidates 'billing' ->
+# respec-gate version-bumps it and re-derives only its subtree.
+revision:
+  trigger: on_level_return
+  finding: "PSP policy change: payout transfers now require per-seller KYC level 2 before first payout."
+  invalidates: billing
+  effect: "Version-bump billing spec (supersedes v1), reopen its subtree, re-derive invoicing/payouts under the new KYC precondition."

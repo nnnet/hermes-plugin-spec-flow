@@ -3,3 +3,6 @@ __pycache__/
 
 # generated raw run trace (rebuild via tests/report.py)
 docs/full-run-trace.jsonl
+
+# per-case run outputs (regenerate via tests/run_cases.py)
+tests/runs-out/

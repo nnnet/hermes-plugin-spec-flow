@@ -17,7 +17,8 @@ python3 tests/report.py         # render a human report -> ../docs/test-report.m
 | `test_contract_drift.py` | **battle**: `contract_check` against a real OpenAPI validator over clean / type-mismatch / missing-endpoint / parallel-subtree fixtures |
 | `test_research_timeline.py` | **battle**: replay event timelines through `research_trigger_check`; assert exact fire points + cooldown |
 | `test_policy_scenarios.py` | **battle**: feed deliberately-imprecise (but legitimate) business goals through `policy_gate`+`leaf_check`; assert the plugin **blocks/clarifies** them (not a human) and that the resolved variant proceeds |
-| `scenarios/*.yaml` | three business projects — each an imprecise L0 (vague niche / no metric / uncapped spend / outreach / legal exposure) + a resolved L0, with the template's must-catch list |
+| `scenarios/*.yaml` | the case pool: p1–p3 carry an imprecise L0 + a resolved L0 (policy surface); **p4** additionally carries a full 4-level tree exercising every skill/profile/loop (both drift kinds, 2 contracts, 2 clarifies, 2 spikes, revision) |
+| `run_cases.py` | **case runner**: drives every scenario as a REAL plugin run into its own timestamped workspace `runs-out/<stamp>__<case>/` (artifacts + trace + log + reports inside) |
 | `test_full_run.py` | **battle**: a full end-to-end project run exercising **all 9 skills & all 6 profiles**, asserting every loop (clarify / review critique / drift→respec / research revision) and project completion |
 | `runs/privacy_analytics.yaml` | the end-to-end project (multi-level tree with a spike, a contract, a drift episode, a review failure and a research revision) |
 | `harness/run_engine.py` | the dispatcher+worker run engine + execution-log / tree / coverage renderer |
@@ -114,3 +115,30 @@ contract drift, every impl reviewed, every branch integrated, open decisions
 clarified, revisions re-derive their subtree, no green-on-red) and lists each
 violation with where/why/fix. `tests/runs/flawed_run.jsonl` is a seeded-error
 trace proving the audit catches real methodological mistakes.
+
+## Case runner — one workspace per run (`run_cases.py`)
+
+Every scenario in `scenarios/*.yaml` is driven as a **real production run** of
+the plugin, each into its **own timestamped workspace**:
+
+```bash
+python3 tests/run_cases.py                          # all cases, depth=spec
+python3 tests/run_cases.py --depth scaffold         # deeper: + code/test scaffolds
+python3 tests/run_cases.py --case p4 --depth verify # one case, + real pytest run
+```
+
+Output per case — everything in one folder, nothing outside it:
+
+```
+tests/runs-out/<YYYY-MM-DDTHH-MM-SS>__<case>/
+├── workspace/        materialised artifacts (constitution, specs/, contracts/,
+│                     MANIFEST.json; deeper: src/, tests/, COMMITS.md, TEST-RESULTS.md)
+├── trace.jsonl       raw event stream (full detail) — the report's source
+├── log.txt           readable execution log
+├── report.md         footprints + methodology audit (built by the plugin)
+├── policy-report.md  policy_gate catching the imprecise goal (if the case has one)
+└── SUMMARY.md        depth, verdicts, coverage, file map
+```
+
+`runs-out/` is gitignored and excluded from pytest collection (the scaffolds
+inside are deliberately red).

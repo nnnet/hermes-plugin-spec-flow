@@ -1,0 +1,1 @@
+{"endpoints": {"POST /invoices": {"invoice_id": "string", "total_cents": "string"}, "GET /payouts/{seller_id}": {"amount_cents": "integer", "status": "string"}}}

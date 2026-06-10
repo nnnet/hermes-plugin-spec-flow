@@ -1,0 +1,1 @@
+{"endpoints": {"GET /orders": {"orders": "string", "total": "string"}, "GET /orders/export": {"url": "string"}}}

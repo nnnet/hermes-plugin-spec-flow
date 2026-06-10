@@ -1,0 +1,22 @@
+openapi: 3.0.0
+info: {title: Marketplace orders API, version: 1.1.0}
+paths:
+  /orders:
+    get:
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                properties:
+                  orders: {type: string}
+                  total: {type: string}
+  /orders/export:
+    get:
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                properties:
+                  url: {type: string}
