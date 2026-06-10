@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+
+# generated raw run trace (rebuild via tests/report.py)
+docs/full-run-trace.jsonl

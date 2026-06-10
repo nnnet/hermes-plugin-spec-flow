@@ -813,25 +813,90 @@ def _md(s: Any) -> str:
     return str(s).replace("|", "\\|").replace("\n", " ").strip()
 
 
+def _plain_outcome(e: dict) -> tuple[str, str]:
+    """Translate a trace event into (kind, plain words) — the simplest possible
+    description of what was actually produced and what it means, so a child or a
+    bot understands the result and its consequence."""
+    a = str(_ev(e, "action")).lower()
+    skill = _ev(e, "skill")
+    v = _ev(e, "verdict")
+    if "complete" in a:
+        return "🏁 Готово", "всё собрано и проверено — ПРОЕКТ ГОТОВ"
+    if "policy_gate" in a:
+        return "📋 Проверка цели", ("цель измеримая и легальная — начинаем" if v == "pass"
+                                    else "цель размытая/рискованная — надо уточнить")
+    if "constitution rule" in a:
+        return "📜 Правило", "записали правило проекта (что нельзя нарушать)"
+    if "ears" in a or "requirements frozen" in a:
+        return "📋 Требования", "зафиксировали, что система должна уметь"
+    if "leaf_check" in a:
+        return ("🧩 Разбили", "задача большая → разбили на подзадачи") if v == "branch" \
+            else ("🍃 К работе", "задача маленькая → можно писать код")
+    if "open decision" in a:
+        return "🟡 Вопрос", "нашли непонятку → остановились и спросили"
+    if "clarify answered" in a:
+        return "✅ Ответ", "получили ответ → пошли дальше"
+    if skill == "spec-research" and "revision finding" in a:
+        return "🔬 Ревизия", "ревизия нашла важное → влияет на проект"
+    if skill == "spec-research" and "spike" in a:
+        return "🔬 Мини-ресёрч", "перед заморозкой проверили неизвестное"
+    if skill == "spec-research" and "recommendation" in a:
+        return "🔬 Вывод ресёрча", "вписали вывод исследования в план"
+    if "research_trigger_check" in a:
+        return ("🔬 Пора ревизию", "накопились причины — запускаем ревизию") if v == "trigger" \
+            else ("🔬 Ревизия не нужна", "причин для ревизии пока нет")
+    if "freeze openapi" in a or skill == "spec-contract":
+        return "📐 Контракт", "заморозили правила API (контракт) ДО кода"
+    if "spec-gate on contract" in a:
+        return "📐 Контракт проверен", "проверили контракт — ок" if v == "PASS" else "контракт — есть замечания"
+    if "bottom-up plan" in a or ("design" in a and skill == "spec-implement"):
+        return "📝 План кода", "расписали порядок: БД→логика→API→тесты"
+    if "tdd" in a:
+        return "💻🧪 Код+тест", "сначала тест, потом код — тест прошёл"
+    if "contract_check after respec" in a:
+        return "✅ Совпало", "код и контракт снова совпадают"
+    if "parallel contract_check" in a:
+        return "✅ Все контракты", "сверили все контракты ветки разом — ок"
+    if "contract_check" in a:
+        return ("⚠️ Расхождение", "код разошёлся с контрактом — поймали") if v == "drift" \
+            else ("✅ Контракт ок", "код совпадает с контрактом")
+    if skill == "drift-gate":
+        return "🔧 Разбор дрейфа", "решили, кто неправ: код или контракт"
+    if skill == "respec-gate":
+        return "📜 Правка спеки", "сначала чиним причину (спеку/контракт), потом код"
+    if "impl-review" in a:
+        return ("❌ Завернули", "ревью нашло недочёт → вернули на доработку") if v == "FAIL" \
+            else ("✅ Принято", "ревью пройдено — код принят")
+    if "fix per critique" in a:
+        return "🔁 Переделка", "исправили по замечанию и переделали"
+    if "git commit" in a:
+        return "📦 Коммит", "сохранили готовый код в репозиторий"
+    if "re-derive" in a:
+        return "🔁 Пересборка", "пересобрали задетые задачи под новую спеку"
+    if "acceptance" in a:
+        return "✅ Сборка ок", "собрали кусок и проверили целиком — работает"
+    if "write level spec" in a or "parent handoff" in a:
+        return "📝 План/спека", "написали план этого уровня"
+    return "·", _md(_ev(e, "action"))
+
+
 def render_footprints(events: list[dict], level: int = 2) -> str:
-    """Readable markdown table of the run — one row per step, grouped by phase."""
+    """Readable markdown table of the run — one row per step. The 'Простыми
+    словами' column says, in the plainest terms, what was produced and what it
+    means, so a non-technical reviewer (or a bot) follows the consequences."""
     rows = [
-        "| # | Фаза | Кто (профиль · скилл) | Задача | Действие | Итог |",
-        "|--:|---|---|---|---|---|",
+        "| # | Кто | Что делал (технически) | 👶 Простыми словами: что вышло | Тип |",
+        "|--:|---|---|---|---|",
     ]
     for e in events:
         if int(_ev(e, "level") or 2) > level:
             continue
         icon = _PROFILE_ICON.get(_ev(e, "profile"), "·")
-        who = f"{icon} {_ev(e, 'profile')} · `{_ev(e, 'skill')}`"
-        ph = _PHASE_RU.get(_ev(e, "phase"), _ev(e, "phase"))
-        v, d = _ev(e, "verdict"), _ev(e, "detail")
-        result = f"{_VERDICT_ICON.get(v, '')} {v}".strip()
-        if d:
-            result = (result + " — " if result else "") + _md(d)
+        who = f"{icon} {_ev(e, 'profile')}"
+        kind, plain = _plain_outcome(e)
         rows.append(
-            f"| {int(_ev(e,'tick') or 0)} | {ph} | {who} | `{_md(_ev(e,'task'))}` "
-            f"| {_md(_ev(e,'action'))} | {result} |"
+            f"| {int(_ev(e,'tick') or 0)} | {who} | {_md(_ev(e,'action'))} "
+            f"| {plain} | {kind} |"
         )
     return "\n".join(rows)
 
@@ -871,7 +936,12 @@ def build_run_report(events: list[dict], level: int = 2, title: str = "spec-flow
     else:
         out.append("_Нарушений методологии не обнаружено: все инварианты соблюдены._")
     out.append("")
-    out.append(f"## Шаги на снегу (что плагин делал по шагам, детализация ≤ {level})")
+    out.append(f"## Footprint — что делалось по шагам (детализация ≤ {level})")
+    out.append("")
+    out.append("> Колонка **«Простыми словами»** — самым простым языком: что реально "
+               "получилось (создан план, написан код, прогнан тест, сделан коммит, "
+               "пройдено ревью, собрана сборка) и каково последствие.")
+    out.append("")
     out.append(render_footprints(events, level))
     out.append("")
     out.append("## Сводка")

@@ -18,17 +18,20 @@
 | ❌ error | `R5-branch-no-integrate` | `subsys` | branch node has no Integrate & verify node | create an integrate node whose parents are the branch's children |
 | 🟡 warn | `R6-expanded-past-open-decision` | `subsys` | level expanded while a decision was still open (feedback loop skipped) | kanban_block on the open decision; expand only after it is resolved |
 
-## Шаги на снегу (что плагин делал по шагам, детализация ≤ 2)
-| # | Фаза | Кто (профиль · скилл) | Задача | Действие | Итог |
-|--:|---|---|---|---|---|
-| 1 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `L0` | leaf_check | 🌿 branch — modules 3 > 1 |
-| 2 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `svc` | leaf_check | 🍃 leaf — within all thresholds |
-| 3 | Реализация | 🛠️ implementer · `spec-implement` | `svc:impl` | design then code (NO TDD, NO review) |  |
-| 4 | Реализация | 🛠️ implementer · `spec-implement` | `svc:impl` | contract_check vs frozen L2 | ⚠️ drift — type_mismatch count integer vs string |
-| 5 | Реализация | 🛠️ implementer · `spec-implement` | `svc:impl` | edited code to match (silent) | no drift-gate, no respec |
-| 6 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `subsys` | leaf_check | 🌿 branch — modules 2 > 1; 1 open decision(s) — resolve before leafing |
-| 7 | Реализация | 🛠️ implementer · `spec-implement` | `subsys_leaf:impl` | implement child directly | parent never leaf-gated this child |
-| 8 | Интеграция | ✅ verifier · `spec-integrate` | `L0:integrate` | L0 integrate done = project COMPLETE | declared done |
+## Footprint — что делалось по шагам (детализация ≤ 2)
+
+> Колонка **«Простыми словами»** — самым простым языком: что реально получилось (создан план, написан код, прогнан тест, сделан коммит, пройдено ревью, собрана сборка) и каково последствие.
+
+| # | Кто | Что делал (технически) | 👶 Простыми словами: что вышло | Тип |
+|--:|---|---|---|---|
+| 1 | 🧩 spec-decomposer | leaf_check | задача большая → разбили на подзадачи | 🧩 Разбили |
+| 2 | 🧩 spec-decomposer | leaf_check | задача маленькая → можно писать код | 🍃 К работе |
+| 3 | 🛠️ implementer | design then code (NO TDD, NO review) | расписали порядок: БД→логика→API→тесты | 📝 План кода |
+| 4 | 🛠️ implementer | contract_check vs frozen L2 | код разошёлся с контрактом — поймали | ⚠️ Расхождение |
+| 5 | 🛠️ implementer | edited code to match (silent) | edited code to match (silent) | · |
+| 6 | 🧩 spec-decomposer | leaf_check | задача большая → разбили на подзадачи | 🧩 Разбили |
+| 7 | 🛠️ implementer | implement child directly | implement child directly | · |
+| 8 | ✅ verifier | L0 integrate done = project COMPLETE | всё собрано и проверено — ПРОЕКТ ГОТОВ | 🏁 Готово |
 
 ## Сводка
 - Скиллы: spec-flow-decompose, spec-implement, spec-integrate

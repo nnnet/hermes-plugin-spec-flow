@@ -380,6 +380,8 @@ class Engine:
             self.loops.append({"type": "review-fail", "task": review, "detail": "spec-conformance critique"})
         self.emit("review", "spec-reviewer", "spec-reviewer", review,
                   "impl-review → quality gate", "", "", "PASS", level=L_MILESTONE)
+        self.emit("implement", "implementer", "spec-implement", impl,
+                  "git commit + verification-before-completion", title)
         self.tasks[impl].status = "done"
         self.tasks[review].status = "done"
         self._completed += 2

@@ -1,6 +1,6 @@
 # privacy-analytics (реальный прогон) — отчёт по логам (footprints + методологический аудит)
 
-> Источник: трейс из 74 событий. Скиллы: 9 · профили: 6 · задач: 37 · завершён: ✅.
+> Источник: трейс из 82 событий. Скиллы: 9 · профили: 6 · задач: 37 · завершён: ✅.
 > Ревизия: spike (уровень 1) ✅ · непрерывная ревизия (уровень 2) ✅.
 > **Методологический вердикт: ✅ нарушений не найдено** (0 error, 0 прочих).
 
@@ -10,72 +10,83 @@
 
 _Нарушений методологии не обнаружено: все инварианты соблюдены._
 
-## Шаги на снегу (что плагин делал по шагам, детализация ≤ 2)
-| # | Фаза | Кто (профиль · скилл) | Задача | Действие | Итог |
-|--:|---|---|---|---|---|
-| 1 | Требования | 🧩 spec-decomposer · `spec-requirements` | `L0:req` | policy_gate on the goal | ✅ pass — ingest >= 1000 events/s; p95 query < 200ms; 0 PII fields in storage. |
-| 5 | Требования | 🧩 spec-decomposer · `spec-requirements` | `L0:req` | EARS requirements frozen | ingest >= 1000 events/s; p95 query < 200ms; 0 PII fields in storage. |
-| 6 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `L0` | read parent handoff, write level spec (Traces-to) | Privacy analytics service |
-| 7 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `L0` | leaf_check | 🌿 branch — modules 5 > 1; tasks 20 > 5; interfaces 3 > 2; estimated_loc 3000 > 100 (not one commit); coupled step (multiple concerns) — split into single-concern leaves |
-| 8 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `consent` | read parent handoff, write level spec (Traces-to) | Consent & anonymisation (L1 policy) |
-| 9 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `consent` | kanban_block — open decision | Cookieless hashing vs signed opt-in token? |
-| 10 | Декомпозиция | ⚖️ spec-reviewer · `spec-reviewer` | `consent` | clarify answered → unblock | Cookieless rotating daily salt |
-| 11 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `consent` | leaf_check | 🌿 branch — modules 2 > 1; estimated_loc 150 > 100 (not one commit); 1 open decision(s) — resolve before leafing; coupled step (multiple concerns) — split into single-concern leaves |
-| 12 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `consent_banner` | read parent handoff, write level spec (Traces-to) | Consent banner widget |
-| 13 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `consent_banner` | leaf_check | 🍃 leaf — within all thresholds |
-| 14 | Реализация | 🛠️ implementer · `spec-implement` | `consent_banner:impl` | design → bottom-up plan (DB→logic→API→tests) | Consent banner widget |
-| 16 | Ревью | ⚖️ spec-reviewer · `spec-reviewer` | `consent_banner:review` | impl-review → quality gate | ✅ PASS |
-| 17 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `anonymiser` | read parent handoff, write level spec (Traces-to) | Event anonymiser (daily salt) |
-| 18 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `anonymiser` | leaf_check | 🍃 leaf — within all thresholds |
-| 19 | Реализация | 🛠️ implementer · `spec-implement` | `anonymiser:impl` | design → bottom-up plan (DB→logic→API→tests) | Event anonymiser (daily salt) |
-| 21 | Ревью | ⚖️ spec-reviewer · `spec-reviewer` | `anonymiser:review` | impl-review → quality gate | ✅ PASS |
-| 22 | Интеграция | ✅ verifier · `spec-integrate` | `consent:integrate` | end-to-end acceptance criteria | ✅ PASS — verification-before-completion |
-| 23 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `ingest` | read parent handoff, write level spec (Traces-to) | Event ingestion |
-| 24 | Ресёрч | 🔬 researcher · `spec-research` | `ingest:spike` | SPIKE before freeze | Batch vs streaming ingestion for 1k ev/s? |
-| 25 | Ресёрч | 🔬 researcher · `spec-research` | `ingest:spike` | recommendation folded into spec (above the gate, no rework) | Streaming with bounded backpressure queue |
-| 26 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `ingest` | leaf_check | 🍃 leaf — within all thresholds |
-| 27 | Реализация | 🛠️ implementer · `spec-implement` | `ingest:impl` | design → bottom-up plan (DB→logic→API→tests) | Event ingestion |
-| 29 | Ревью | ⚖️ spec-reviewer · `spec-reviewer` | `ingest:review` | impl-review → quality gate | ✅ PASS |
-| 30 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `storage` | read parent handoff, write level spec (Traces-to) | Time-series storage |
-| 31 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `storage` | leaf_check | 🌿 branch — modules 2 > 1; tasks 6 > 5; estimated_loc 240 > 100 (not one commit); coupled step (multiple concerns) — split into single-concern leaves |
-| 32 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `schema` | read parent handoff, write level spec (Traces-to) | Rollup schema + migrations |
-| 33 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `schema` | leaf_check | 🍃 leaf — within all thresholds |
-| 34 | Реализация | 🛠️ implementer · `spec-implement` | `schema:impl` | design → bottom-up plan (DB→logic→API→tests) | Rollup schema + migrations |
-| 36 | Ревью | ⚖️ spec-reviewer · `spec-reviewer` | `schema:review` | impl-review → quality gate | ✅ PASS |
-| 37 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `retention` | read parent handoff, write level spec (Traces-to) | Retention + purge job |
-| 38 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `retention` | leaf_check | 🍃 leaf — within all thresholds |
-| 39 | Реализация | 🛠️ implementer · `spec-implement` | `retention:impl` | design → bottom-up plan (DB→logic→API→tests) | Retention + purge job |
-| 41 | Ревью | ⚖️ spec-reviewer · `spec-reviewer` | `retention:review` | impl-review → quality gate | ✅ PASS |
-| 42 | Интеграция | ✅ verifier · `spec-integrate` | `storage:integrate` | end-to-end acceptance criteria | ✅ PASS — verification-before-completion |
-| 43 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `api` | read parent handoff, write level spec (Traces-to) | Query API |
-| 44 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `api` | leaf_check | 🌿 branch — modules 2 > 1; tasks 7 > 5; estimated_loc 320 > 100 (not one commit); coupled step (multiple concerns) — split into single-concern leaves |
-| 45 | Контракт | 📐 spec-contract · `spec-contract` | `api:contract` | freeze OpenAPI contract (x-traces-to) | query.openapi.yaml |
-| 46 | Контракт | ⚖️ spec-reviewer · `spec-reviewer` | `api:contract` | spec-gate on contract | ✅ PASS — trace + constitution OK |
-| 47 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `ep_query` | read parent handoff, write level spec (Traces-to) | GET /query |
-| 48 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `ep_query` | leaf_check | 🍃 leaf — within all thresholds |
-| 49 | Реализация | 🛠️ implementer · `spec-implement` | `ep_query:impl` | design → bottom-up plan (DB→logic→API→tests) | GET /query |
-| 51 | Реализация | 🛠️ implementer · `spec-implement` | `ep_query:impl` | contract_check vs frozen L2 | ⚠️ drift — [{"kind": "type_mismatch", "endpoint": "GET /query", "field": "count", "contract": "integer", "code": "string"}] |
-| 52 | Дрейф | 🛠️ implementer · `drift-gate` | `ep_query:impl` | drift-gate classify | contract_wrong |
-| 53 | Respec | ⚖️ spec-reviewer · `respec-gate` | `query.openapi.yaml` | spec-first: update contract node, version-bump, re-gate, restart impl | query.openapi.yaml → query_fixed.openapi.yaml |
-| 54 | Реализация | 🛠️ implementer · `spec-implement` | `ep_query:impl` | contract_check after respec | ✅ ok — matches corrected contract |
-| 55 | Ревью | ⚖️ spec-reviewer · `spec-reviewer` | `ep_query:review` | impl-review (spec-conformance) | ❌ FAIL — FAIL: missing edge-case handling on error path |
-| 56 | Ревью | 🛠️ implementer · `spec-implement` | `ep_query:impl` | fix per critique → unblock → re-run |  |
-| 57 | Ревью | ⚖️ spec-reviewer · `spec-reviewer` | `ep_query:review` | impl-review → quality gate | ✅ PASS |
-| 58 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `ep_export` | read parent handoff, write level spec (Traces-to) | GET /export |
-| 59 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `ep_export` | leaf_check | 🍃 leaf — within all thresholds |
-| 60 | Реализация | 🛠️ implementer · `spec-implement` | `ep_export:impl` | design → bottom-up plan (DB→logic→API→tests) | GET /export |
-| 62 | Ревью | ⚖️ spec-reviewer · `spec-reviewer` | `ep_export:review` | impl-review → quality gate | ✅ PASS |
-| 63 | Интеграция | ✅ verifier · `spec-integrate` | `api:integrate` | parallel contract_check across subtree | ✅ ok — query_fixed.openapi.yaml |
-| 64 | Интеграция | ✅ verifier · `spec-integrate` | `api:integrate` | end-to-end acceptance criteria | ✅ PASS — verification-before-completion |
-| 65 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `dashboard` | read parent handoff, write level spec (Traces-to) | Operator dashboard |
-| 66 | Декомпозиция | 🧩 spec-decomposer · `spec-flow-decompose` | `dashboard` | leaf_check | 🍃 leaf — within all thresholds |
-| 67 | Реализация | 🛠️ implementer · `spec-implement` | `dashboard:impl` | design → bottom-up plan (DB→logic→API→tests) | Operator dashboard |
-| 69 | Ревью | ⚖️ spec-reviewer · `spec-reviewer` | `dashboard:review` | impl-review → quality gate | ✅ PASS |
-| 70 | Интеграция | ✅ verifier · `spec-integrate` | `L0:integrate` | end-to-end acceptance criteria | ✅ PASS — verification-before-completion |
-| 71 | Ревизия | 🔬 researcher · `spec-research` | `revision` | research_trigger_check | 🔬 trigger — fired_by=['on_level_return', 'every_n_tasks>=20'] |
-| 72 | Ревизия | 🔬 researcher · `spec-research` | `revision` | REVISION finding (upstream impact) | New ePrivacy guidance: implied consent insufficient, explicit per-purpose opt-in required. |
-| 73 | Respec | ⚖️ spec-reviewer · `respec-gate` | `consent` | respec-gate: change the cause first, version-bump, re-derive only affected subtree | Version-bump consent spec (supersedes v1), reopen its subtree, re-derive only affected leaves. |
-| 74 | Интеграция | ✅ verifier · `spec-integrate` | `L0:integrate` | L0 integrate done = project COMPLETE | all subtrees merged & verified |
+## Footprint — что делалось по шагам (детализация ≤ 2)
+
+> Колонка **«Простыми словами»** — самым простым языком: что реально получилось (создан план, написан код, прогнан тест, сделан коммит, пройдено ревью, собрана сборка) и каково последствие.
+
+| # | Кто | Что делал (технически) | 👶 Простыми словами: что вышло | Тип |
+|--:|---|---|---|---|
+| 1 | 🧩 spec-decomposer | policy_gate on the goal | цель измеримая и легальная — начинаем | 📋 Проверка цели |
+| 5 | 🧩 spec-decomposer | EARS requirements frozen | зафиксировали, что система должна уметь | 📋 Требования |
+| 6 | 🧩 spec-decomposer | read parent handoff, write level spec (Traces-to) | написали план этого уровня | 📝 План/спека |
+| 7 | 🧩 spec-decomposer | leaf_check | задача большая → разбили на подзадачи | 🧩 Разбили |
+| 8 | 🧩 spec-decomposer | read parent handoff, write level spec (Traces-to) | написали план этого уровня | 📝 План/спека |
+| 9 | 🧩 spec-decomposer | kanban_block — open decision | нашли непонятку → остановились и спросили | 🟡 Вопрос |
+| 10 | ⚖️ spec-reviewer | clarify answered → unblock | получили ответ → пошли дальше | ✅ Ответ |
+| 11 | 🧩 spec-decomposer | leaf_check | задача большая → разбили на подзадачи | 🧩 Разбили |
+| 12 | 🧩 spec-decomposer | read parent handoff, write level spec (Traces-to) | написали план этого уровня | 📝 План/спека |
+| 13 | 🧩 spec-decomposer | leaf_check | задача маленькая → можно писать код | 🍃 К работе |
+| 14 | 🛠️ implementer | design → bottom-up plan (DB→logic→API→tests) | расписали порядок: БД→логика→API→тесты | 📝 План кода |
+| 16 | ⚖️ spec-reviewer | impl-review → quality gate | ревью пройдено — код принят | ✅ Принято |
+| 17 | 🛠️ implementer | git commit + verification-before-completion | сохранили готовый код в репозиторий | 📦 Коммит |
+| 18 | 🧩 spec-decomposer | read parent handoff, write level spec (Traces-to) | написали план этого уровня | 📝 План/спека |
+| 19 | 🧩 spec-decomposer | leaf_check | задача маленькая → можно писать код | 🍃 К работе |
+| 20 | 🛠️ implementer | design → bottom-up plan (DB→logic→API→tests) | расписали порядок: БД→логика→API→тесты | 📝 План кода |
+| 22 | ⚖️ spec-reviewer | impl-review → quality gate | ревью пройдено — код принят | ✅ Принято |
+| 23 | 🛠️ implementer | git commit + verification-before-completion | сохранили готовый код в репозиторий | 📦 Коммит |
+| 24 | ✅ verifier | end-to-end acceptance criteria | собрали кусок и проверили целиком — работает | ✅ Сборка ок |
+| 25 | 🧩 spec-decomposer | read parent handoff, write level spec (Traces-to) | написали план этого уровня | 📝 План/спека |
+| 26 | 🔬 researcher | SPIKE before freeze | перед заморозкой проверили неизвестное | 🔬 Мини-ресёрч |
+| 27 | 🔬 researcher | recommendation folded into spec (above the gate, no rework) | вписали вывод исследования в план | 🔬 Вывод ресёрча |
+| 28 | 🧩 spec-decomposer | leaf_check | задача маленькая → можно писать код | 🍃 К работе |
+| 29 | 🛠️ implementer | design → bottom-up plan (DB→logic→API→tests) | расписали порядок: БД→логика→API→тесты | 📝 План кода |
+| 31 | ⚖️ spec-reviewer | impl-review → quality gate | ревью пройдено — код принят | ✅ Принято |
+| 32 | 🛠️ implementer | git commit + verification-before-completion | сохранили готовый код в репозиторий | 📦 Коммит |
+| 33 | 🧩 spec-decomposer | read parent handoff, write level spec (Traces-to) | написали план этого уровня | 📝 План/спека |
+| 34 | 🧩 spec-decomposer | leaf_check | задача большая → разбили на подзадачи | 🧩 Разбили |
+| 35 | 🧩 spec-decomposer | read parent handoff, write level spec (Traces-to) | написали план этого уровня | 📝 План/спека |
+| 36 | 🧩 spec-decomposer | leaf_check | задача маленькая → можно писать код | 🍃 К работе |
+| 37 | 🛠️ implementer | design → bottom-up plan (DB→logic→API→tests) | расписали порядок: БД→логика→API→тесты | 📝 План кода |
+| 39 | ⚖️ spec-reviewer | impl-review → quality gate | ревью пройдено — код принят | ✅ Принято |
+| 40 | 🛠️ implementer | git commit + verification-before-completion | сохранили готовый код в репозиторий | 📦 Коммит |
+| 41 | 🧩 spec-decomposer | read parent handoff, write level spec (Traces-to) | написали план этого уровня | 📝 План/спека |
+| 42 | 🧩 spec-decomposer | leaf_check | задача маленькая → можно писать код | 🍃 К работе |
+| 43 | 🛠️ implementer | design → bottom-up plan (DB→logic→API→tests) | расписали порядок: БД→логика→API→тесты | 📝 План кода |
+| 45 | ⚖️ spec-reviewer | impl-review → quality gate | ревью пройдено — код принят | ✅ Принято |
+| 46 | 🛠️ implementer | git commit + verification-before-completion | сохранили готовый код в репозиторий | 📦 Коммит |
+| 47 | ✅ verifier | end-to-end acceptance criteria | собрали кусок и проверили целиком — работает | ✅ Сборка ок |
+| 48 | 🧩 spec-decomposer | read parent handoff, write level spec (Traces-to) | написали план этого уровня | 📝 План/спека |
+| 49 | 🧩 spec-decomposer | leaf_check | задача большая → разбили на подзадачи | 🧩 Разбили |
+| 50 | 📐 spec-contract | freeze OpenAPI contract (x-traces-to) | заморозили правила API (контракт) ДО кода | 📐 Контракт |
+| 51 | ⚖️ spec-reviewer | spec-gate on contract | проверили контракт — ок | 📐 Контракт проверен |
+| 52 | 🧩 spec-decomposer | read parent handoff, write level spec (Traces-to) | написали план этого уровня | 📝 План/спека |
+| 53 | 🧩 spec-decomposer | leaf_check | задача маленькая → можно писать код | 🍃 К работе |
+| 54 | 🛠️ implementer | design → bottom-up plan (DB→logic→API→tests) | расписали порядок: БД→логика→API→тесты | 📝 План кода |
+| 56 | 🛠️ implementer | contract_check vs frozen L2 | код разошёлся с контрактом — поймали | ⚠️ Расхождение |
+| 57 | 🛠️ implementer | drift-gate classify | решили, кто неправ: код или контракт | 🔧 Разбор дрейфа |
+| 58 | ⚖️ spec-reviewer | spec-first: update contract node, version-bump, re-gate, restart impl | сначала чиним причину (спеку/контракт), потом код | 📜 Правка спеки |
+| 59 | 🛠️ implementer | contract_check after respec | код и контракт снова совпадают | ✅ Совпало |
+| 60 | ⚖️ spec-reviewer | impl-review (spec-conformance) | ревью нашло недочёт → вернули на доработку | ❌ Завернули |
+| 61 | 🛠️ implementer | fix per critique → unblock → re-run | исправили по замечанию и переделали | 🔁 Переделка |
+| 62 | ⚖️ spec-reviewer | impl-review → quality gate | ревью пройдено — код принят | ✅ Принято |
+| 63 | 🛠️ implementer | git commit + verification-before-completion | сохранили готовый код в репозиторий | 📦 Коммит |
+| 64 | 🧩 spec-decomposer | read parent handoff, write level spec (Traces-to) | написали план этого уровня | 📝 План/спека |
+| 65 | 🧩 spec-decomposer | leaf_check | задача маленькая → можно писать код | 🍃 К работе |
+| 66 | 🛠️ implementer | design → bottom-up plan (DB→logic→API→tests) | расписали порядок: БД→логика→API→тесты | 📝 План кода |
+| 68 | ⚖️ spec-reviewer | impl-review → quality gate | ревью пройдено — код принят | ✅ Принято |
+| 69 | 🛠️ implementer | git commit + verification-before-completion | сохранили готовый код в репозиторий | 📦 Коммит |
+| 70 | ✅ verifier | parallel contract_check across subtree | сверили все контракты ветки разом — ок | ✅ Все контракты |
+| 71 | ✅ verifier | end-to-end acceptance criteria | собрали кусок и проверили целиком — работает | ✅ Сборка ок |
+| 72 | 🧩 spec-decomposer | read parent handoff, write level spec (Traces-to) | написали план этого уровня | 📝 План/спека |
+| 73 | 🧩 spec-decomposer | leaf_check | задача маленькая → можно писать код | 🍃 К работе |
+| 74 | 🛠️ implementer | design → bottom-up plan (DB→logic→API→tests) | расписали порядок: БД→логика→API→тесты | 📝 План кода |
+| 76 | ⚖️ spec-reviewer | impl-review → quality gate | ревью пройдено — код принят | ✅ Принято |
+| 77 | 🛠️ implementer | git commit + verification-before-completion | сохранили готовый код в репозиторий | 📦 Коммит |
+| 78 | ✅ verifier | end-to-end acceptance criteria | собрали кусок и проверили целиком — работает | ✅ Сборка ок |
+| 79 | 🔬 researcher | research_trigger_check | накопились причины — запускаем ревизию | 🔬 Пора ревизию |
+| 80 | 🔬 researcher | REVISION finding (upstream impact) | ревизия нашла важное → влияет на проект | 🔬 Ревизия |
+| 81 | ⚖️ spec-reviewer | respec-gate: change the cause first, version-bump, re-derive only affected subtree | сначала чиним причину (спеку/контракт), потом код | 📜 Правка спеки |
+| 82 | ✅ verifier | L0 integrate done = project COMPLETE | всё собрано и проверено — ПРОЕКТ ГОТОВ | 🏁 Готово |
 
 ## Сводка
 - Скиллы: drift-gate, respec-gate, spec-contract, spec-flow-decompose, spec-implement, spec-integrate, spec-requirements, spec-research, spec-reviewer

@@ -47,7 +47,8 @@ class TestCleanRunPassesAudit:
 
     def test_report_has_footprints_and_audit(self, plugin, clean_trace):
         rep = plugin.tools.build_run_report(clean_trace)
-        assert "Шаги на снегу" in rep and "Методологический аудит" in rep
+        assert "Footprint" in rep and "Методологический аудит" in rep
+        assert "Простыми словами" in rep  # plain-language column present
         assert "нарушений не найдено" in rep.lower() or "✅" in rep
 
 
