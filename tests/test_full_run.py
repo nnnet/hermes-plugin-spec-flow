@@ -18,9 +18,20 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from harness import run_engine as eng  # noqa: E402
 
 
+def _configure_validator(plugin):
+    """Point contract_check at the real openapi_diff validator (caller's job)."""
+    plugin.tools.CONTRACT_VALIDATORS["openapi"] = [
+        "python3", str(eng.OPENAPI_DIFF), "{contract}", "{code}"]
+
+
 @pytest.fixture
-def run(plugin):
-    return eng.Engine(plugin.tools).run(eng.load_run())
+def run(plugin, tmp_path):
+    # the real production run of the plugin — simplest depth ('spec'), with a
+    # mandatory workspace, the gate provider and contracts dir injected.
+    _configure_validator(plugin)
+    return eng.run_project(
+        eng.load_run(), workspace=str(tmp_path / "wk"), depth="spec",
+        tools=plugin.tools, contracts_dir=str(eng.CONTRACTS))
 
 
 def test_all_skills_exercised(run):
@@ -82,15 +93,16 @@ import json  # noqa: E402
 
 
 class TestLogSinkAndVerbosity:
-    def test_sink_off_by_default(self, plugin, monkeypatch):
+    def test_sink_off_by_default(self, plugin, tmp_path, monkeypatch):
         monkeypatch.delenv("SPEC_FLOW_RUN_LOG", raising=False)
-        e = eng.Engine(plugin.tools)
+        e = eng.Engine(plugin.tools, workspace=str(tmp_path / "wk"))
         assert e.sink.enabled is False  # no path/handler -> off
 
     def test_jsonl_sink_writes_source_data(self, plugin, tmp_path):
         path = tmp_path / "trace.jsonl"
         sink = eng.LogSink(path=str(path), level=eng.L_DETAIL, fmt="jsonl", enabled=True)
-        res = eng.Engine(plugin.tools, sink=sink).run(eng.load_run())
+        res = eng.run_project(eng.load_run(), workspace=str(tmp_path / "wk"),
+                              tools=plugin.tools, sink=sink)
         lines = path.read_text(encoding="utf-8").strip().splitlines()
         # every event (full detail) persisted, one JSON object per line
         assert len(lines) == len(res.events)
@@ -100,7 +112,8 @@ class TestLogSinkAndVerbosity:
     def test_sink_level_filters_disk_output(self, plugin, tmp_path):
         path = tmp_path / "milestones.jsonl"
         sink = eng.LogSink(path=str(path), level=eng.L_MILESTONE, fmt="jsonl", enabled=True)
-        res = eng.Engine(plugin.tools, sink=sink).run(eng.load_run())
+        res = eng.run_project(eng.load_run(), workspace=str(tmp_path / "wk"),
+                              tools=plugin.tools, sink=sink)
         lines = path.read_text(encoding="utf-8").strip().splitlines()
         milestones = [e for e in res.events if e.level <= eng.L_MILESTONE]
         assert len(lines) == len(milestones) < len(res.events)
@@ -108,20 +121,22 @@ class TestLogSinkAndVerbosity:
     def test_text_format_sink(self, plugin, tmp_path):
         path = tmp_path / "log.txt"
         sink = eng.LogSink(path=str(path), fmt="text", enabled=True)
-        eng.Engine(plugin.tools, sink=sink).run(eng.load_run())
+        eng.run_project(eng.load_run(), workspace=str(tmp_path / "wk"),
+                        tools=plugin.tools, sink=sink)
         body = path.read_text(encoding="utf-8")
         assert "spec-decomposer" in body and "leaf_check" in body
 
-    def test_callable_handler(self, plugin):
+    def test_callable_handler(self, plugin, tmp_path):
         seen = []
-        eng.Engine(plugin.tools, sink=lambda e: seen.append(e)).run(eng.load_run())
+        eng.run_project(eng.load_run(), workspace=str(tmp_path / "wk"),
+                        tools=plugin.tools, sink=lambda e: seen.append(e))
         assert seen and all(hasattr(e, "level") for e in seen)
 
     def test_env_enables_sink(self, plugin, tmp_path, monkeypatch):
         path = tmp_path / "env.jsonl"
         monkeypatch.setenv("SPEC_FLOW_RUN_LOG", str(path))
         monkeypatch.setenv("SPEC_FLOW_RUN_LOG_LEVEL", str(eng.L_MILESTONE))
-        e = eng.Engine(plugin.tools)
+        e = eng.Engine(plugin.tools, workspace=str(tmp_path / "wk"))
         assert e.sink.enabled is True and e.sink.level == eng.L_MILESTONE
         e.run(eng.load_run())
         assert path.exists()
@@ -143,30 +158,59 @@ class TestLogSinkAndVerbosity:
 # ---------------------------------------------------------------------------
 
 class TestWorkspaceArtifacts:
-    def test_workspace_off_by_default(self, plugin, monkeypatch):
-        monkeypatch.delenv("SPEC_FLOW_RUN_WORKSPACE", raising=False)
-        e = eng.Engine(plugin.tools)
-        assert e.workspace.enabled is False
+    def test_workspace_is_mandatory(self, plugin):
+        with pytest.raises((ValueError, TypeError)):
+            eng.Engine(plugin.tools)            # no workspace -> error
+        with pytest.raises(ValueError):
+            eng.run_project(eng.load_run(), workspace=None)
 
-    def test_materialises_specs_code_tests_manifest(self, plugin, tmp_path):
+    def test_spec_depth_writes_specs_contract_manifest_only(self, plugin, tmp_path):
+        # simplest depth: specs/contract/manifest, but NO code/test/commit
+        _configure_validator(plugin)
         ws = eng.Workspace(root=str(tmp_path / "wk"), enabled=True)
-        eng.Engine(plugin.tools, workspace=ws).run(eng.load_run())
+        eng.run_project(eng.load_run(), workspace=ws, depth="spec",
+                        tools=plugin.tools, contracts_dir=str(eng.CONTRACTS))
         root = tmp_path / "wk"
-        assert (root / "constitution.md").exists()
-        assert (root / "MANIFEST.json").exists()
+        assert (root / "constitution.md").exists() and (root / "MANIFEST.json").exists()
+        assert list((root / "specs").glob("*.md"))
+        assert list((root / "contracts").glob("*.yaml"))
+        assert not (root / "src").exists() and not (root / "COMMITS.md").exists()
+
+    def test_scaffold_depth_materialises_code_tests_commits(self, plugin, tmp_path):
+        ws = eng.Workspace(root=str(tmp_path / "wk"), enabled=True)
+        eng.run_project(eng.load_run(), workspace=ws, depth="scaffold",
+                        tools=plugin.tools, contracts_dir=str(eng.CONTRACTS))
+        root = tmp_path / "wk"
         assert (root / "COMMITS.md").exists()
-        specs = list((root / "specs").glob("*.md"))
         srcs = list((root / "src").glob("*.py"))
         tests = list((root / "tests").glob("test_*.py"))
-        assert specs and srcs and tests
-        # one src + one test per leaf, and a commit per leaf
-        assert len(srcs) == len(tests) == len(ws.commits)
-        # a frozen contract was materialised
-        assert list((root / "contracts").glob("*.yaml"))
+        assert srcs and tests and len(srcs) == len(tests) == len(ws.commits)
+
+    def test_verify_depth_runs_pytest(self, plugin, tmp_path):
+        ws = eng.Workspace(root=str(tmp_path / "wk"), enabled=True)
+        eng.run_project(eng.load_run(), workspace=ws, depth="verify",
+                        tools=plugin.tools, contracts_dir=str(eng.CONTRACTS))
+        # the test step really ran pytest and recorded results (scaffolds -> red)
+        assert (tmp_path / "wk" / "TEST-RESULTS.md").exists()
+
+    def test_execute_depth_requires_implementer_agent(self, plugin, tmp_path):
+        with pytest.raises(NotImplementedError):
+            eng.run_project(eng.load_run(), workspace=str(tmp_path / "wk"),
+                            depth="execute", tools=plugin.tools,
+                            contracts_dir=str(eng.CONTRACTS))
+
+    def test_injected_implementer_agent_is_used(self, plugin, tmp_path):
+        calls = []
+        eng.run_project(eng.load_run(), workspace=str(tmp_path / "wk"),
+                        depth="execute", tools=plugin.tools,
+                        contracts_dir=str(eng.CONTRACTS),
+                        agents={"implementer": lambda ctx: calls.append(ctx["node"])})
+        assert calls  # the injected agent ran for each leaf
 
     def test_manifest_has_sha_and_counts(self, plugin, tmp_path):
         ws = eng.Workspace(root=str(tmp_path / "wk"), enabled=True)
-        eng.Engine(plugin.tools, workspace=ws).run(eng.load_run())
+        eng.run_project(eng.load_run(), workspace=ws, depth="scaffold",
+                        tools=plugin.tools, contracts_dir=str(eng.CONTRACTS))
         manifest = json.loads((tmp_path / "wk" / "MANIFEST.json").read_text(encoding="utf-8"))
         assert manifest["counts"].get("spec", 0) >= 5
         assert manifest["counts"].get("code", 0) >= 1

@@ -45,7 +45,19 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
 
-from tools.registry import registry, tool_error
+# Hermes provides ``tools.registry``; fall back to a no-op so the plugin
+# imports, runs and is testable WITHOUT Hermes (the gate/runner logic is pure).
+try:
+    from tools.registry import registry, tool_error
+except Exception:  # noqa: BLE001
+    class _NoopRegistry:
+        def register(self, **_kw):  # signature-compatible no-op
+            return None
+
+    registry = _NoopRegistry()
+
+    def tool_error(msg: str) -> str:
+        return json.dumps({"error": msg}, ensure_ascii=False)
 
 logger = logging.getLogger(__name__)
 

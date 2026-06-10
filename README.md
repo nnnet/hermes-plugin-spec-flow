@@ -95,6 +95,33 @@ With the continuous revision lane on, the project is honestly spiral
 anti-thrash brakes (evidence threshold, re-open budget, manual confirmation on
 large blast radius) are what make it converge.
 
+## Running the engine (depth levels)
+
+The plugin ships its own production runner (`spec_flow_runner.py`) — it drives a
+project to completion **with or without Hermes**. The **Workspace is mandatory**;
+a **depth** selects how far execution goes. Gate tools and per-role agents are
+injectable but have autonomous defaults, so it runs standalone.
+
+```python
+from spec_flow_runner import run_project, load_run
+
+run_project(
+    load_run("project.yaml"),
+    workspace="out/",          # MANDATORY — where artifacts land
+    depth="spec",              # spec | scaffold | verify | execute
+    tools=None,                # gate provider; default = bundled (no Hermes)
+    agents=None,               # per-role workers; default = bundled autonomous
+    contracts_dir="contracts", # where contract files live (optional)
+)
+```
+
+| depth | what the run produces |
+|---|---|
+| `spec` | constitution, per-node specs/plans, frozen contracts, `MANIFEST.json` |
+| `scaffold` | + code & test scaffolds per leaf, a commit journal |
+| `verify` | + actually runs the test files (pytest), writes `TEST-RESULTS.md` |
+| `execute` | + an injected **implementer agent** writes real code / modifies a real project (raises if none is provided) |
+
 ## Testing (autonomous — no Hermes needed)
 
 The deterministic engine is fully testable offline: `tools.registry` and

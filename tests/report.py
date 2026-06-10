@@ -132,11 +132,13 @@ def main() -> int:
     # source data the report is built from.
     trace_path = PLUGIN_DIR / "docs" / "full-run-trace.jsonl"
     sink = eng.LogSink(path=str(trace_path), level=eng.L_DETAIL, fmt="jsonl", enabled=True)
-    # materialise real artifacts (specs/plans, contract, code & test scaffolds,
-    # commit journal, manifest) so a reviewer has deliverables to evaluate.
+    # materialise real artifacts (specs/plans, contract, ...) at the simplest
+    # depth ('spec') — the production run of the plugin, mandatory workspace,
+    # contract validator + dir injected by the caller.
+    tools.CONTRACT_VALIDATORS["openapi"] = ["python3", str(eng.OPENAPI_DIFF), "{contract}", "{code}"]
     ws_dir = PLUGIN_DIR / "docs" / "run-workspace"
-    ws = eng.Workspace(root=str(ws_dir), enabled=True)
-    run_res = eng.Engine(tools, sink=sink, workspace=ws).run(eng.load_run())
+    run_res = eng.run_project(eng.load_run(), workspace=str(ws_dir), depth="spec",
+                              tools=tools, contracts_dir=str(eng.CONTRACTS), sink=sink)
     # Both reports are built by the PLUGIN's own log-based function from a trace,
     # not by the harness — same as a reviewer calling run_report(trace_path=...).
     # (1) the real/clean run:

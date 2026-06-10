@@ -23,8 +23,11 @@ FLAWED = pathlib.Path(__file__).resolve().parent / "runs" / "flawed_run.jsonl"
 @pytest.fixture
 def clean_trace(plugin, tmp_path):
     path = tmp_path / "clean.jsonl"
+    plugin.tools.CONTRACT_VALIDATORS["openapi"] = [
+        "python3", str(eng.OPENAPI_DIFF), "{contract}", "{code}"]
     sink = eng.LogSink(path=str(path), level=eng.L_DETAIL, fmt="jsonl", enabled=True)
-    eng.Engine(plugin.tools, sink=sink).run(eng.load_run())
+    eng.run_project(eng.load_run(), workspace=str(tmp_path / "wk"), depth="scaffold",
+                    tools=plugin.tools, contracts_dir=str(eng.CONTRACTS), sink=sink)
     return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
