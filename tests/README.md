@@ -16,6 +16,8 @@ python3 tests/report.py         # render a human report -> ../docs/test-report.m
 | `test_decomposition_graph.py` | **battle**: walk real projects through the real `leaf_check`, build the kanban DAG, compare branching graph vs ground truth |
 | `test_contract_drift.py` | **battle**: `contract_check` against a real OpenAPI validator over clean / type-mismatch / missing-endpoint / parallel-subtree fixtures |
 | `test_research_timeline.py` | **battle**: replay event timelines through `research_trigger_check`; assert exact fire points + cooldown |
+| `test_policy_scenarios.py` | **battle**: feed deliberately-imprecise (but legitimate) business goals through `policy_gate`+`leaf_check`; assert the plugin **blocks/clarifies** them (not a human) and that the resolved variant proceeds |
+| `scenarios/*.yaml` | three business projects — each an imprecise L0 (vague niche / no metric / uncapped spend / outreach / legal exposure) + a resolved L0, with the template's must-catch list |
 | `projects/*.yaml` | project fixtures — a decomposition tree where each node carries the metrics `leaf_check` consumes plus its ground-truth verdict and the expected DAG summary |
 | `contracts/*` | OpenAPI contracts + implementation manifests (clean / drifted) |
 | `harness/simulator.py` | the dispatcher simulator + ASCII tree / report renderer |
@@ -42,6 +44,11 @@ node to prove an unresolved decision forces expansion.
 
 `pytest -q` gives pass/fail; on a battle-test failure the assertion message
 includes the rendered ASCII tree and the exact diverging node. For a full
-picture run `tests/report.py` — it writes `docs/test-report.md` with one ASCII
-decomposition tree per project (✓/✗ per node), the DAG reconciliation, a
-contract-drift table and the research-lane timeline.
+picture run `tests/report.py` — it writes two reports under `docs/`:
+
+- `test-report.md` — one ASCII decomposition tree per project (✓/✗ per node),
+  the DAG reconciliation, a contract-drift table and the research-lane timeline;
+- `business-scenarios-report.md` — for each imprecise business goal, the gate
+  pipeline (`policy_gate` inputs → verdict + reasons → `leaf_check`), the
+  before/after (imprecise → resolved → proceeds) and a critical comparison
+  against the template's must-catch list.

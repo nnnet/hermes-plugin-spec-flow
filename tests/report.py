@@ -24,6 +24,7 @@ HERE = Path(__file__).resolve().parent
 PLUGIN_DIR = HERE.parent
 sys.path.insert(0, str(HERE))
 from harness import simulator as sim  # noqa: E402
+from harness import scenarios as scn  # noqa: E402
 
 
 # --- load the plugin standalone (same fakes the tests use) -----------------
@@ -116,8 +117,15 @@ def main() -> int:
 
     out_path = PLUGIN_DIR / "docs" / "test-report.md"
     out_path.write_text(full + "\n", encoding="utf-8")
+
+    # business-scenario report — the plugin catching deliberate imprecision
+    scn_report = scn.render_report(tools)
+    scn_path = PLUGIN_DIR / "docs" / "business-scenarios-report.md"
+    scn_path.write_text(scn_report, encoding="utf-8")
+
     print(full)
-    print(f"\n[report written to {out_path}]")
+    print("\n" + scn_report)
+    print(f"\n[reports written to {out_path} and {scn_path}]")
     return 0 if ok else 1
 
 

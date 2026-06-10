@@ -17,6 +17,7 @@ EXPECTED_TOOLS = {
     "leaf_check",
     "contract_check",
     "research_trigger_check",
+    "policy_gate",
     "specflow_init",
     "specflow_start",
     "specflow_status",
@@ -202,6 +203,52 @@ class TestResearchTrigger:
         monkeypatch.setenv("SPEC_FLOW_RESEARCH_LANE", json.dumps({"enabled": False}))
         out = self.call(plugin, reason="on_level_return")
         assert out["trigger"] is False
+
+
+# ---------------------------------------------------------------------------
+# policy_gate
+# ---------------------------------------------------------------------------
+
+class TestPolicyGate:
+    def call(self, plugin, **kw):
+        return _j(plugin.tools._handle_policy_gate(kw))
+
+    def test_clean_node_passes(self, plugin):
+        out = self.call(plugin, measurable_target=True, spend_per_action_usd=10)
+        assert out["verdict"] == "pass"
+
+    def test_missing_target_clarifies(self, plugin):
+        out = self.call(plugin, measurable_target=False, spend_per_action_usd=10)
+        assert out["verdict"] == "clarify"
+        assert any("measurable" in c for c in out["clarifications"])
+
+    def test_spend_over_cap_blocks(self, plugin):
+        out = self.call(plugin, measurable_target=True, spend_per_action_usd=200, human_in_loop=False)
+        assert out["verdict"] == "block"
+        assert any("exceeds unattended cap" in b for b in out["blocks"])
+
+    def test_spend_over_cap_with_human_passes(self, plugin):
+        out = self.call(plugin, measurable_target=True, spend_per_action_usd=200, human_in_loop=True)
+        assert out["verdict"] == "pass"
+
+    def test_outreach_without_consent_blocks(self, plugin):
+        out = self.call(plugin, measurable_target=True, involves_outreach=True, consent_obtained=False)
+        assert out["verdict"] == "block"
+        assert any("outreach" in b for b in out["blocks"])
+
+    def test_legal_exposure_unreviewed_blocks(self, plugin):
+        out = self.call(plugin, measurable_target=True, legal_exposure=True, legality_reviewed=False)
+        assert out["verdict"] == "block"
+
+    def test_block_dominates_clarify(self, plugin):
+        # both an ambiguity and a violation -> block wins
+        out = self.call(plugin, measurable_target=False, spend_per_action_usd=500)
+        assert out["verdict"] == "block"
+
+    def test_policy_override_via_env(self, plugin, monkeypatch):
+        monkeypatch.setenv("SPEC_FLOW_POLICY", json.dumps({"max_unattended_spend_usd": 1000}))
+        out = self.call(plugin, measurable_target=True, spend_per_action_usd=200)
+        assert out["verdict"] == "pass"
 
 
 # ---------------------------------------------------------------------------

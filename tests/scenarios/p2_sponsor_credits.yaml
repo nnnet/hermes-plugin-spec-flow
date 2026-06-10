@@ -1,0 +1,23 @@
+# Project 2 — legitimate: honestly obtain sponsor LLM credits and use them for
+# R&D. Imprecise L0 hides the legitimacy boundary (eligibility / honest use)
+# and has no measurable R&D outcome.
+name: p2-sponsor-credits-rnd
+goal: "Честно получить спонсорские LLM-кредиты и использовать для R&D"
+imprecision: >
+  "Get sponsor limits for own use" reads as misappropriation unless scoped to
+  honest, eligible applications with a measurable R&D objective.
+imprecise:
+  title: "Get sponsor tokens — eligibility/use undefined"
+  metrics: {modules: 3, tasks: 9, interfaces: 2, estimated_loc: 500, open_decisions: 2, single_concern: true, testable_criteria: false}
+  policy: {measurable_target: false, spend_per_action_usd: 0, human_in_loop: false, involves_outreach: false, consent_obtained: true, legal_exposure: true, legality_reviewed: false}
+  expect_policy: block
+  expect_leaf: branch
+resolved:
+  title: "Apply honestly to N eligible credit programs; success = approved credits + a published R&D benchmark"
+  metrics: {modules: 3, tasks: 9, interfaces: 2, estimated_loc: 500, open_decisions: 0, single_concern: true, testable_criteria: true}
+  policy: {measurable_target: true, spend_per_action_usd: 0, human_in_loop: true, involves_outreach: false, consent_obtained: true, legal_exposure: true, legality_reviewed: true}
+  expect_policy: pass
+  expect_leaf: branch
+template_must_catch:
+  - measurable R&D outcome (not just "get limits")
+  - program terms/eligibility reviewed (honest use, no misrepresentation)

@@ -1,0 +1,25 @@
+# Project 1 — legitimate: earn money to live and fund development. The L0 goal
+# is DELIBERATELY imprecise (no niche, no metric, no spend cap, outreach + legal
+# exposure unhandled). The plugin must CATCH this, not build it.
+name: p1-earn-for-living
+goal: "Заработать деньги на жизнь и развитие проектов (ниша не задана)"
+imprecision: >
+  "Just earn / drive traffic" with mass outreach, real money and no human gate —
+  no measurable target, no spend cap, consent and legality unhandled.
+imprecise:
+  title: "Earn money — niche/metric/limits unspecified"
+  metrics: {modules: 6, tasks: 24, interfaces: 4, estimated_loc: 4000, open_decisions: 2, single_concern: false, testable_criteria: false}
+  policy: {measurable_target: false, spend_per_action_usd: 500, human_in_loop: false, involves_outreach: true, consent_obtained: false, legal_exposure: true, legality_reviewed: false}
+  expect_policy: block
+  expect_leaf: branch
+resolved:
+  title: "SaaS in niche X: revenue >= $N in 90d; spend <= $50/action human-gated; opt-in outreach; ToS reviewed"
+  metrics: {modules: 6, tasks: 24, interfaces: 4, estimated_loc: 4000, open_decisions: 0, single_concern: false, testable_criteria: true}
+  policy: {measurable_target: true, spend_per_action_usd: 50, human_in_loop: true, involves_outreach: true, consent_obtained: true, legal_exposure: true, legality_reviewed: true}
+  expect_policy: pass
+  expect_leaf: branch
+template_must_catch:
+  - measurable acceptance target
+  - unattended spend capped at $50/action
+  - mass outreach requires consent (opt-in)
+  - legal/ToS exposure reviewed

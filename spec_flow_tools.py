@@ -87,6 +87,18 @@ RESEARCH_LANE: dict[str, Any] = {
     "cooldown_tasks": 5,        # don't re-fire within this many tasks
 }
 
+# Policy / constitution constraints enforced deterministically by policy_gate.
+# These encode the non-negotiable rules a vague or risky spec must satisfy
+# before it may be decomposed into implementation work — the deterministic
+# half of the constitution check (the L1 constitution + spec-reviewer skill
+# own the rest). Override via the SPEC_FLOW_POLICY env var (JSON).
+POLICY: dict[str, Any] = {
+    "max_unattended_spend_usd": 50,     # spend above this needs human approval
+    "outreach_requires_consent": True,  # mass outreach must be opt-in / consented
+    "require_legality_review": True,    # nodes with legal exposure must be reviewed
+    "require_measurable_target": True,  # goals must carry a measurable acceptance target
+}
+
 
 # ---------------------------------------------------------------------------
 # Paths — never hard-code absolute paths; derive from HERMES_HOME (env) and
@@ -101,6 +113,17 @@ def _spec_flow_dir() -> str:
     path = os.path.join(_hermes_home(), "spec-flow")
     os.makedirs(path, exist_ok=True)
     return path
+
+
+def _policy_config() -> dict[str, Any]:
+    raw = os.environ.get("SPEC_FLOW_POLICY")
+    merged = dict(POLICY)
+    if raw:
+        try:
+            merged.update(json.loads(raw))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("spec-flow: bad SPEC_FLOW_POLICY env (%s)", exc)
+    return merged
 
 
 def _research_lane_config() -> dict[str, Any]:
@@ -528,6 +551,92 @@ def _handle_specflow_status(args: dict[str, Any], **_: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
+# policy_gate — deterministic constitution check
+# ---------------------------------------------------------------------------
+
+POLICY_GATE_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "policy_gate",
+        "description": (
+            "Deterministically check a spec node against the project "
+            "constitution BEFORE it is decomposed or implemented. Catches the "
+            "imprecision a vague/risky goal hides: no measurable target, "
+            "unattended spend above the cap, mass outreach without consent, "
+            "legal exposure not reviewed. Returns verdict 'pass', 'clarify' "
+            "(ambiguity to resolve) or 'block' (constitution violation — fix "
+            "the spec first, do not proceed). This is the deterministic half "
+            "of the requirements/spec gate; the spec-reviewer skill owns the "
+            "rest."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "measurable_target": {"type": "boolean", "description": "Does the goal carry a measurable acceptance target (e.g. revenue>=$N in 90d, ROI, Sharpe)?"},
+                "spend_per_action_usd": {"type": "number", "description": "Max money the node may spend per action."},
+                "human_in_loop": {"type": "boolean", "description": "Is there a human approval gate on spend/sends for this node?"},
+                "involves_outreach": {"type": "boolean", "description": "Does the node send outreach (email/DM/ads) at scale?"},
+                "consent_obtained": {"type": "boolean", "description": "Is the outreach opt-in / consented?"},
+                "legal_exposure": {"type": "boolean", "description": "Does the node carry legal/jurisdiction/ToS exposure?"},
+                "legality_reviewed": {"type": "boolean", "description": "Has the legal exposure been reviewed and confirmed compliant?"},
+            },
+            "required": [],
+        },
+    },
+}
+
+
+def _handle_policy_gate(args: dict[str, Any], **_: Any) -> str:
+    cfg = _policy_config()
+    measurable = bool(args.get("measurable_target", False))
+    spend = float(args.get("spend_per_action_usd", 0) or 0)
+    human = bool(args.get("human_in_loop", False))
+    outreach = bool(args.get("involves_outreach", False))
+    consent = bool(args.get("consent_obtained", False))
+    legal = bool(args.get("legal_exposure", False))
+    reviewed = bool(args.get("legality_reviewed", False))
+
+    clarifications: list[str] = []
+    blocks: list[str] = []
+
+    if cfg.get("require_measurable_target") and not measurable:
+        clarifications.append("no measurable acceptance target — goal is unverifiable as stated")
+
+    cap = float(cfg.get("max_unattended_spend_usd", 0) or 0)
+    if spend > cap and not human:
+        blocks.append(f"spend ${spend:g}/action exceeds unattended cap ${cap:g} — requires human approval")
+    if outreach and cfg.get("outreach_requires_consent") and not consent:
+        blocks.append("mass outreach without consent/opt-in — constitution requires consented audiences")
+    if legal and cfg.get("require_legality_review") and not reviewed:
+        blocks.append("legal/jurisdiction/ToS exposure not reviewed — must be confirmed compliant first")
+
+    if blocks:
+        verdict = "block"
+    elif clarifications:
+        verdict = "clarify"
+    else:
+        verdict = "pass"
+
+    payload = {
+        "verdict": verdict,
+        "blocks": blocks,
+        "clarifications": clarifications,
+        "constraints": {
+            "max_unattended_spend_usd": cap,
+            "outreach_requires_consent": bool(cfg.get("outreach_requires_consent")),
+            "require_legality_review": bool(cfg.get("require_legality_review")),
+            "require_measurable_target": bool(cfg.get("require_measurable_target")),
+        },
+        "action": {
+            "block": "do NOT decompose — fix the spec (constitution violation), then re-gate",
+            "clarify": "resolve via clarify / kanban_block before expanding",
+            "pass": "proceed to leaf_check / decomposition",
+        }[verdict],
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -556,6 +665,15 @@ registry.register(
     handler=_handle_research_trigger_check,
     check_fn=_check_specflow,
     emoji="🔬",
+)
+
+registry.register(
+    name="policy_gate",
+    toolset="kanban",
+    schema=POLICY_GATE_SCHEMA,
+    handler=_handle_policy_gate,
+    check_fn=_check_specflow,
+    emoji="⚖️",
 )
 
 registry.register(

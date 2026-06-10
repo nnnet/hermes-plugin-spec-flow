@@ -31,6 +31,7 @@ spec + the parent handoff — context stays clean.
 | `leaf_check` | leaf vs branch by hard levels (modules≤1, tasks≤5, interfaces≤2, LOC≤100, no open decisions, single-concern, testable) |
 | `contract_check` | code↔contract drift; OpenAPI default, Zod/Protobuf, parallel mode; strict = unavailable validator also fails |
 | `research_trigger_check` | fire the revision lane: `every_n_tasks` / `m_test_errors` / `on_level_return` / `cron`, with cooldown |
+| `policy_gate` | deterministic constitution check — measurable target, unattended spend cap, outreach consent, legality review; verdict `pass`/`clarify`/`block`. Catches a vague/risky spec before it is decomposed |
 | `specflow_init` | board + `constitution.md` + `specs/` |
 | `specflow_start` | seed the L0 decomposition task |
 | `specflow_status` | compact board summary |

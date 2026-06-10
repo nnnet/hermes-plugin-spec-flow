@@ -1,6 +1,6 @@
 # spec-flow — отчёт боевого тестирования
 
-> Тулзов зарегистрировано: 6 (contract_check, leaf_check, research_trigger_check, specflow_init, specflow_start, specflow_status)
+> Тулзов зарегистрировано: 7 (contract_check, leaf_check, policy_gate, research_trigger_check, specflow_init, specflow_start, specflow_status)
 > Проектов проверено: 4 · итог: ✅ всё совпало с ожиданием
 
 
