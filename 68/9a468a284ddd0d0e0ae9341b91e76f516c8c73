@@ -1,0 +1,44 @@
+tests/contracts/query.openapi.yaml
+  s_1b99a7ec9e9aa9::t_dd7899c985392d 1-13
+docs/full-run-report.md
+  s_1b99a7ec9e9aa9::t_a2e2237015a03d 1-12,14-135,140,142-147,149-155,157
+  s_1b99a7ec9e9aa9::t_ab652d72646295 13,136-139,141,148,156
+tests/contracts/query_fixed.openapi.yaml
+  s_1b99a7ec9e9aa9::t_dd7899c985392d 1-13
+tests/contracts/code_query_drift.json
+  s_1b99a7ec9e9aa9::t_dd7899c985392d 1
+README.md
+  s_1b99a7ec9e9aa9::t_f69303bc734275 104-105
+  s_1b99a7ec9e9aa9::t_a254b38a3fd7b7 112-124
+tests/harness/run_engine.py
+  s_1b99a7ec9e9aa9::t_8931025e25ac53 1-191,195-439
+  s_1b99a7ec9e9aa9::t_55c30d72e6742f 192-194
+tests/README.md
+  s_1b99a7ec9e9aa9::t_8c4026c7d661ff 57-61
+  s_1b99a7ec9e9aa9::t_ef493f6e473752 21-23
+tests/report.py
+  s_1b99a7ec9e9aa9::t_b4ee9b72afd059 131-137
+  s_1b99a7ec9e9aa9::t_433867553a3ff1 28
+  s_1b99a7ec9e9aa9::t_8e7c44c72f1c36 127-130
+tests/runs/privacy_analytics.yaml
+  s_1b99a7ec9e9aa9::t_7fb7f5d41005b6 31
+  s_1b99a7ec9e9aa9::t_66e18e39394883 1-30,32-77
+tests/test_full_run.py
+  s_1b99a7ec9e9aa9::t_68c7633f7eb47a 1-74
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "689a468a284ddd0d0e0ae9341b91e76f516c8c73",
+  "prompts": {},
+  "sessions": {
+    "s_1b99a7ec9e9aa9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5025e0d8-1d1b-4f97-8c52-eec971a58fbd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <zkowkmdx@sharklasers.com>"
+    }
+  }
+}
