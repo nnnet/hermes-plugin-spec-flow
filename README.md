@@ -115,6 +115,18 @@ run_project(
 )
 ```
 
+**The tree can be built by the plugin itself.** If the project carries no
+``tree`` (only goal/constitution/target/policy), the engine asks the injected
+``decomposer`` agent to build each level from the goal — the agent proposes
+metrics and children, the engine's own ``leaf_check`` gate makes every
+leaf/branch decision, and a call ceiling guards against non-converging
+recursion. A predefined ``tree`` in the case is just the deterministic replay
+mode for tests; with a live agent it is not needed:
+
+```bash
+python3 tests/run_cases.py --case p2 --decomposer llm   # tree built from the goal
+```
+
 | depth | what the run produces |
 |---|---|
 | `spec` | constitution, per-node specs/plans, frozen contracts, `MANIFEST.json` |

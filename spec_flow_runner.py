@@ -65,10 +65,22 @@ def _default_implementer(ctx: dict) -> None:
         "(a real LLM / Hermes worker that writes code & modifies the project)")
 
 
+def _default_decomposer(ctx: dict) -> None:
+    raise NotImplementedError(
+        "the project has no predefined tree — building one from the goal "
+        "requires an injected decomposer agent (a real LLM / Hermes worker "
+        "running the spec-flow-decompose skill)")
+
+
 # Autonomous default agents per role. Spec/scaffold/verify are fully handled by
-# the deterministic engine; only 'execute' consults an agent (the implementer).
-# Override any via the run's ``agents=`` parameter.
-DEFAULT_AGENTS = {"implementer": _default_implementer}
+# the deterministic engine; the 'implementer' is consulted at depth 'execute',
+# the 'decomposer' whenever a node arrives without metrics (i.e. the case did
+# not predefine the tree). Override any via the run's ``agents=`` parameter.
+DEFAULT_AGENTS = {"implementer": _default_implementer,
+                  "decomposer": _default_decomposer}
+
+# Hard ceiling on decomposer-agent calls per run (runaway-recursion guard).
+MAX_DECOMPOSE_CALLS = 40
 
 PROFILE_ICON = {
     "spec-decomposer": "🧩",
@@ -359,13 +371,15 @@ class Engine:
     def __init__(self, tools: Any = None, *, workspace: Any,
                  depth: Any = DEPTH_SPEC, agents: Optional[dict] = None,
                  contracts_dir: Optional[str] = None,
-                 sink: Optional[Any] = None, verbosity: int = DEFAULT_VERBOSITY):
+                 sink: Optional[Any] = None, verbosity: int = DEFAULT_VERBOSITY,
+                 max_decompose_calls: int = MAX_DECOMPOSE_CALLS):
         if not workspace:
             raise ValueError("Workspace is mandatory — pass a path or a Workspace")
         # tools (gate provider) is injectable; default to the bundled gates so
         # the runner works standalone without Hermes.
         self.tools = tools if tools is not None else _gates
         self.depth = _depth_int(depth)
+        self.max_decompose_calls = max_decompose_calls
         self.agents = {**DEFAULT_AGENTS, **(agents or {})}
         self.contracts_dir = Path(contracts_dir) if contracts_dir else None
         self.events: list[Event] = []
@@ -448,7 +462,10 @@ class Engine:
         # Note: the contract validator (CONTRACT_VALIDATORS) is configured by the
         # caller on the gate provider — the runner does not hardcode it.
         self._completed = 0
+        self._goal = project.get("goal", "")
         self._target = project.get("target", "")
+        self._constitution = project.get("constitution", [])
+        self._decompose_calls = 0
 
         # Phase 0-1: requirements (spec-decomposer + spec-requirements)
         self.task("L0:req", "Requirements & constitution", "requirements", "spec-decomposer", "spec-requirements")
@@ -464,7 +481,9 @@ class Engine:
         self.workspace.constitution(project.get("constitution", []), project.get("target", ""))
         self.tasks["L0:req"].status = "done"
 
-        root = project["tree"]
+        # the tree either comes predefined with the case OR is built from the
+        # goal by the decomposer agent, node by node (gated at every level)
+        root = project.get("tree") or {"id": "L0", "title": project.get("goal", "project")}
         self._visit(root, depth=0, contract_ctx=None, phase="decompose", parent=None)
 
         # Phase: continuous research revision lane
@@ -486,8 +505,32 @@ class Engine:
                          getattr(self.workspace, "root", None))
 
     # -- recursion ---------------------------------------------------------
+    def _expand_node(self, node: dict, depth: int, parent: Optional[str]) -> dict:
+        """A node arrived without metrics — the DECOMPOSER AGENT builds this
+        level itself from the goal: estimates the node's size metrics and, if
+        it is too big, proposes children one level down. The engine's own
+        gates (leaf_check) still make the leaf/branch decision."""
+        self._decompose_calls += 1
+        if self._decompose_calls > self.max_decompose_calls:
+            raise RuntimeError(
+                f"decomposer agent exceeded {self.max_decompose_calls} calls — "
+                "the tree does not converge to leaves")
+        out = self.agents["decomposer"]({
+            "project": {"goal": self._goal, "target": self._target,
+                        "constitution": self._constitution},
+            "node": {"id": node["id"], "title": node.get("title", node["id"])},
+            "parent": parent, "depth": depth,
+        })
+        merged = {**node, **(out or {})}
+        self.emit("decompose", "spec-decomposer", "spec-flow-decompose", node["id"],
+                  "decomposer agent built this level from the goal",
+                  f"{len(merged.get('children', []))} children proposed", level=L_MILESTONE)
+        return merged
+
     def _visit(self, node: dict, depth: int, contract_ctx: Optional[dict], phase: str,
                parent: Optional[str] = None):
+        if "metrics" not in node:
+            node = self._expand_node(node, depth, parent)
         nid = node["id"]
         title = node.get("title", nid)
         self.task(nid, title, "decompose", "spec-decomposer", "spec-flow-decompose")
@@ -735,7 +778,8 @@ def load_run(path) -> dict:
 def run_project(project: dict, *, workspace, depth: Any = DEPTH_SPEC,
                 tools: Any = None, agents: Optional[dict] = None,
                 contracts_dir: Optional[str] = None, sink: Optional[Any] = None,
-                verbosity: int = DEFAULT_VERBOSITY) -> RunResult:
+                verbosity: int = DEFAULT_VERBOSITY,
+                max_decompose_calls: int = MAX_DECOMPOSE_CALLS) -> RunResult:
     """Public entry: run a project to completion. ``workspace`` is mandatory.
 
     ``depth`` is one of spec|scaffold|verify|execute (or 1..4). ``tools`` (gate
@@ -745,7 +789,8 @@ def run_project(project: dict, *, workspace, depth: Any = DEPTH_SPEC,
     if not workspace:
         raise ValueError("Workspace is mandatory")
     return Engine(tools=tools, workspace=workspace, depth=depth, agents=agents,
-                  contracts_dir=contracts_dir, sink=sink, verbosity=verbosity).run(project)
+                  contracts_dir=contracts_dir, sink=sink, verbosity=verbosity,
+                  max_decompose_calls=max_decompose_calls).run(project)
 
 
 def render_log(res: RunResult, level: int = None) -> str:

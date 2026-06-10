@@ -20,6 +20,8 @@ python3 tests/report.py         # render a human report -> ../docs/test-report.m
 | `scenarios/*.yaml` | the case pool: each carries an imprecise L0 + a resolved L0 (policy surface) AND a decomposition tree for the resolved goal (full-run surface). **p4** is the complete exercise: a 4-level tree hitting every skill/profile/loop (both drift kinds, 2 contracts, 2 clarifies, 2 spikes, revision) |
 | `run_cases.py` | **case runner**: drives every scenario as a REAL plugin run into its own timestamped workspace `runs-out/<stamp>__<case>/` (artifacts + trace + log + reports inside); at `--depth execute` injects the bundled autonomous implementer |
 | `harness/auto_implementer.py` | autonomous implementer agent for depth=`execute` — writes real working code + green tests per leaf (swap in an LLM/Hermes agent for a real project) |
+| `harness/llm_decomposer.py` | live decomposer agent (local `claude` CLI): the plugin builds the task tree ITSELF from the goal — `run_cases.py --decomposer llm` drops the case's predefined tree |
+| `test_agent_decomposition.py` | **battle**: no predefined tree — a decomposer agent builds it from the goal; every built node is gated by the real `leaf_check`; no agent → loud failure; runaway recursion → capped |
 | `test_full_run.py` | **battle**: a full end-to-end project run exercising **all 9 skills & all 6 profiles**, asserting every loop (clarify / review critique / drift→respec / research revision) and project completion |
 | `runs/privacy_analytics.yaml` | the end-to-end project (multi-level tree with a spike, a contract, a drift episode, a review failure and a research revision) |
 | `harness/run_engine.py` | the dispatcher+worker run engine + execution-log / tree / coverage renderer |

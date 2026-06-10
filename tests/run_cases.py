@@ -83,20 +83,30 @@ def _load_tools():
     return sys.modules["spec_flow_cases.spec_flow_tools"]
 
 
-def _run_full(case: dict, case_dir: Path, depth: str, tools) -> dict:
+def _run_full(case: dict, case_dir: Path, depth: str, tools,
+              decomposer: str = "case") -> dict:
     """The real production run: mandatory workspace inside the case folder,
     disk sink at full detail, the plugin's own report built from the trace."""
     tools.CONTRACT_VALIDATORS["openapi"] = [
         "python3", str(eng.OPENAPI_DIFF), "{contract}", "{code}"]
     trace = case_dir / "trace.jsonl"
     sink = eng.LogSink(path=str(trace), level=eng.L_DETAIL, fmt="jsonl", enabled=True)
-    # at depth=execute a real implementer agent is required; inject the bundled
-    # autonomous one (writes working code + green tests) — swap in a smarter
-    # (LLM/Hermes) agent here for a real project
-    agents = {"implementer": auto_implementer.implement} if depth == "execute" else None
+    # agents are injectable: at depth=execute a real implementer is required
+    # (bundled autonomous one by default); with --decomposer llm the case's
+    # predefined tree is DROPPED and the plugin builds it from the goal
+    agents = {}
+    if depth == "execute":
+        agents["implementer"] = auto_implementer.implement
+    max_calls = eng.MAX_DECOMPOSE_CALLS
+    if decomposer == "llm":
+        from harness import llm_decomposer
+        agents["decomposer"] = llm_decomposer.decompose
+        case = {k: v for k, v in case.items() if k not in ("tree", "revision")}
+        max_calls = 80      # a live LLM is thorough; convergence is enforced at depth 3
     res = eng.run_project(case, workspace=str(case_dir / "workspace"), depth=depth,
-                          tools=tools, agents=agents,
-                          contracts_dir=str(eng.CONTRACTS), sink=sink)
+                          tools=tools, agents=agents or None,
+                          contracts_dir=str(eng.CONTRACTS), sink=sink,
+                          max_decompose_calls=max_calls)
 
     widths = eng._column_widths(res.events)
     (case_dir / "log.txt").write_text(
@@ -166,7 +176,16 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Run scenario cases as real plugin runs")
     ap.add_argument("--depth", default="spec", choices=sorted(eng.DEPTHS, key=eng.DEPTHS.get))
     ap.add_argument("--case", default="", help="substring filter on the case file name")
+    ap.add_argument("--decomposer", default="case", choices=["case", "llm"],
+                    help="'case' replays the predefined tree; 'llm' DROPS it and "
+                         "the plugin builds the tree itself from the goal "
+                         "(local `claude` CLI, haiku model)")
     args = ap.parse_args()
+    if args.decomposer == "llm" and not args.case:
+        # live LLM runs cost real quota: one call per tree node — keep the
+        # default to the single smallest case; widen explicitly via --case
+        args.case = "p2"
+        print("[llm mode] no --case given -> restricted to the smallest case (p2)")
 
     tools = _load_tools()
     stamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
@@ -182,7 +201,9 @@ def main() -> int:
         os.environ["HERMES_HOME"] = tempfile.mkdtemp(prefix=f"specflow-{name}-")
 
         policy = _run_policy(path, case_dir, tools) if "imprecise" in case else None
-        full = _run_full(case, case_dir, args.depth, tools) if "tree" in case else None
+        runnable = "tree" in case or args.decomposer == "llm"
+        full = (_run_full(case, case_dir, args.depth, tools, args.decomposer)
+                if runnable else None)
 
         (case_dir / "SUMMARY.md").write_text(
             _summary_md(name, case.get("goal", ""), args.depth, full, policy),
