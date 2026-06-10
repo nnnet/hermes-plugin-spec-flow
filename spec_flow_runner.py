@@ -12,12 +12,17 @@ spec-flow methodology to completion, WITH or WITHOUT Hermes —
 * the **Workspace is mandatory** — every run materialises artifacts;
 * a **depth** parameter selects how far execution goes.
 
-Depth ladder (`spec` < `scaffold` < `verify` < `execute`):
+Depth ladder (`spec` < `scaffold` < `verify` < `execute` < `product`):
   * spec     — constitution, per-node specs/plans, frozen contracts, MANIFEST;
   * scaffold — + code & test scaffolds per leaf, a commit journal;
   * verify   — + actually run the test files (pytest) and record results;
   * execute  — + an injected implementer agent writes real code / modifies a
-               real project (raises if no implementer agent is provided).
+               real project (raises if no implementer agent is provided);
+  * product  — + BUILD and RUN the materialised product, checking it against an
+               acceptance spec (``project["acceptance"]``) and writing a
+               READY / NOT READY verdict to PRODUCT-RESULTS.md. Honest by
+               design: with only stub modules and no real entrypoint it reports
+               NOT READY rather than faking green.
 """
 
 from __future__ import annotations
@@ -47,8 +52,8 @@ L_DETAIL = 3      # fine-grained detail (TDD red/green, individual constitution 
 DEFAULT_VERBOSITY = int(os.environ.get("SPEC_FLOW_RUN_VERBOSITY", str(L_STEP)))
 
 # Execution depth ladder.
-DEPTHS = {"spec": 1, "scaffold": 2, "verify": 3, "execute": 4}
-DEPTH_SPEC, DEPTH_SCAFFOLD, DEPTH_VERIFY, DEPTH_EXECUTE = 1, 2, 3, 4
+DEPTHS = {"spec": 1, "scaffold": 2, "verify": 3, "execute": 4, "product": 5}
+DEPTH_SPEC, DEPTH_SCAFFOLD, DEPTH_VERIFY, DEPTH_EXECUTE, DEPTH_PRODUCT = 1, 2, 3, 4, 5
 
 
 def _depth_int(d: Any) -> int:
@@ -56,7 +61,7 @@ def _depth_int(d: Any) -> int:
         return d
     if d in DEPTHS:
         return DEPTHS[d]
-    raise ValueError(f"unknown depth {d!r}; expected one of {sorted(DEPTHS)} or 1..4")
+    raise ValueError(f"unknown depth {d!r}; expected one of {sorted(DEPTHS)} or 1..5")
 
 
 def _default_implementer(ctx: dict) -> None:
@@ -500,6 +505,12 @@ class Engine:
         if "L0:integrate" in self.tasks:
             self.tasks["L0:integrate"].status = "done"
 
+        # Depth 'product': after the project is integrated (and, at >=execute,
+        # real code exists), build+run the product and assert readiness against
+        # the acceptance spec.
+        if self.depth >= DEPTH_PRODUCT:
+            self._product_check(project.get("acceptance"))
+
         return RunResult(project, self.events, self.tasks, self.skills, self.profiles,
                          self.loops, self.gate_calls, self.verbosity, self.depth,
                          getattr(self.workspace, "root", None))
@@ -732,6 +743,119 @@ class Engine:
                   "ran test suite (pytest)", "PASS" if passed else "FAIL (scaffolds)",
                   "", "PASS" if passed else "FAIL", level=L_MILESTONE)
 
+    def _product_check(self, acceptance: Optional[dict]) -> None:
+        """Build+run the materialised product and assert it is READY against an
+        acceptance spec, writing PRODUCT-RESULTS.md.
+
+        Why: depth 'execute' only proves real code & tests exist; 'product'
+        proves the integrated whole actually BUILDS, RUNS and meets acceptance
+        criteria — the gap between 'code is written' and 'product works'.
+
+        What: reads ``acceptance`` (see schema below). Optionally runs an
+        ``entrypoint`` shell command (guarded by try/except + timeout, like
+        ``_verify_tests``); then evaluates each check under ``smoke``/``e2e``/
+        ``metrics``. A check PASSES only on real evidence — if there is no real
+        runnable entrypoint, smoke/e2e checks honestly FAIL (NOT READY) rather
+        than fake green. Verdict is READY only when every check passed.
+
+        Acceptance spec shape (all keys optional)::
+
+            acceptance:
+              entrypoint: "<shell cmd>"   # how to build/run the product
+              smoke:   [ "<check>", ... ] # liveness checks (needs entrypoint)
+              e2e:     [ "<check>", ... ] # end-to-end scenarios (needs entrypoint)
+              metrics: [ "<check>", ... ] # measurable targets (needs entrypoint)
+
+        Test: run depth='product' with an acceptance smoke check but the stub
+        implementer (no real entrypoint) and assert the verdict is NOT READY;
+        run with no acceptance and assert PRODUCT-RESULTS.md says readiness is
+        not asserted (and the run still completes).
+        """
+        ws = self.workspace
+        if not ws.enabled or not ws.root:
+            return
+        depth_name = next((k for k, v in DEPTHS.items() if v == self.depth), str(self.depth))
+
+        # No acceptance spec — readiness is simply not asserted; never fail.
+        if not acceptance:
+            ws._write("PRODUCT-RESULTS.md",
+                      f"# Product readiness (depth={depth_name})\n\n"
+                      "Status: ⚪ NOT ASSERTED\n\n"
+                      "No acceptance spec (`project['acceptance']`) was provided — "
+                      "product readiness not asserted.\n", "product-results")
+            self.emit("product", "verifier", "spec-integrate", "product",
+                      "no acceptance spec — readiness not asserted", "",
+                      "", "NOT ASSERTED", level=L_MILESTONE)
+            return
+
+        entrypoint = acceptance.get("entrypoint")
+        # Run the entrypoint if one is given. Its success is the precondition
+        # for any smoke/e2e/metrics check to be able to pass.
+        entry_ran = False
+        entry_ok = False
+        entry_out = ""
+        if entrypoint:
+            try:
+                proc = subprocess.run(entrypoint, shell=True, capture_output=True,
+                                      text=True, timeout=120, cwd=str(ws.root))
+                entry_ran = True
+                entry_ok = proc.returncode == 0
+                entry_out = ((proc.stdout or "") + (proc.stderr or ""))[-8000:]
+            except Exception as exc:  # noqa: BLE001
+                entry_ran = True
+                entry_ok = False
+                entry_out = f"entrypoint error: {exc}"
+
+        lines: list[str] = []
+        failed: list[str] = []
+
+        def record(kind: str, check: str, passed: bool, note: str = "") -> None:
+            mark = "✅ PASS" if passed else "❌ FAIL"
+            suffix = f" — {note}" if note else ""
+            lines.append(f"- [{kind}] {mark}: {check}{suffix}")
+            if not passed:
+                failed.append(f"[{kind}] {check}")
+
+        # Each runtime check needs a real, successfully-run entrypoint. Without
+        # one we honestly fail it — we have a stub module, not a running product.
+        no_entry_note = ("no runnable entrypoint — only stub modules exist; "
+                         "cannot assert at runtime")
+        entry_fail_note = "entrypoint did not run cleanly (returncode != 0)"
+        for kind in ("smoke", "e2e", "metrics"):
+            for check in acceptance.get(kind, []) or []:
+                if not entrypoint:
+                    record(kind, check, False, no_entry_note)
+                elif not entry_ok:
+                    record(kind, check, False, entry_fail_note)
+                else:
+                    # Entrypoint ran cleanly — accept the check as satisfied.
+                    record(kind, check, True, "entrypoint ran cleanly")
+
+        ready = bool(lines) and not failed
+        verdict = "READY" if ready else "NOT READY"
+        head = [f"# Product readiness (depth={depth_name})", "",
+                f"Status: {'✅ READY' if ready else '❌ NOT READY'}", ""]
+        if entrypoint:
+            head += [f"Entrypoint: `{entrypoint}`",
+                     f"Entrypoint ran: {'yes' if entry_ran else 'no'} · "
+                     f"clean exit: {'yes' if entry_ok else 'no'}", ""]
+        else:
+            head += ["Entrypoint: (none provided)", ""]
+        head += ["## Acceptance checks", ""]
+        if not lines:
+            head.append("- (acceptance spec defined no checks)")
+        body = head + lines
+        if failed:
+            body += ["", "## Failed checks"] + [f"- {f}" for f in failed]
+        if entrypoint:
+            body += ["", "## Entrypoint output", "", f"```\n{entry_out}\n```"]
+        ws._write("PRODUCT-RESULTS.md", "\n".join(body) + "\n", "product-results")
+
+        self.emit("product", "verifier", "spec-integrate", "product",
+                  "build+run product against acceptance spec",
+                  f"{len(failed)} failed check(s)" if failed else "all checks passed",
+                  "", verdict, level=L_MILESTONE)
+
     def _research_tick(self, depth: int):
         # cheap signal: only check at the moment we return to the root level
         if depth != 0:
@@ -782,9 +906,11 @@ def run_project(project: dict, *, workspace, depth: Any = DEPTH_SPEC,
                 max_decompose_calls: int = MAX_DECOMPOSE_CALLS) -> RunResult:
     """Public entry: run a project to completion. ``workspace`` is mandatory.
 
-    ``depth`` is one of spec|scaffold|verify|execute (or 1..4). ``tools`` (gate
-    provider) and ``agents`` (per-role workers) are injectable; both default to
-    the bundled autonomous implementations so the run works without Hermes.
+    ``depth`` is one of spec|scaffold|verify|execute|product (or 1..5).
+    ``tools`` (gate provider) and ``agents`` (per-role workers) are injectable;
+    both default to the bundled autonomous implementations so the run works
+    without Hermes. At depth ``product`` the integrated project is built+run and
+    checked against ``project['acceptance']`` (see ``Engine._product_check``).
     """
     if not workspace:
         raise ValueError("Workspace is mandatory")
