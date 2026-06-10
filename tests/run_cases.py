@@ -100,6 +100,10 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools) -> dict:
 
     (case_dir / "log.txt").write_text(
         "\n".join(eng.event_line(e) for e in res.events) + "\n", encoding="utf-8")
+    # the workflow view: goal/task tree (versions, ↻ re-runs, episode tags) +
+    # the execution log + the loops table — where the run cycled and why
+    (case_dir / "workflow.md").write_text(
+        eng.render_report(res, level=eng.L_DETAIL), encoding="utf-8")
     events = tools._load_trace(str(trace))
     report = tools.build_run_report(events, title=f"{case['name']} (depth={depth})")
     (case_dir / "report.md").write_text(report, encoding="utf-8")
@@ -149,6 +153,7 @@ def _summary_md(name: str, goal: str, depth: str, full: dict | None,
                   f"- методологический аудит: {audit}", ""]
     lines += ["## Файлы",
               "- `workspace/` — артефакты прогона (конституция, спеки, контракты, MANIFEST)",
+              "- `workflow.md` — **дерево целей/задач** (версии, ↻ повторы, эпизоды) + журнал + таблица циклов",
               "- `trace.jsonl` — сырой событийный поток (источник отчёта)",
               "- `log.txt` — журнал исполнения",
               "- `report.md` — footprint + методологический аудит (строит сам плагин)",

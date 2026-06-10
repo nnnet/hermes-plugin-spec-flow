@@ -238,13 +238,52 @@ class Workspace:
         body += [f"- {r}" for r in rules]
         self._write("constitution.md", "\n".join(body) + "\n", "constitution")
 
-    def spec(self, node_id, title, depth, verdict, reasons, parent, plan_lines) -> str:
+    def spec(self, node_id, title, depth, verdict, reasons, parent, plan_lines,
+             node: Optional[dict] = None, target: str = "") -> str:
+        """Materialise the node's level spec. Carries every piece of REAL data
+        the run has about the node: gate inputs/outputs, resolved decisions,
+        spike findings, the governing contract, drift/review episodes, the
+        plan and the next level. (Rich prose is the job of the reasoning
+        skills in Hermes; this is the deterministic, traceable core.)"""
+        node = node or {}
+        m = node.get("metrics", {})
         lines = [f"# {title}", "",
-                 f"- **Level:** L{depth}  ·  **Decision:** `{verdict}`",
+                 f"- **Node:** `{node_id}`  ·  **Level:** L{depth}  ·  **Decision:** `{verdict}`",
                  f"- **Traces-to:** {parent or 'L0 goal'}",
-                 f"- **leaf_check reason:** {reasons or 'within all thresholds'}",
-                 "", "## Plan"]
+                 f"- **leaf_check reason:** {reasons or 'within all thresholds'}"]
+        if target:
+            lines.append(f"- **Project acceptance target:** {target}")
+        if m:
+            lines += ["", "## Size estimate (leaf_check input)", "",
+                      "| metric | value |", "|---|---|"]
+            lines += [f"| {k} | {v} |" for k, v in m.items()]
+        clar = node.get("clarify")
+        if clar:
+            lines += ["", "## Resolved open decision (clarify loop)",
+                      f"- **Question:** {clar.get('decision', '')}",
+                      f"- **Resolution:** {clar.get('resolution', '')}"]
+        spike = node.get("spike")
+        if spike:
+            lines += ["", "## Research spike (before freeze)",
+                      f"- **Question:** {spike.get('question', '')}",
+                      f"- **Recommendation:** {spike.get('recommendation', '')}"]
+        contract = node.get("contract")
+        if contract:
+            lines += ["", "## Frozen L2 contract",
+                      f"- `contracts/{contract.get('artifact', '')}` (x-traces-to: `{node_id}`)"]
+        if node.get("drift"):
+            lines += ["", "## Contract-drift episode",
+                      f"- classification: **{node['drift'].get('classify', '')}** "
+                      "(contract_wrong → respec the L2 first; code_wrong → fix the code)"]
+        if node.get("review_fails"):
+            lines += ["", "## Review history",
+                      f"- impl-review failed {node['review_fails']}× before PASS (critique loop)"]
+        lines += ["", "## Plan"]
         lines += [f"- {p}" for p in plan_lines]
+        children = node.get("children")
+        if children:
+            lines += ["", "## Children (next level)"]
+            lines += [f"- `{c['id']}` — {c.get('title', c['id'])}" for c in children]
         return self._write(f"specs/{_snake(node_id)}.md", "\n".join(lines) + "\n", "spec")
 
     def contract(self, src_path: str, name: str) -> str:
@@ -396,6 +435,7 @@ class Engine:
         # Note: the contract validator (CONTRACT_VALIDATORS) is configured by the
         # caller on the gate provider — the runner does not hardcode it.
         self._completed = 0
+        self._target = project.get("target", "")
 
         # Phase 0-1: requirements (spec-decomposer + spec-requirements)
         self.task("L0:req", "Requirements & constitution", "requirements", "spec-decomposer", "spec-requirements")
@@ -493,7 +533,8 @@ class Engine:
                 self._completed += 1
                 child_contract_ctx = contract_here
 
-            self.workspace.spec(nid, title, depth, verdict, "; ".join(reasons), parent, plan)
+            self.workspace.spec(nid, title, depth, verdict, "; ".join(reasons), parent, plan,
+                                node=node, target=self._target)
             child_ids = []
             for child in node.get("children", []):
                 self._visit(child, depth + 1, child_contract_ctx, phase, parent=title)
@@ -532,7 +573,8 @@ class Engine:
                             ["bottom-up plan: DB → logic → API → tests",
                              "TDD: test (RED) → impl → test (GREEN)",
                              "two-stage review (spec-conformance, then quality)",
-                             "verification-before-completion + commit"])
+                             "verification-before-completion + commit"],
+                            node=node, target=self._target)
         # code & test scaffolds only from depth 'scaffold' upward; at 'execute'
         # an injected implementer agent produces real code instead of a scaffold.
         code_rel = test_rel = None
@@ -613,12 +655,14 @@ class Engine:
         if not tests_dir.exists():
             return
         try:
-            # confcutdir isolates the run from any host-project conftest.py
-            # (e.g. one that ignores the very folder the workspace lives in)
-            proc = subprocess.run(["python3", "-m", "pytest", "-q",
+            # run from the workspace root: paths stay short (tests/test_x.py),
+            # confcutdir isolates the run from any host-project conftest.py;
+            # -v lists every single test with its verdict, not just the total
+            proc = subprocess.run(["python3", "-m", "pytest", "-v", "--no-header",
                                    f"--confcutdir={ws.root}", "-p", "no:cacheprovider",
-                                   str(tests_dir)],
-                                  capture_output=True, text=True, timeout=300)
+                                   "tests"],
+                                  capture_output=True, text=True, timeout=300,
+                                  cwd=str(ws.root))
             passed = proc.returncode == 0
             out = (proc.stdout or "") + (proc.stderr or "")
         except Exception as exc:  # noqa: BLE001
@@ -627,7 +671,7 @@ class Engine:
         ws._write("TEST-RESULTS.md",
                   f"# Test results (depth={depth_name})\n\nStatus: "
                   f"{'✅ PASS' if passed else '❌ FAIL (scaffolds fail until implemented)'}\n\n"
-                  f"```\n{out[-2000:]}\n```\n", "test-results")
+                  f"```\n{out[-20000:]}\n```\n", "test-results")
         self.emit("integrate", "verifier", "spec-integrate", "verify",
                   "ran test suite (pytest)", "PASS" if passed else "FAIL (scaffolds)",
                   "", "PASS" if passed else "FAIL", level=L_MILESTONE)
@@ -727,7 +771,8 @@ def render_tree(res: RunResult) -> str:
         if node.get("clarify"):
             tags.append("⟨clarify⟩")
         if node.get("drift"):
-            tags.append("⟨drift→respec⟩")
+            tags.append("⟨drift→codefix⟩" if node["drift"].get("classify") == "code_wrong"
+                        else "⟨drift→respec⟩")
         if node.get("review_fails"):
             tags.append("⟨review↻⟩")
         tagstr = (" " + " ".join(tags)) if tags else ""
@@ -794,10 +839,9 @@ def render_report(res: RunResult, level: int = None) -> str:
         f"все профили задействованы: {'✅' if ok_pr else '❌'} · "
         f"проект завершён: ✅ (L0 integrate done)",
         "",
-        "Источник отчёта — событийный поток прогона (`RunResult.events`), "
-        "сгенерированный из `tests/runs/privacy_analytics.yaml` и возвратов "
-        "**настоящих** тулзов плагина в точках решений. Сырой поток целиком "
-        "выгружается в `docs/full-run-trace.jsonl`.",
+        "Источник отчёта — событийный поток прогона (`RunResult.events`): "
+        "определение проекта (YAML кейса) + возвраты **настоящих** тулзов "
+        "плагина в точках решений. Сырой поток лежит рядом (`trace.jsonl`).",
         "",
         f"**Детализация:** показаны события уровня ≤ {level} "
         f"({shown} из {len(res.events)}). Уровни: 1=вехи (вердикты гейтов, "

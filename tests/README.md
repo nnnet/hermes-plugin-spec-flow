@@ -133,7 +133,10 @@ Output per case — everything in one folder, nothing outside it:
 ```
 tests/runs-out/<YYYY-MM-DDTHH-MM-SS>__<case>/
 ├── workspace/        materialised artifacts (constitution, specs/, contracts/,
-│                     MANIFEST.json; deeper: src/, tests/, COMMITS.md, TEST-RESULTS.md)
+│                     MANIFEST.json; deeper: src/, tests/, COMMITS.md,
+│                     TEST-RESULTS.md with a per-test verdict list)
+├── workflow.md       the goal/task tree (versions, ↻ re-runs, episode tags) +
+│                     execution log + the loops table (where the run cycled)
 ├── trace.jsonl       raw event stream (full detail) — the report's source
 ├── log.txt           readable execution log
 ├── report.md         footprints + methodology audit (built by the plugin)
