@@ -1,0 +1,53 @@
+tests/test_research_timeline.py
+  s_1b99a7ec9e9aa9::t_069cb28544cdf1 1-63
+tests/contracts/url_shortener.openapi.yaml
+  s_1b99a7ec9e9aa9::t_e1dbd67477e285 1-22
+tests/projects/cli_todo.yaml
+  s_1b99a7ec9e9aa9::t_8795ecb330b377 1-22
+tests/projects/url_shortener.yaml
+  s_1b99a7ec9e9aa9::t_8795ecb330b377 1-36
+tests/contracts/code_type_mismatch.json
+  s_1b99a7ec9e9aa9::t_e1dbd67477e285 1-6
+tests/test_decomposition_graph.py
+  s_1b99a7ec9e9aa9::t_94c8f819cb2043 1-108
+tests/harness/openapi_diff.py
+  s_1b99a7ec9e9aa9::t_3010655c627c41 1-78
+tests/contracts/cart.openapi.yaml
+  s_1b99a7ec9e9aa9::t_1379e6112a771a 1-13
+tests/projects/data_pipeline.yaml
+  s_1b99a7ec9e9aa9::t_8795ecb330b377 1-36
+tests/report.py
+  s_1b99a7ec9e9aa9::t_00e60e053450d1 1-125
+docs/test-report.md
+  s_1b99a7ec9e9aa9::t_cb99e71299f353 1-87
+tests/test_contract_drift.py
+  s_1b99a7ec9e9aa9::t_3509594cf0d9d4 1-72
+tests/contracts/code_clean.json
+  s_1b99a7ec9e9aa9::t_e1dbd67477e285 1-6
+tests/README.md
+  s_1b99a7ec9e9aa9::t_124882978a35db 1-47
+tests/projects/ecommerce_checkout.yaml
+  s_1b99a7ec9e9aa9::t_8795ecb330b377 1-56
+tests/harness/simulator.py
+  s_1b99a7ec9e9aa9::t_0fe04ccbcd5c1a 1-231
+README.md
+  s_1b99a7ec9e9aa9::t_afc56847de2b63 96-115
+tests/contracts/code_missing_endpoint.json
+  s_1b99a7ec9e9aa9::t_e1dbd67477e285 1-5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "9d0692b1c1e99cb1c5c73bc188591f2c27a206db",
+  "prompts": {},
+  "sessions": {
+    "s_1b99a7ec9e9aa9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5025e0d8-1d1b-4f97-8c52-eec971a58fbd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <zkowkmdx@sharklasers.com>"
+    }
+  }
+}
