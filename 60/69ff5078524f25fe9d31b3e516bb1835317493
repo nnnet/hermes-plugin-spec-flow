@@ -1,0 +1,21 @@
+tests/test_spec_flow.py
+  s_1b99a7ec9e9aa9::t_700d5b8eaf2bf2 1-248
+tests/conftest.py
+  s_1b99a7ec9e9aa9::t_d9d97c941b42e3 1-76
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "6069ff5078524f25fe9d31b3e516bb1835317493",
+  "prompts": {},
+  "sessions": {
+    "s_1b99a7ec9e9aa9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5025e0d8-1d1b-4f97-8c52-eec971a58fbd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <zkowkmdx@sharklasers.com>"
+    }
+  }
+}
