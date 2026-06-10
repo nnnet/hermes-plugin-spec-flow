@@ -128,13 +128,18 @@ def main() -> int:
     # Fresh HERMES_HOME so the research lane state is not suppressed by the
     # earlier scenario/research sections' cooldown.
     os.environ["HERMES_HOME"] = tempfile.mkdtemp(prefix="specflow-run-")
-    run_res = eng.Engine(tools).run(eng.load_run())
+    # Enable the optional disk sink (full detail, JSONL) -> the inspectable
+    # source data the report is built from.
+    trace_path = PLUGIN_DIR / "docs" / "full-run-trace.jsonl"
+    sink = eng.LogSink(path=str(trace_path), level=eng.L_DETAIL, fmt="jsonl", enabled=True)
+    run_res = eng.Engine(tools, sink=sink).run(eng.load_run())
     run_report = eng.render_report(run_res)
     run_path = PLUGIN_DIR / "docs" / "full-run-report.md"
     run_path.write_text(run_report, encoding="utf-8")
 
     print(run_report)
-    print(f"\n[reports written to:\n  {out_path}\n  {scn_path}\n  {run_path}]")
+    print(f"\n[reports written to:\n  {out_path}\n  {scn_path}\n  {run_path}\n"
+          f"  {trace_path} (raw source events, JSONL)]")
     return 0 if ok else 1
 
 

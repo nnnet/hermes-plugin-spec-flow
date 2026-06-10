@@ -72,3 +72,67 @@ def test_respec_bumps_version(run):
     # the revision lane must have version-bumped the invalidated node
     consent = run.tasks.get("consent")
     assert consent is not None and consent.version >= 2
+
+
+# ---------------------------------------------------------------------------
+# Disk log sink (optional handler) + verbosity control
+# ---------------------------------------------------------------------------
+
+import json  # noqa: E402
+
+
+class TestLogSinkAndVerbosity:
+    def test_sink_off_by_default(self, plugin, monkeypatch):
+        monkeypatch.delenv("SPEC_FLOW_RUN_LOG", raising=False)
+        e = eng.Engine(plugin.tools)
+        assert e.sink.enabled is False  # no path/handler -> off
+
+    def test_jsonl_sink_writes_source_data(self, plugin, tmp_path):
+        path = tmp_path / "trace.jsonl"
+        sink = eng.LogSink(path=str(path), level=eng.L_DETAIL, fmt="jsonl", enabled=True)
+        res = eng.Engine(plugin.tools, sink=sink).run(eng.load_run())
+        lines = path.read_text(encoding="utf-8").strip().splitlines()
+        # every event (full detail) persisted, one JSON object per line
+        assert len(lines) == len(res.events)
+        rec = json.loads(lines[0])
+        assert {"tick", "phase", "profile", "skill", "task", "action", "level"} <= set(rec)
+
+    def test_sink_level_filters_disk_output(self, plugin, tmp_path):
+        path = tmp_path / "milestones.jsonl"
+        sink = eng.LogSink(path=str(path), level=eng.L_MILESTONE, fmt="jsonl", enabled=True)
+        res = eng.Engine(plugin.tools, sink=sink).run(eng.load_run())
+        lines = path.read_text(encoding="utf-8").strip().splitlines()
+        milestones = [e for e in res.events if e.level <= eng.L_MILESTONE]
+        assert len(lines) == len(milestones) < len(res.events)
+
+    def test_text_format_sink(self, plugin, tmp_path):
+        path = tmp_path / "log.txt"
+        sink = eng.LogSink(path=str(path), fmt="text", enabled=True)
+        eng.Engine(plugin.tools, sink=sink).run(eng.load_run())
+        body = path.read_text(encoding="utf-8")
+        assert "spec-decomposer" in body and "leaf_check" in body
+
+    def test_callable_handler(self, plugin):
+        seen = []
+        eng.Engine(plugin.tools, sink=lambda e: seen.append(e)).run(eng.load_run())
+        assert seen and all(hasattr(e, "level") for e in seen)
+
+    def test_env_enables_sink(self, plugin, tmp_path, monkeypatch):
+        path = tmp_path / "env.jsonl"
+        monkeypatch.setenv("SPEC_FLOW_RUN_LOG", str(path))
+        monkeypatch.setenv("SPEC_FLOW_RUN_LOG_LEVEL", str(eng.L_MILESTONE))
+        e = eng.Engine(plugin.tools)
+        assert e.sink.enabled is True and e.sink.level == eng.L_MILESTONE
+        e.run(eng.load_run())
+        assert path.exists()
+
+    def test_render_verbosity_filters(self, run):
+        full = eng.render_log(run, level=eng.L_DETAIL)
+        milestones = eng.render_log(run, level=eng.L_MILESTONE)
+        assert milestones.count("\n") < full.count("\n")
+        # milestone log still carries the key decisions
+        assert "leaf_check" in milestones and "drift" in milestones
+
+    def test_dump_trace_has_all_events(self, run):
+        lines = eng.dump_trace(run).strip().splitlines()
+        assert len(lines) == len(run.events)

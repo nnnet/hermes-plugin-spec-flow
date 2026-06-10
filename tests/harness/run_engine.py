@@ -16,9 +16,17 @@ statuses/versions, and a coverage summary proving every skill and profile ran.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+import os
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+
+# Event verbosity levels — what each emit() is worth. Lower = more important.
+# A report rendered at level N shows every event with level <= N.
+L_MILESTONE = 1   # gate verdicts, loops (clarify/critique/drift/respec), phase signals
+L_STEP = 2        # routine worker steps (read handoff, design, integrate)
+L_DETAIL = 3      # fine-grained detail (TDD red/green, individual constitution rules)
+DEFAULT_VERBOSITY = int(os.environ.get("SPEC_FLOW_RUN_VERBOSITY", str(L_STEP)))
 
 import yaml
 
@@ -53,6 +61,7 @@ class Event:
     detail: str = ""
     gate: str = ""          # tool invoked, if any
     verdict: str = ""       # tool verdict, if any
+    level: int = L_STEP     # verbosity weight (see L_* constants)
 
 
 @dataclass
@@ -77,10 +86,75 @@ class RunResult:
     profiles_used: set[str]
     loops: list[dict]
     gate_calls: dict[str, int]
+    verbosity: int = DEFAULT_VERBOSITY
+
+
+def event_line(e: Event) -> str:
+    """Single human line for an event — shared by the rendered log and the
+    text disk sink."""
+    icon = PROFILE_ICON.get(e.profile, "·")
+    head = f"t{e.tick:>2} │ {icon} {e.profile} · {e.skill} · [{e.task}] {e.action}"
+    tail = f" → {e.verdict}" if e.verdict else ""
+    if e.detail:
+        tail += f"  «{e.detail}»"
+    return head + tail
+
+
+class LogSink:
+    """Optional on-disk log handler for a run.
+
+    It is **off by default** and has its own defaults: enable it by passing a
+    path (or via the SPEC_FLOW_RUN_LOG env var), pick a format (``jsonl`` for
+    machine-readable source data, ``text`` for a readable log) and its own
+    detail level (``SPEC_FLOW_RUN_LOG_LEVEL``, default = full detail) which is
+    INDEPENDENT of the rendered-report verbosity. Also accepts a plain callable
+    as a custom handler. Toggle at runtime with ``enabled``.
+    """
+
+    def __init__(self, path: Optional[str] = None, level: int = L_DETAIL,
+                 fmt: str = "jsonl", enabled: Optional[bool] = None,
+                 handler=None):
+        self.path = path or os.environ.get("SPEC_FLOW_RUN_LOG")
+        self.level = int(os.environ.get("SPEC_FLOW_RUN_LOG_LEVEL", level))
+        self.fmt = os.environ.get("SPEC_FLOW_RUN_LOG_FORMAT", fmt)
+        self.handler = handler                     # optional custom callable(event)
+        # default-on when there is somewhere/something to write to
+        self.enabled = enabled if enabled is not None else bool(self.path or handler)
+        self._fh = None
+
+    @classmethod
+    def from_env(cls) -> "LogSink":
+        return cls()
+
+    def open(self) -> "LogSink":
+        if self.enabled and self.path and self.handler is None:
+            self._fh = open(self.path, "w", encoding="utf-8")
+        return self
+
+    def handle(self, e: Event) -> None:
+        if not self.enabled or e.level > self.level:
+            return
+        if self.handler is not None:
+            self.handler(e)
+            return
+        if self._fh is None:
+            return
+        if self.fmt == "jsonl":
+            self._fh.write(json.dumps(asdict(e), ensure_ascii=False) + "\n")
+        else:
+            self._fh.write(event_line(e) + "\n")
+
+    __call__ = handle
+
+    def close(self) -> None:
+        if self._fh is not None:
+            self._fh.close()
+            self._fh = None
 
 
 class Engine:
-    def __init__(self, tools: Any):
+    def __init__(self, tools: Any, sink: Optional[Any] = None,
+                 verbosity: int = DEFAULT_VERBOSITY):
         self.tools = tools
         self.events: list[Event] = []
         self.tasks: dict[str, Task] = {}
@@ -90,13 +164,25 @@ class Engine:
         self.gate_calls: dict[str, int] = {"policy_gate": 0, "leaf_check": 0,
                                             "contract_check": 0, "research_trigger_check": 0}
         self._t = 0
+        self.verbosity = verbosity
+        # sink: an explicit LogSink/callable, else an env-driven default (off
+        # unless SPEC_FLOW_RUN_LOG is set). A bare callable is wrapped.
+        if sink is None:
+            self.sink = LogSink.from_env()
+        elif callable(sink) and not isinstance(sink, LogSink):
+            self.sink = LogSink(handler=sink, enabled=True)
+        else:
+            self.sink = sink
 
     # -- logging helpers ---------------------------------------------------
-    def emit(self, phase, profile, skill, task, action, detail="", gate="", verdict=""):
+    def emit(self, phase, profile, skill, task, action, detail="", gate="", verdict="", level=L_STEP):
         self._t += 1
         self.skills.add(skill) if skill in ALL_SKILLS else None
         self.profiles.add(profile) if profile in ALL_PROFILES else None
-        self.events.append(Event(self._t, phase, profile, skill, task, action, detail, gate, verdict))
+        ev = Event(self._t, phase, profile, skill, task, action, detail, gate, verdict, level)
+        self.events.append(ev)
+        if self.sink is not None:
+            self.sink.handle(ev)
 
     def task(self, tid, title, kind, profile, skill, parents=None) -> Task:
         t = Task(tid, title, kind, profile, skill, parents or [])
@@ -127,6 +213,15 @@ class Engine:
 
     # -- run ---------------------------------------------------------------
     def run(self, project: dict) -> RunResult:
+        try:
+            if self.sink is not None:
+                self.sink.open()
+            return self._run(project)
+        finally:
+            if self.sink is not None:
+                self.sink.close()
+
+    def _run(self, project: dict) -> RunResult:
         self.tools.CONTRACT_VALIDATORS["openapi"] = ["python3", str(OPENAPI_DIFF), "{contract}", "{code}"]
         self._completed = 0
 
@@ -134,10 +229,11 @@ class Engine:
         self.task("L0:req", "Requirements & constitution", "requirements", "spec-decomposer", "spec-requirements")
         pol = self._policy(project.get("policy", {}))
         self.emit("requirements", "spec-decomposer", "spec-requirements", "L0:req",
-                  "policy_gate on the goal", project.get("target", ""), "policy_gate", pol["verdict"])
+                  "policy_gate on the goal", project.get("target", ""), "policy_gate", pol["verdict"],
+                  level=L_MILESTONE)
         for rule in project.get("constitution", []):
             self.emit("requirements", "spec-decomposer", "spec-requirements", "L0:req",
-                      "constitution rule", rule)
+                      "constitution rule", rule, level=L_DETAIL)
         self.emit("requirements", "spec-decomposer", "spec-requirements", "L0:req",
                   "EARS requirements frozen", project.get("target", ""))
         self.tasks["L0:req"].status = "done"
@@ -150,12 +246,13 @@ class Engine:
 
         # Final L0 integration
         self.emit("integrate", "verifier", "spec-integrate", "L0:integrate",
-                  "L0 integrate done = project COMPLETE", "all subtrees merged & verified")
+                  "L0 integrate done = project COMPLETE", "all subtrees merged & verified",
+                  level=L_MILESTONE)
         if "L0:integrate" in self.tasks:
             self.tasks["L0:integrate"].status = "done"
 
         return RunResult(project, self.events, self.tasks, self.skills, self.profiles,
-                         self.loops, self.gate_calls)
+                         self.loops, self.gate_calls, self.verbosity)
 
     # -- recursion ---------------------------------------------------------
     def _visit(self, node: dict, depth: int, contract_ctx: Optional[dict], phase: str):
@@ -169,9 +266,9 @@ class Engine:
         clar = node.get("clarify")
         if clar:
             self.emit("decompose", "spec-decomposer", "spec-flow-decompose", nid,
-                      "kanban_block — open decision", clar["decision"])
+                      "kanban_block — open decision", clar["decision"], level=L_MILESTONE)
             self.emit("decompose", "spec-reviewer", "spec-reviewer", nid,
-                      "clarify answered → unblock", clar["resolution"])
+                      "clarify answered → unblock", clar["resolution"], level=L_MILESTONE)
             self.tasks[nid].runs += 1
             self.loops.append({"type": "clarify", "task": nid, "detail": clar["decision"]})
 
@@ -194,7 +291,7 @@ class Engine:
         reasons = leaf_out["reasons"]
         self.emit("decompose", "spec-decomposer", "spec-flow-decompose", nid,
                   "leaf_check", "; ".join(reasons) or "within all thresholds",
-                  "leaf_check", verdict)
+                  "leaf_check", verdict, level=L_MILESTONE)
 
         if verdict == "branch":
             contract_here = node.get("contract")
@@ -205,7 +302,8 @@ class Engine:
                 self.emit("contract", "spec-contract", "spec-contract", cid,
                           "freeze OpenAPI contract (x-traces-to)", contract_here["artifact"])
                 self.emit("contract", "spec-reviewer", "spec-reviewer", cid,
-                          "spec-gate on contract", "trace + constitution OK", "", "PASS")
+                          "spec-gate on contract", "trace + constitution OK", "", "PASS",
+                          level=L_MILESTONE)
                 self.tasks[cid].status = "done"
                 self._completed += 1
                 child_contract_ctx = contract_here
@@ -223,9 +321,10 @@ class Engine:
                 res = self._contract(contract_here["fixed"], contract_here["code_drift"])
                 self.emit("integrate", "verifier", "spec-integrate", integ,
                           "parallel contract_check across subtree", contract_here["fixed"],
-                          "contract_check", res["status"])
+                          "contract_check", res["status"], level=L_MILESTONE)
             self.emit("integrate", "verifier", "spec-integrate", integ,
-                      "end-to-end acceptance criteria", "verification-before-completion", "", "PASS")
+                      "end-to-end acceptance criteria", "verification-before-completion", "", "PASS",
+                      level=L_MILESTONE)
             self.tasks[integ].status = "done"
             self._completed += 1
         else:
@@ -244,27 +343,28 @@ class Engine:
         self.emit("implement", "implementer", "spec-implement", impl,
                   "design → bottom-up plan (DB→logic→API→tests)", title)
         self.emit("implement", "implementer", "spec-implement", impl,
-                  "TDD: write test (RED) → minimal impl → test (GREEN)", "")
+                  "TDD: write test (RED) → minimal impl → test (GREEN)", "", level=L_DETAIL)
 
         # contract drift episode
         if node.get("drift") and contract_ctx:
             res = self._contract(contract_ctx["artifact"], contract_ctx["code_drift"])
             drift_detail = res["drift"][0]["detail"] if res["drift"] else ""
             self.emit("implement", "implementer", "spec-implement", impl,
-                      "contract_check vs frozen L2", drift_detail, "contract_check", res["status"])
+                      "contract_check vs frozen L2", drift_detail, "contract_check", res["status"],
+                      level=L_MILESTONE)
             classify = node["drift"]["classify"]
             self.emit("drift", "implementer", "drift-gate", impl,
-                      "drift-gate classify", classify)
+                      "drift-gate classify", classify, level=L_MILESTONE)
             if classify == "contract_wrong":
                 self.emit("respec", "spec-reviewer", "respec-gate", f"{contract_ctx['artifact']}",
                           "spec-first: update contract node, version-bump, re-gate, restart impl",
-                          f"{contract_ctx['artifact']} → {contract_ctx['fixed']}")
+                          f"{contract_ctx['artifact']} → {contract_ctx['fixed']}", level=L_MILESTONE)
                 self.loops.append({"type": "drift-respec", "task": impl, "detail": drift_detail})
                 self.tasks[impl].runs += 1
                 res2 = self._contract(contract_ctx["fixed"], contract_ctx["code_drift"])
                 self.emit("implement", "implementer", "spec-implement", impl,
                           "contract_check after respec", "matches corrected contract",
-                          "contract_check", res2["status"])
+                          "contract_check", res2["status"], level=L_MILESTONE)
 
         # review critique loop
         review = f"{nid}:review"
@@ -273,13 +373,13 @@ class Engine:
         for i in range(fails):
             self.emit("review", "spec-reviewer", "spec-reviewer", review,
                       "impl-review (spec-conformance)", "FAIL: missing edge-case handling on error path",
-                      "", "FAIL")
+                      "", "FAIL", level=L_MILESTONE)
             self.emit("review", "implementer", "spec-implement", impl,
                       "fix per critique → unblock → re-run", "")
             self.tasks[impl].runs += 1
             self.loops.append({"type": "review-fail", "task": review, "detail": "spec-conformance critique"})
         self.emit("review", "spec-reviewer", "spec-reviewer", review,
-                  "impl-review → quality gate", "", "", "PASS")
+                  "impl-review → quality gate", "", "", "PASS", level=L_MILESTONE)
         self.tasks[impl].status = "done"
         self.tasks[review].status = "done"
         self._completed += 2
@@ -295,15 +395,16 @@ class Engine:
         out = self._research(rev.get("trigger", "on_level_return"), self._completed, 0)
         self.emit("revision", "researcher", "spec-research", "revision",
                   "research_trigger_check", f"fired_by={out['fired_by']}",
-                  "research_trigger_check", "trigger" if out["trigger"] else "—")
+                  "research_trigger_check", "trigger" if out["trigger"] else "—",
+                  level=L_MILESTONE)
         if not out["trigger"]:
             return
         self.emit("revision", "researcher", "spec-research", "revision",
-                  "REVISION finding (upstream impact)", rev["finding"])
+                  "REVISION finding (upstream impact)", rev["finding"], level=L_MILESTONE)
         target = rev["invalidates"]
         self.emit("respec", "spec-reviewer", "respec-gate", target,
                   "respec-gate: change the cause first, version-bump, re-derive only affected subtree",
-                  rev["effect"])
+                  rev["effect"], level=L_MILESTONE)
         self.loops.append({"type": "revision-respec", "task": target, "detail": rev["finding"]})
         # version-bump the target and re-run its leaves under the new spec
         if target in self.tasks:
@@ -326,21 +427,19 @@ def load_run(path: Path = None) -> dict:
     return yaml.safe_load(Path(path).read_text(encoding="utf-8"))
 
 
-def render_log(res: RunResult) -> str:
-    lines = ["```", "TICK │ ACTOR · SKILL · [TASK] action → result"]
+def render_log(res: RunResult, level: int = None) -> str:
+    """Render the execution log, showing events with ``event.level <= level``.
+    Defaults to the run's verbosity (env SPEC_FLOW_RUN_VERBOSITY, else L_STEP)."""
+    level = level if level is not None else getattr(res, "verbosity", DEFAULT_VERBOSITY)
+    lines = ["```", f"TICK │ ACTOR · SKILL · [TASK] action → result   (verbosity={level})"]
     last_phase = None
     for e in res.events:
+        if e.level > level:
+            continue
         if e.phase != last_phase:
             lines.append(f"── {e.phase} ──")
             last_phase = e.phase
-        icon = PROFILE_ICON.get(e.profile, "·")
-        head = f"t{e.tick:>2} │ {icon} {e.profile} · {e.skill} · [{e.task}] {e.action}"
-        tail = ""
-        if e.verdict:
-            tail = f" → {e.verdict}"
-        if e.detail:
-            tail += f"  «{e.detail}»"
-        lines.append(head + tail)
+        lines.append(event_line(e))
     lines.append("```")
     return "\n".join(lines)
 
@@ -408,10 +507,18 @@ def render_summary(res: RunResult) -> str:
     return "\n".join(lines)
 
 
-def render_report(res: RunResult) -> str:
+def dump_trace(res: RunResult) -> str:
+    """The raw event stream as JSONL — the inspectable source data the rendered
+    report is built from (one event per line)."""
+    return "\n".join(json.dumps(asdict(e), ensure_ascii=False) for e in res.events) + "\n"
+
+
+def render_report(res: RunResult, level: int = None) -> str:
     proj = res.project
+    level = level if level is not None else res.verbosity
     ok_sk = res.skills_used >= ALL_SKILLS
     ok_pr = res.profiles_used >= ALL_PROFILES
+    shown = sum(1 for e in res.events if e.level <= level)
     head = [
         "# spec-flow — отчёт полного прогона проекта",
         "",
@@ -422,16 +529,22 @@ def render_report(res: RunResult) -> str:
         f"все профили задействованы: {'✅' if ok_pr else '❌'} · "
         f"проект завершён: ✅ (L0 integrate done)",
         "",
-        "Каждое решение принято **настоящими** тулзами плагина (policy_gate, "
-        "leaf_check, contract_check, research_trigger_check); событийный лог ниже "
-        "показывает, какой профиль каким скиллом что делал, где уточнялось, "
-        "критиковалось, ловился дрейф и срабатывала ревизия.",
+        "Источник отчёта — событийный поток прогона (`RunResult.events`), "
+        "сгенерированный из `tests/runs/privacy_analytics.yaml` и возвратов "
+        "**настоящих** тулзов плагина в точках решений. Сырой поток целиком "
+        "выгружается в `docs/full-run-trace.jsonl`.",
+        "",
+        f"**Детализация:** показаны события уровня ≤ {level} "
+        f"({shown} из {len(res.events)}). Уровни: 1=вехи (вердикты гейтов, "
+        "циклы), 2=шаги, 3=детали (TDD, правила конституции). Управление: "
+        "`SPEC_FLOW_RUN_VERBOSITY` (рендер) и `SPEC_FLOW_RUN_LOG` / "
+        "`SPEC_FLOW_RUN_LOG_LEVEL` / `SPEC_FLOW_RUN_LOG_FORMAT` (лог на диск).",
         "",
         "## Дерево задач (с версиями и повторными прогонами ↻)",
         render_tree(res),
         "",
         "## Журнал исполнения",
-        render_log(res),
+        render_log(res, level),
         "",
         render_summary(res),
         "",

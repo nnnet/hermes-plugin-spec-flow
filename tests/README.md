@@ -58,4 +58,26 @@ picture run `tests/report.py` — it writes two reports under `docs/`:
 - `full-run-report.md` — the end-to-end run: the multi-level task tree (with
   versions/re-runs), a tick-by-tick execution log (which profile ran which
   skill, every clarify/critique/drift/respec), and a coverage summary proving
-  all 9 skills and all 6 profiles ran.
+  all 9 skills and all 6 profiles ran;
+- `full-run-trace.jsonl` — the **raw source data** the run report is built
+  from: one JSON event per line (tick, phase, profile, skill, task, action,
+  gate, verdict, level).
+
+## Logging & verbosity (run engine)
+
+The report is rendered from the in-memory `RunResult.events` stream, not from a
+file. Each event carries a `level`: **1** = milestones (gate verdicts, loops),
+**2** = routine steps, **3** = fine detail (TDD, constitution rules).
+
+- **Render verbosity** — `render_report(res, level)` / `render_log(res, level)`
+  show events with `level <= N`. Default via `SPEC_FLOW_RUN_VERBOSITY` (=2).
+- **Disk log** is an optional, off-by-default handler (`run_engine.LogSink`)
+  with its own level and format, independent of the render verbosity:
+  ```python
+  sink = LogSink(path="run.jsonl", level=L_DETAIL, fmt="jsonl", enabled=True)
+  Engine(tools, sink=sink).run(load_run())          # writes run.jsonl
+  Engine(tools, sink=lambda e: ...).run(load_run()) # or a custom callable
+  ```
+  Or enable via env without code: `SPEC_FLOW_RUN_LOG=run.jsonl`,
+  `SPEC_FLOW_RUN_LOG_LEVEL=1`, `SPEC_FLOW_RUN_LOG_FORMAT=text|jsonl`.
+  `dump_trace(res)` returns the full event stream as JSONL.

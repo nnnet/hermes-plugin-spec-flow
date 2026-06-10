@@ -5,7 +5,9 @@
 
 > Все скиллы задействованы: ✅ · все профили задействованы: ✅ · проект завершён: ✅ (L0 integrate done)
 
-Каждое решение принято **настоящими** тулзами плагина (policy_gate, leaf_check, contract_check, research_trigger_check); событийный лог ниже показывает, какой профиль каким скиллом что делал, где уточнялось, критиковалось, ловился дрейф и срабатывала ревизия.
+Источник отчёта — событийный поток прогона (`RunResult.events`), сгенерированный из `tests/runs/privacy_analytics.yaml` и возвратов **настоящих** тулзов плагина в точках решений. Сырой поток целиком выгружается в `docs/full-run-trace.jsonl`.
+
+**Детализация:** показаны события уровня ≤ 2 (63 из 74). Уровни: 1=вехи (вердикты гейтов, циклы), 2=шаги, 3=детали (TDD, правила конституции). Управление: `SPEC_FLOW_RUN_VERBOSITY` (рендер) и `SPEC_FLOW_RUN_LOG` / `SPEC_FLOW_RUN_LOG_LEVEL` / `SPEC_FLOW_RUN_LOG_FORMAT` (лог на диск).
 
 ## Дерево задач (с версиями и повторными прогонами ↻)
 ```
@@ -25,12 +27,9 @@ Privacy analytics service
 
 ## Журнал исполнения
 ```
-TICK │ ACTOR · SKILL · [TASK] action → result
+TICK │ ACTOR · SKILL · [TASK] action → result   (verbosity=2)
 ── requirements ──
 t 1 │ 🧩 spec-decomposer · spec-requirements · [L0:req] policy_gate on the goal → pass  «ingest >= 1000 events/s; p95 query < 200ms; 0 PII fields in storage.»
-t 2 │ 🧩 spec-decomposer · spec-requirements · [L0:req] constitution rule  «No PII is ever stored; only consented, anonymised events.»
-t 3 │ 🧩 spec-decomposer · spec-requirements · [L0:req] constitution rule  «Every tracked site must show a consent banner (opt-in).»
-t 4 │ 🧩 spec-decomposer · spec-requirements · [L0:req] constitution rule  «All processing stays within the operator's own infrastructure.»
 t 5 │ 🧩 spec-decomposer · spec-requirements · [L0:req] EARS requirements frozen  «ingest >= 1000 events/s; p95 query < 200ms; 0 PII fields in storage.»
 ── decompose ──
 t 6 │ 🧩 spec-decomposer · spec-flow-decompose · [L0] read parent handoff, write level spec (Traces-to)  «Privacy analytics service»
@@ -43,7 +42,6 @@ t12 │ 🧩 spec-decomposer · spec-flow-decompose · [consent_banner] read par
 t13 │ 🧩 spec-decomposer · spec-flow-decompose · [consent_banner] leaf_check → leaf  «within all thresholds»
 ── implement ──
 t14 │ 🛠️ implementer · spec-implement · [consent_banner:impl] design → bottom-up plan (DB→logic→API→tests)  «Consent banner widget»
-t15 │ 🛠️ implementer · spec-implement · [consent_banner:impl] TDD: write test (RED) → minimal impl → test (GREEN)
 ── review ──
 t16 │ ⚖️ spec-reviewer · spec-reviewer · [consent_banner:review] impl-review → quality gate → PASS
 ── decompose ──
@@ -51,7 +49,6 @@ t17 │ 🧩 spec-decomposer · spec-flow-decompose · [anonymiser] read parent 
 t18 │ 🧩 spec-decomposer · spec-flow-decompose · [anonymiser] leaf_check → leaf  «within all thresholds»
 ── implement ──
 t19 │ 🛠️ implementer · spec-implement · [anonymiser:impl] design → bottom-up plan (DB→logic→API→tests)  «Event anonymiser (daily salt)»
-t20 │ 🛠️ implementer · spec-implement · [anonymiser:impl] TDD: write test (RED) → minimal impl → test (GREEN)
 ── review ──
 t21 │ ⚖️ spec-reviewer · spec-reviewer · [anonymiser:review] impl-review → quality gate → PASS
 ── integrate ──
@@ -65,7 +62,6 @@ t25 │ 🔬 researcher · spec-research · [ingest:spike] recommendation folded
 t26 │ 🧩 spec-decomposer · spec-flow-decompose · [ingest] leaf_check → leaf  «within all thresholds»
 ── implement ──
 t27 │ 🛠️ implementer · spec-implement · [ingest:impl] design → bottom-up plan (DB→logic→API→tests)  «Event ingestion»
-t28 │ 🛠️ implementer · spec-implement · [ingest:impl] TDD: write test (RED) → minimal impl → test (GREEN)
 ── review ──
 t29 │ ⚖️ spec-reviewer · spec-reviewer · [ingest:review] impl-review → quality gate → PASS
 ── decompose ──
@@ -75,7 +71,6 @@ t32 │ 🧩 spec-decomposer · spec-flow-decompose · [schema] read parent hand
 t33 │ 🧩 spec-decomposer · spec-flow-decompose · [schema] leaf_check → leaf  «within all thresholds»
 ── implement ──
 t34 │ 🛠️ implementer · spec-implement · [schema:impl] design → bottom-up plan (DB→logic→API→tests)  «Rollup schema + migrations»
-t35 │ 🛠️ implementer · spec-implement · [schema:impl] TDD: write test (RED) → minimal impl → test (GREEN)
 ── review ──
 t36 │ ⚖️ spec-reviewer · spec-reviewer · [schema:review] impl-review → quality gate → PASS
 ── decompose ──
@@ -83,7 +78,6 @@ t37 │ 🧩 spec-decomposer · spec-flow-decompose · [retention] read parent h
 t38 │ 🧩 spec-decomposer · spec-flow-decompose · [retention] leaf_check → leaf  «within all thresholds»
 ── implement ──
 t39 │ 🛠️ implementer · spec-implement · [retention:impl] design → bottom-up plan (DB→logic→API→tests)  «Retention + purge job»
-t40 │ 🛠️ implementer · spec-implement · [retention:impl] TDD: write test (RED) → minimal impl → test (GREEN)
 ── review ──
 t41 │ ⚖️ spec-reviewer · spec-reviewer · [retention:review] impl-review → quality gate → PASS
 ── integrate ──
@@ -99,7 +93,6 @@ t47 │ 🧩 spec-decomposer · spec-flow-decompose · [ep_query] read parent ha
 t48 │ 🧩 spec-decomposer · spec-flow-decompose · [ep_query] leaf_check → leaf  «within all thresholds»
 ── implement ──
 t49 │ 🛠️ implementer · spec-implement · [ep_query:impl] design → bottom-up plan (DB→logic→API→tests)  «GET /query»
-t50 │ 🛠️ implementer · spec-implement · [ep_query:impl] TDD: write test (RED) → minimal impl → test (GREEN)
 t51 │ 🛠️ implementer · spec-implement · [ep_query:impl] contract_check vs frozen L2 → drift  «[{"kind": "type_mismatch", "endpoint": "GET /query", "field": "count", "contract": "integer", "code": "string"}]»
 ── drift ──
 t52 │ 🛠️ implementer · drift-gate · [ep_query:impl] drift-gate classify  «contract_wrong»
@@ -116,7 +109,6 @@ t58 │ 🧩 spec-decomposer · spec-flow-decompose · [ep_export] read parent h
 t59 │ 🧩 spec-decomposer · spec-flow-decompose · [ep_export] leaf_check → leaf  «within all thresholds»
 ── implement ──
 t60 │ 🛠️ implementer · spec-implement · [ep_export:impl] design → bottom-up plan (DB→logic→API→tests)  «GET /export»
-t61 │ 🛠️ implementer · spec-implement · [ep_export:impl] TDD: write test (RED) → minimal impl → test (GREEN)
 ── review ──
 t62 │ ⚖️ spec-reviewer · spec-reviewer · [ep_export:review] impl-review → quality gate → PASS
 ── integrate ──
@@ -127,7 +119,6 @@ t65 │ 🧩 spec-decomposer · spec-flow-decompose · [dashboard] read parent h
 t66 │ 🧩 spec-decomposer · spec-flow-decompose · [dashboard] leaf_check → leaf  «within all thresholds»
 ── implement ──
 t67 │ 🛠️ implementer · spec-implement · [dashboard:impl] design → bottom-up plan (DB→logic→API→tests)  «Operator dashboard»
-t68 │ 🛠️ implementer · spec-implement · [dashboard:impl] TDD: write test (RED) → minimal impl → test (GREEN)
 ── review ──
 t69 │ ⚖️ spec-reviewer · spec-reviewer · [dashboard:review] impl-review → quality gate → PASS
 ── integrate ──
