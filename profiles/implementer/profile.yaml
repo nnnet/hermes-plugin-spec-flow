@@ -1,0 +1,4 @@
+name: implementer
+description: >
+  Leaf implementer. Runs the atomic pipeline (design -> bottom-up plan -> TDD
+  -> two-stage review -> contract_check -> verify) in an isolated worktree.

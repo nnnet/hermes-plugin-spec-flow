@@ -1,0 +1,9 @@
+# spec-decomposer — orchestrator role: it must NOT be able to code, only
+# decompose. terminal/code_execution/delegation are cut on purpose.
+tools:
+  cli:
+    enabled: [kanban, file, memory]
+    disabled: [terminal, code_execution, delegation, web, browser]
+skills:
+  external_dirs:
+    - ~/.hermes/shared-skills

@@ -1,0 +1,8 @@
+# researcher — web/search/browser for findings; no code execution.
+tools:
+  cli:
+    enabled: [kanban, file, web, browser]
+    disabled: [terminal, code_execution, delegation]
+skills:
+  external_dirs:
+    - ~/.hermes/shared-skills

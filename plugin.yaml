@@ -1,0 +1,23 @@
+name: spec-flow
+kind: standalone
+version: 0.1.0
+description: |
+  Spec-Driven Development on a Hermes kanban board. Recursive top-down
+  decomposition with feedback gates, frozen L2 contracts, drift detection
+  and a research/revision lane — all driven as durable kanban tasks instead
+  of fragile in-process sub-agent swarms.
+
+  Six tools under the kanban toolset:
+   * leaf_check             — atomic-vs-expand classification (hard levels)
+   * contract_check         — code-vs-contract drift (OpenAPI default; Zod/
+                              Protobuf; parallel mode)
+   * research_trigger_check — fire the continuous revision lane (every_n /
+                              m_errors / on_level_return / cron, cooldown)
+   * specflow_init / specflow_start / specflow_status — seed and inspect the
+                              project board
+
+  The reasoning half ships as bundled skills (skills/*/SKILL.md) plus six
+  role profiles (profiles/) wired by setup-profiles.sh. Source of the design:
+  the "Реализация ecom-agent в Hermes" conversation (see docs/).
+author: nnnet/AiManager
+repo: https://github.com/nnnet/hermes-plugin-spec-flow

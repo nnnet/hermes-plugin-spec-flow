@@ -1,0 +1,4 @@
+name: verifier
+description: >
+  Integration & verification role. Bottom-up subtree fold, parallel
+  contract_check across the subtree, end-to-end acceptance criteria.

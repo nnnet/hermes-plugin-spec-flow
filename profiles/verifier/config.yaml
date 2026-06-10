@@ -1,0 +1,9 @@
+# verifier — integrate & verify; needs kanban (parallel contract_check) +
+# terminal to run acceptance commands.
+tools:
+  cli:
+    enabled: [kanban, file, terminal]
+    disabled: [delegation, browser]
+skills:
+  external_dirs:
+    - ~/.hermes/shared-skills

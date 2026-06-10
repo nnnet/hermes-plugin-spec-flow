@@ -1,0 +1,9 @@
+# spec-contract — writes the frozen L2 contract; needs kanban (spec-flow tools
+# live here: contract_check) + file. No code execution.
+tools:
+  cli:
+    enabled: [kanban, file]
+    disabled: [terminal, code_execution, delegation, browser]
+skills:
+  external_dirs:
+    - ~/.hermes/shared-skills

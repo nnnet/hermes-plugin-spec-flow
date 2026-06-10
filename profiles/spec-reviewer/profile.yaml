@@ -1,0 +1,4 @@
+name: spec-reviewer
+description: >
+  Reproducible gate role. Binary PASS/FAIL on requirements-gate, spec-gate and
+  two-stage impl-review. On FAIL: comment exact fixes + block.

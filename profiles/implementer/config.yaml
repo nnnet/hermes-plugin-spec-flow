@@ -1,0 +1,9 @@
+# implementer — the only role that codes. Gets delegation for
+# subagent-driven-development + terminal/code_execution for TDD.
+tools:
+  cli:
+    enabled: [kanban, file, terminal, code_execution, delegation]
+    disabled: [browser]
+skills:
+  external_dirs:
+    - ~/.hermes/shared-skills

@@ -1,0 +1,4 @@
+name: researcher
+description: >
+  Research/analysis role. Spike (before freeze) and continuous revision lane.
+  Produces findings + an impact verdict; never edits specs or code itself.

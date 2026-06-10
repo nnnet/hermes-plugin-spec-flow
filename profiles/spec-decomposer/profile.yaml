@@ -1,0 +1,5 @@
+name: spec-decomposer
+description: >
+  Top-down SDD decomposer. Reads a parent's approved spec, writes one level's
+  spec, gates it, and either branches or emits leaves on the kanban board.
+  Cannot code — orchestration only.

@@ -1,0 +1,9 @@
+# spec-reviewer — reviews specs/contracts/impl; reads code but does not author
+# features. requesting-code-review skill is shared.
+tools:
+  cli:
+    enabled: [kanban, file]
+    disabled: [delegation, browser]
+skills:
+  external_dirs:
+    - ~/.hermes/shared-skills

@@ -1,0 +1,4 @@
+name: spec-contract
+description: >
+  L2 technical-design role. Freezes the interface as a real contract artifact
+  (OpenAPI default; Zod/Protobuf) before any implementation task exists.
