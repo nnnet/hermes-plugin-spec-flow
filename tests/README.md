@@ -81,3 +81,23 @@ file. Each event carries a `level`: **1** = milestones (gate verdicts, loops),
   Or enable via env without code: `SPEC_FLOW_RUN_LOG=run.jsonl`,
   `SPEC_FLOW_RUN_LOG_LEVEL=1`, `SPEC_FLOW_RUN_LOG_FORMAT=text|jsonl`.
   `dump_trace(res)` returns the full event stream as JSONL.
+
+## Report & methodology audit (built by the plugin, from logs)
+
+The run report is **not** rendered by the harness — it is built by the plugin's
+own log-based functions (`spec_flow_tools.build_run_report` /
+`audit_methodology`, exposed as the `run_report` tool) that consume a trace
+(JSONL) and emit footprints + a methodology audit. Run it on any trace:
+
+```bash
+python3 tests/run_report.py                      # docs/full-run-trace.jsonl
+python3 tests/run_report.py tests/runs/flawed_run.jsonl   # demo: audit catches errors
+python3 tests/run_report.py <trace> --level 1 -o out.md
+```
+
+In Hermes it is a single tool call: `run_report(trace_path=...)`. The audit
+checks invariants R1–R8 (policy gate ran, no impl without a leaf gate, no silent
+contract drift, every impl reviewed, every branch integrated, open decisions
+clarified, revisions re-derive their subtree, no green-on-red) and lists each
+violation with where/why/fix. `tests/runs/flawed_run.jsonl` is a seeded-error
+trace proving the audit catches real methodological mistakes.

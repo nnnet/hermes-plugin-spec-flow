@@ -7,7 +7,7 @@ description: |
   and a research/revision lane — all driven as durable kanban tasks instead
   of fragile in-process sub-agent swarms.
 
-  Seven tools under the kanban toolset:
+  Eight tools under the kanban toolset:
    * leaf_check             — atomic-vs-expand classification (hard levels)
    * contract_check         — code-vs-contract drift (OpenAPI default; Zod/
                               Protobuf; parallel mode)
@@ -16,6 +16,10 @@ description: |
    * policy_gate            — deterministic constitution check: measurable
                               target, spend cap, consent, legality (catches a
                               vague/risky spec before it is built)
+   * run_report             — log-based footprints report + methodology audit
+                              from a run trace (for a reviewer to spot method
+                              errors: silent drift, impl without a gate, branch
+                              without integration, revision without re-derive)
    * specflow_init / specflow_start / specflow_status — seed and inspect the
                               project board
 

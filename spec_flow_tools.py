@@ -637,6 +637,283 @@ def _handle_policy_gate(args: dict[str, Any], **_: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
+# run_report — log-based "footprints" report + methodology audit
+#
+# Consumes a run TRACE (the JSONL event stream a spec-flow run emits — one event
+# per line with tick/phase/profile/skill/task/action/gate/verdict/level/detail)
+# and produces, with NO knowledge of the runner, two things a reviewer needs:
+#   1. readable footprints — what the plugin did, step by step;
+#   2. a methodology audit — where the spec-flow method was violated, so the
+#      reviewer (at either revision level — spike or continuous revision) can
+#      see the methodological errors and act.
+# This is deterministic and works purely off the logs.
+# ---------------------------------------------------------------------------
+
+_PROFILE_ICON = {
+    "spec-decomposer": "🧩", "researcher": "🔬", "spec-contract": "📐",
+    "spec-reviewer": "⚖️", "implementer": "🛠️", "verifier": "✅",
+}
+
+
+def _ev(e: dict, k: str) -> Any:
+    return e.get(k, "")
+
+
+def _index_trace(events: list[dict]) -> dict[str, Any]:
+    idx: dict[str, Any] = {
+        "leaf": {}, "leaf_detail": {}, "contract": [], "drift_gate": set(),
+        "respec_node": [], "clarify": set(), "integrate": set(),
+        "reviews": {}, "rederive": [], "policy_pass": False, "complete": False,
+        "spike": False, "revision_fired": False,
+    }
+    for e in events:
+        gate, verdict, task = _ev(e, "gate"), _ev(e, "verdict"), _ev(e, "task")
+        skill, action, phase = _ev(e, "skill"), _ev(e, "action"), _ev(e, "phase")
+        if gate == "leaf_check":
+            idx["leaf"][task] = verdict
+            idx["leaf_detail"][task] = _ev(e, "detail")
+        elif gate == "contract_check":
+            idx["contract"].append((task, verdict, _ev(e, "tick")))
+        elif gate == "policy_gate" and verdict == "pass":
+            idx["policy_pass"] = True
+        elif gate == "research_trigger_check" and verdict == "trigger":
+            idx["revision_fired"] = True
+        if skill == "drift-gate":
+            idx["drift_gate"].add(task)
+        if skill == "respec-gate":
+            idx["respec_node"].append(task)
+        if skill == "spec-integrate":
+            idx["integrate"].add(task)
+        if skill == "spec-research" and phase == "research":
+            idx["spike"] = True
+        if "open decision" in action:
+            idx["clarify"].add(task)
+        if action.startswith("impl-review"):
+            idx["reviews"].setdefault(task, []).append(verdict)
+        if "re-derive" in action:
+            idx["rederive"].append(_ev(e, "detail"))
+        if "COMPLETE" in action:
+            idx["complete"] = True
+    return idx
+
+
+# severity: error = methodology violated; warn = risky; info = note
+def audit_methodology(events: list[dict]) -> list[dict]:
+    """Check a run trace against spec-flow methodology invariants. Returns a
+    list of findings {rule, severity, where, why, fix}."""
+    x = _index_trace(events)
+    f: list[dict] = []
+
+    def add(rule, severity, where, why, fix):
+        f.append({"rule": rule, "severity": severity, "where": where, "why": why, "fix": fix})
+
+    # R1 — constitution / policy gate ran and passed at the root
+    if not x["policy_pass"]:
+        add("R1-policy-gate", "error", "L0",
+            "no passing policy_gate — constitution / measurable-target check missing",
+            "run policy_gate on the goal before decomposing")
+
+    # R2 — nothing implemented without a passing leaf gate
+    for task in {t for e in events for t in [_ev(e, "task")] if str(t).endswith(":impl")}:
+        node = task[:-5]
+        if x["leaf"].get(node) != "leaf":
+            add("R2-leaf-before-impl", "error", task,
+                f"implemented '{node}' without a leaf_check=leaf verdict",
+                "gate every node with leaf_check; only leaves get an impl task")
+
+    # R3 — contract drift is never silent: drift -> drift-gate -> respec -> ok
+    drift_tasks = [(t, tk) for (t, v, tk) in x["contract"] if v == "drift"]
+    ok_tasks = {t for (t, v, _tk) in x["contract"] if v == "ok"}
+    for t, _tk in drift_tasks:
+        if t not in x["drift_gate"]:
+            add("R3-silent-drift", "error", t,
+                "contract_check reported drift but no drift-gate followed",
+                "route every drift through drift-gate; never edit code silently")
+        elif not x["respec_node"] or t not in ok_tasks:
+            add("R3-unresolved-drift", "warn", t,
+                "drift classified but no respec/clean re-check recorded",
+                "after drift-gate, respec (spec-first) and re-run contract_check to ok")
+
+    # R4 — every implementation is reviewed before it is done
+    for task in {t for e in events for t in [_ev(e, "task")] if str(t).endswith(":impl")}:
+        node = task[:-5]
+        verdicts = x["reviews"].get(f"{node}:review", [])
+        if "PASS" not in verdicts:
+            add("R4-impl-not-reviewed", "error", task,
+                f"'{node}' implemented without a passing spec-reviewer impl-review",
+                "add a review node downstream of every impl; require PASS")
+
+    # R5 — every branch converges via a bottom-up integrate node
+    for node, verdict in x["leaf"].items():
+        if verdict == "branch" and f"{node}:integrate" not in x["integrate"]:
+            add("R5-branch-no-integrate", "error", node,
+                "branch node has no Integrate & verify node",
+                "create an integrate node whose parents are the branch's children")
+
+    # R6 — an open decision is clarified before the level expands (feedback loop)
+    for node, verdict in x["leaf"].items():
+        if verdict == "branch" and "open decision" in x["leaf_detail"].get(node, "") \
+                and node not in x["clarify"]:
+            add("R6-expanded-past-open-decision", "warn", node,
+                "level expanded while a decision was still open (feedback loop skipped)",
+                "kanban_block on the open decision; expand only after it is resolved")
+
+    # R7 — a revision that fired must re-derive the affected subtree
+    if x["revision_fired"] and not x["rederive"]:
+        add("R7-respec-no-rederive", "error", "revision",
+            "research revision fired but no subtree re-derivation recorded",
+            "respec-gate must version-bump and re-run the affected subtree, not just note it")
+
+    # R8 — completion only on green (no review left on FAIL)
+    for review, verdicts in x["reviews"].items():
+        if verdicts and verdicts[-1] == "FAIL":
+            add("R8-green-on-red", "error", review,
+                "review ended on FAIL but the run continued / completed",
+                "a failing review must loop to fix → re-run until PASS before done")
+    if not x["complete"]:
+        add("R8-not-complete", "info", "L0",
+            "no L0 integrate-complete event in the trace",
+            "run did not reach project completion (may be a partial trace)")
+
+    return f
+
+
+def summarize_trace(events: list[dict]) -> dict[str, Any]:
+    skills = {_ev(e, "skill") for e in events if _ev(e, "skill")}
+    profiles = {_ev(e, "profile") for e in events if _ev(e, "profile")}
+    tasks = {_ev(e, "task") for e in events if _ev(e, "task")}
+    gates: dict[str, int] = {}
+    for e in events:
+        g = _ev(e, "gate")
+        if g:
+            gates[g] = gates.get(g, 0) + 1
+    x = _index_trace(events)
+    return {
+        "events": len(events), "skills": sorted(skills), "profiles": sorted(profiles),
+        "tasks": len(tasks), "gate_calls": gates,
+        "revision_levels": {"spike": x["spike"], "continuous_revision": x["revision_fired"]},
+        "complete": x["complete"],
+    }
+
+
+def render_footprints(events: list[dict], level: int = 2) -> str:
+    lines = ["```", "TICK │ ACTOR · SKILL · [TASK] action → result"]
+    last = None
+    for e in events:
+        if int(_ev(e, "level") or 2) > level:
+            continue
+        ph = _ev(e, "phase")
+        if ph != last:
+            lines.append(f"── {ph} ──")
+            last = ph
+        icon = _PROFILE_ICON.get(_ev(e, "profile"), "·")
+        head = f"t{int(_ev(e,'tick') or 0):>2} │ {icon} {_ev(e,'profile')} · {_ev(e,'skill')} · [{_ev(e,'task')}] {_ev(e,'action')}"
+        v, d = _ev(e, "verdict"), _ev(e, "detail")
+        tail = (f" → {v}" if v else "") + (f"  «{d}»" if d else "")
+        lines.append(head + tail)
+    lines.append("```")
+    return "\n".join(lines)
+
+
+_SEV_ICON = {"error": "❌", "warn": "🟡", "info": "ℹ️"}
+
+
+def build_run_report(events: list[dict], level: int = 2, title: str = "spec-flow run") -> str:
+    s = summarize_trace(events)
+    findings = audit_methodology(events)
+    errors = [x for x in findings if x["severity"] == "error"]
+    rl = s["revision_levels"]
+    out: list[str] = []
+    out.append(f"# {title} — отчёт по логам (footprints + методологический аудит)")
+    out.append("")
+    out.append(f"> Источник: трейс из {s['events']} событий. "
+               f"Скиллы: {len(s['skills'])} · профили: {len(s['profiles'])} · "
+               f"задач: {s['tasks']} · завершён: {'✅' if s['complete'] else '❌'}.")
+    out.append(f"> Ревизия: spike (уровень 1) {'✅' if rl['spike'] else '—'} · "
+               f"непрерывная ревизия (уровень 2) {'✅' if rl['continuous_revision'] else '—'}.")
+    out.append(f"> **Методологический вердикт: {'❌ есть ошибки' if errors else '✅ нарушений не найдено'}** "
+               f"({len(errors)} error, {len(findings) - len(errors)} прочих).")
+    out.append("")
+    out.append("## Методологический аудит (для ревизионера)")
+    if findings:
+        out.append("| | Правило | Где | Почему | Как исправить |")
+        out.append("|---|---|---|---|---|")
+        for x in findings:
+            out.append(f"| {_SEV_ICON.get(x['severity'],'')} {x['severity']} | `{x['rule']}` | "
+                       f"`{x['where']}` | {x['why']} | {x['fix']} |")
+    else:
+        out.append("_Нарушений методологии не обнаружено: все инварианты соблюдены._")
+    out.append("")
+    out.append(f"## Шаги на снегу (детализация ≤ {level})")
+    out.append(render_footprints(events, level))
+    out.append("")
+    out.append("## Сводка")
+    out.append(f"- Скиллы: {', '.join(s['skills'])}")
+    out.append(f"- Профили: {', '.join(s['profiles'])}")
+    out.append(f"- Вызовы тулзов: " + ", ".join(f"{k}×{v}" for k, v in s["gate_calls"].items()))
+    return "\n".join(out) + "\n"
+
+
+def _load_trace(trace_path: str) -> list[dict]:
+    events: list[dict] = []
+    with open(trace_path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                events.append(json.loads(line))
+    return events
+
+
+RUN_REPORT_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "run_report",
+        "description": (
+            "Build a readable run report + methodology audit from a spec-flow "
+            "run TRACE (the JSONL event log). Returns footprints (what the "
+            "plugin did, step by step), a summary, and an audit listing where "
+            "the spec-flow methodology was violated (impl without a leaf gate, "
+            "silent contract drift, branch without integration, revision "
+            "without re-derivation, green-on-red, etc.). A reviewer initiates "
+            "this to understand methodological errors. Pass either trace_path "
+            "(JSONL file) or trace (inline list of event objects)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "trace_path": {"type": "string", "description": "Path to a JSONL run trace."},
+                "trace": {"type": "array", "items": {"type": "object"}, "description": "Inline list of event objects (alternative to trace_path)."},
+                "level": {"type": "integer", "description": "Footprints verbosity: 1=milestones, 2=steps, 3=detail. Default 2."},
+                "title": {"type": "string", "description": "Optional report title."},
+            },
+            "required": [],
+        },
+    },
+}
+
+
+def _handle_run_report(args: dict[str, Any], **_: Any) -> str:
+    events = args.get("trace")
+    if events is None:
+        path = args.get("trace_path")
+        if not path:
+            return tool_error("run_report requires 'trace_path' or 'trace'")
+        try:
+            events = _load_trace(path)
+        except Exception as exc:  # noqa: BLE001
+            return tool_error(f"run_report cannot read trace: {exc}")
+    level = int(args.get("level", 2))
+    title = args.get("title", "spec-flow run")
+    findings = audit_methodology(events)
+    return json.dumps({
+        "summary": summarize_trace(events),
+        "findings": findings,
+        "errors": sum(1 for x in findings if x["severity"] == "error"),
+        "report": build_run_report(events, level=level, title=title),
+    }, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -674,6 +951,15 @@ registry.register(
     handler=_handle_policy_gate,
     check_fn=_check_specflow,
     emoji="⚖️",
+)
+
+registry.register(
+    name="run_report",
+    toolset="kanban",
+    schema=RUN_REPORT_SCHEMA,
+    handler=_handle_run_report,
+    check_fn=_check_specflow,
+    emoji="🐾",
 )
 
 registry.register(

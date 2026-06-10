@@ -26,6 +26,7 @@ _TOOL_NAMES = (
     "contract_check",
     "research_trigger_check",
     "policy_gate",
+    "run_report",
     "specflow_init",
     "specflow_start",
     "specflow_status",

@@ -32,6 +32,7 @@ spec + the parent handoff — context stays clean.
 | `contract_check` | code↔contract drift; OpenAPI default, Zod/Protobuf, parallel mode; strict = unavailable validator also fails |
 | `research_trigger_check` | fire the revision lane: `every_n_tasks` / `m_test_errors` / `on_level_return` / `cron`, with cooldown |
 | `policy_gate` | deterministic constitution check — measurable target, unattended spend cap, outreach consent, legality review; verdict `pass`/`clarify`/`block`. Catches a vague/risky spec before it is decomposed |
+| `run_report` | log-based report builder + **methodology audit** — consumes a run trace (JSONL) and returns footprints (what the plugin did, step by step) plus findings where the method was violated (silent drift, impl without a leaf gate, branch without integration, revision without re-derivation, green-on-red). A reviewer initiates it to see methodological errors |
 | `specflow_init` | board + `constitution.md` + `specs/` |
 | `specflow_start` | seed the L0 decomposition task |
 | `specflow_status` | compact board summary |

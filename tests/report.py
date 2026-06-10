@@ -133,7 +133,10 @@ def main() -> int:
     trace_path = PLUGIN_DIR / "docs" / "full-run-trace.jsonl"
     sink = eng.LogSink(path=str(trace_path), level=eng.L_DETAIL, fmt="jsonl", enabled=True)
     run_res = eng.Engine(tools, sink=sink).run(eng.load_run())
-    run_report = eng.render_report(run_res)
+    # The report is built by the PLUGIN's own log-based function from the trace,
+    # not by the harness — same as a reviewer calling run_report(trace_path=...).
+    events = tools._load_trace(str(trace_path))
+    run_report = tools.build_run_report(events, title=run_res.project["name"])
     run_path = PLUGIN_DIR / "docs" / "full-run-report.md"
     run_path.write_text(run_report, encoding="utf-8")
 
