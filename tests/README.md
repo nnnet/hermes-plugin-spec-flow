@@ -17,8 +17,9 @@ python3 tests/report.py         # render a human report -> ../docs/test-report.m
 | `test_contract_drift.py` | **battle**: `contract_check` against a real OpenAPI validator over clean / type-mismatch / missing-endpoint / parallel-subtree fixtures |
 | `test_research_timeline.py` | **battle**: replay event timelines through `research_trigger_check`; assert exact fire points + cooldown |
 | `test_policy_scenarios.py` | **battle**: feed deliberately-imprecise (but legitimate) business goals through `policy_gate`+`leaf_check`; assert the plugin **blocks/clarifies** them (not a human) and that the resolved variant proceeds |
-| `scenarios/*.yaml` | the case pool: p1–p3 carry an imprecise L0 + a resolved L0 (policy surface); **p4** additionally carries a full 4-level tree exercising every skill/profile/loop (both drift kinds, 2 contracts, 2 clarifies, 2 spikes, revision) |
-| `run_cases.py` | **case runner**: drives every scenario as a REAL plugin run into its own timestamped workspace `runs-out/<stamp>__<case>/` (artifacts + trace + log + reports inside) |
+| `scenarios/*.yaml` | the case pool: each carries an imprecise L0 + a resolved L0 (policy surface) AND a decomposition tree for the resolved goal (full-run surface). **p4** is the complete exercise: a 4-level tree hitting every skill/profile/loop (both drift kinds, 2 contracts, 2 clarifies, 2 spikes, revision) |
+| `run_cases.py` | **case runner**: drives every scenario as a REAL plugin run into its own timestamped workspace `runs-out/<stamp>__<case>/` (artifacts + trace + log + reports inside); at `--depth execute` injects the bundled autonomous implementer |
+| `harness/auto_implementer.py` | autonomous implementer agent for depth=`execute` — writes real working code + green tests per leaf (swap in an LLM/Hermes agent for a real project) |
 | `test_full_run.py` | **battle**: a full end-to-end project run exercising **all 9 skills & all 6 profiles**, asserting every loop (clarify / review critique / drift→respec / research revision) and project completion |
 | `runs/privacy_analytics.yaml` | the end-to-end project (multi-level tree with a spike, a contract, a drift episode, a review failure and a research revision) |
 | `harness/run_engine.py` | the dispatcher+worker run engine + execution-log / tree / coverage renderer |

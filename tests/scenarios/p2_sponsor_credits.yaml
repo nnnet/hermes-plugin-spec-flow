@@ -21,3 +21,36 @@ resolved:
 template_must_catch:
   - measurable R&D outcome (not just "get limits")
   - program terms/eligibility reviewed (honest use, no misrepresentation)
+
+# ---- full-run surface (the RESOLVED goal — only it may be decomposed) -------
+constitution:
+  - "Applications are honest: no misrepresentation of team, usage or affiliation."
+  - "Only programs whose eligibility terms we meet are applied to."
+  - "Credits are used for the declared R&D; the benchmark is published."
+target: "Approved credits from >= 2 eligible programs; published R&D benchmark within 60d."
+policy: {measurable_target: true, spend_per_action_usd: 0, human_in_loop: true, involves_outreach: false, consent_obtained: true, legal_exposure: true, legality_reviewed: true}
+
+tree:
+  id: L0
+  title: "Sponsor LLM credits for honest R&D"
+  metrics: {modules: 3, tasks: 9, interfaces: 2, estimated_loc: 500, open_decisions: 0, single_concern: true, testable_criteria: true}
+  children:
+    - id: eligibility
+      title: "Program eligibility research"
+      spike: {question: "Which credit programs accept solo R&D teams?", recommendation: "3 programs match: cloud credits, model-provider research tier, OSS grant"}
+      metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 50, open_decisions: 0, single_concern: true, testable_criteria: true}
+    - id: applications
+      title: "Applications pipeline"
+      metrics: {modules: 2, tasks: 6, interfaces: 1, estimated_loc: 250, open_decisions: 0, single_concern: false, testable_criteria: true}
+      children:
+        - id: dossier
+          title: "R&D dossier (project, usage plan, team)"
+          review_fails: 1
+          metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 60, open_decisions: 0, single_concern: true, testable_criteria: true}
+        - id: submissions
+          title: "Submissions & follow-up tracking"
+          metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 70, open_decisions: 0, single_concern: true, testable_criteria: true}
+    - id: benchmark
+      title: "Published R&D benchmark"
+      clarify: {decision: "Benchmark axis: latency vs answer quality?", resolution: "Answer quality on a public dataset; latency as secondary"}
+      metrics: {modules: 1, tasks: 4, interfaces: 1, estimated_loc: 95, open_decisions: 0, single_concern: true, testable_criteria: true}

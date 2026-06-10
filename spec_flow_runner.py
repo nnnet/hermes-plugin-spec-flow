@@ -613,14 +613,19 @@ class Engine:
         if not tests_dir.exists():
             return
         try:
-            proc = subprocess.run(["python3", "-m", "pytest", "-q", str(tests_dir)],
+            # confcutdir isolates the run from any host-project conftest.py
+            # (e.g. one that ignores the very folder the workspace lives in)
+            proc = subprocess.run(["python3", "-m", "pytest", "-q",
+                                   f"--confcutdir={ws.root}", "-p", "no:cacheprovider",
+                                   str(tests_dir)],
                                   capture_output=True, text=True, timeout=300)
             passed = proc.returncode == 0
             out = (proc.stdout or "") + (proc.stderr or "")
         except Exception as exc:  # noqa: BLE001
             passed, out = False, f"pytest error: {exc}"
+        depth_name = next((k for k, v in DEPTHS.items() if v == self.depth), str(self.depth))
         ws._write("TEST-RESULTS.md",
-                  f"# Test results (depth=verify)\n\nStatus: "
+                  f"# Test results (depth={depth_name})\n\nStatus: "
                   f"{'✅ PASS' if passed else '❌ FAIL (scaffolds fail until implemented)'}\n\n"
                   f"```\n{out[-2000:]}\n```\n", "test-results")
         self.emit("integrate", "verifier", "spec-integrate", "verify",

@@ -23,3 +23,40 @@ template_must_catch:
   - unattended spend capped at $50/action
   - mass outreach requires consent (opt-in)
   - legal/ToS exposure reviewed
+
+# ---- full-run surface (the RESOLVED goal — only it may be decomposed) -------
+constitution:
+  - "Revenue target is numeric and time-boxed (>= $N in 90 days)."
+  - "Unattended spend is capped at $50/action; above it a human approves."
+  - "Outreach goes only to opted-in contacts."
+  - "ToS of every platform used is reviewed before automation touches it."
+target: "SaaS in niche X: revenue >= $N in 90d; churn < 5%/mo; CAC < $40."
+policy: {measurable_target: true, spend_per_action_usd: 50, human_in_loop: true, involves_outreach: true, consent_obtained: true, legal_exposure: true, legality_reviewed: true}
+
+tree:
+  id: L0
+  title: "Niche SaaS to fund living & development"
+  metrics: {modules: 6, tasks: 24, interfaces: 4, estimated_loc: 4000, open_decisions: 0, single_concern: false, testable_criteria: true}
+  children:
+    - id: discovery
+      title: "Niche discovery & validation"
+      spike: {question: "Which niche converts: agencies vs e-com sellers?", recommendation: "E-com sellers; validated by 20 problem interviews"}
+      metrics: {modules: 1, tasks: 4, interfaces: 1, estimated_loc: 60, open_decisions: 0, single_concern: true, testable_criteria: true}
+    - id: product
+      title: "Product MVP"
+      metrics: {modules: 2, tasks: 9, interfaces: 2, estimated_loc: 700, open_decisions: 0, single_concern: false, testable_criteria: true}
+      children:
+        - id: mvp_core
+          title: "Core workflow (the one job the niche pays for)"
+          metrics: {modules: 1, tasks: 4, interfaces: 1, estimated_loc: 95, open_decisions: 0, single_concern: true, testable_criteria: true}
+        - id: onboarding
+          title: "Self-serve onboarding"
+          review_fails: 1
+          metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 80, open_decisions: 0, single_concern: true, testable_criteria: true}
+    - id: billing_sub
+      title: "Subscriptions & EU VAT"
+      clarify: {decision: "Stripe vs Paddle as merchant of record for EU VAT?", resolution: "Paddle (merchant of record) — VAT handled upstream"}
+      metrics: {modules: 1, tasks: 4, interfaces: 1, estimated_loc: 90, open_decisions: 0, single_concern: true, testable_criteria: true}
+    - id: launch
+      title: "Launch & opt-in outreach"
+      metrics: {modules: 1, tasks: 4, interfaces: 1, estimated_loc: 70, open_decisions: 0, single_concern: true, testable_criteria: true}

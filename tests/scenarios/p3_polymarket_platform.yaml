@@ -23,3 +23,46 @@ template_must_catch:
   - numeric ROI/Sharpe acceptance target
   - autonomous real-money spend gated by a human
   - jurisdiction/ToS exposure reviewed
+
+# ---- full-run surface (the RESOLVED goal — only it may be decomposed) -------
+constitution:
+  - "All strategy evaluation is on historical data until targets are met."
+  - "Any live trade above $50 requires explicit human approval."
+  - "Jurisdiction and platform ToS are reviewed before live mode."
+target: "Backtest: ROI >= X% and Sharpe >= Y on 2 years of history; live trades human-approved <= $50."
+policy: {measurable_target: true, spend_per_action_usd: 50, human_in_loop: true, involves_outreach: false, consent_obtained: true, legal_exposure: true, legality_reviewed: true}
+
+tree:
+  id: L0
+  title: "Prediction-market research platform (backtest-first)"
+  metrics: {modules: 5, tasks: 16, interfaces: 3, estimated_loc: 2500, open_decisions: 0, single_concern: false, testable_criteria: true}
+  children:
+    - id: data_ingest
+      title: "Market data ingestion (historical)"
+      spike: {question: "Order-book snapshots vs trade ticks for backtesting?", recommendation: "Trade ticks + daily book snapshots — enough for the target horizon"}
+      metrics: {modules: 1, tasks: 4, interfaces: 1, estimated_loc: 90, open_decisions: 0, single_concern: true, testable_criteria: true}
+    - id: strategy
+      title: "Strategy & risk research"
+      metrics: {modules: 2, tasks: 6, interfaces: 1, estimated_loc: 420, open_decisions: 0, single_concern: false, testable_criteria: true}
+      children:
+        - id: backtest
+          title: "Backtest engine (fees & slippage modelled)"
+          review_fails: 1
+          metrics: {modules: 1, tasks: 4, interfaces: 1, estimated_loc: 95, open_decisions: 0, single_concern: true, testable_criteria: true}
+        - id: risk_model
+          title: "Risk model (drawdown, exposure caps)"
+          metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 80, open_decisions: 0, single_concern: true, testable_criteria: true}
+    - id: execution_gate
+      title: "Human-gated execution"
+      clarify: {decision: "Approval UX: per-trade confirm vs daily batch review?", resolution: "Per-trade confirm above $10, daily batch below"}
+      metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 75, open_decisions: 0, single_concern: true, testable_criteria: true}
+    - id: reporting
+      title: "ROI / Sharpe reporting"
+      metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 70, open_decisions: 0, single_concern: true, testable_criteria: true}
+
+# fee-model change on the platform invalidates the strategy subtree
+revision:
+  trigger: on_level_return
+  finding: "Platform fee model changed (maker rebate removed) — backtest assumptions invalid."
+  invalidates: strategy
+  effect: "Version-bump strategy spec, re-derive backtest/risk_model under the new fee model."

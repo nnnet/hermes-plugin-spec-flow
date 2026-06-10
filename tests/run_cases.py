@@ -47,6 +47,7 @@ PLUGIN_DIR = HERE.parent
 SCENARIOS_DIR = HERE / "scenarios"
 OUT_DIR = HERE / "runs-out"
 sys.path.insert(0, str(HERE))
+from harness import auto_implementer  # noqa: E402
 from harness import run_engine as eng  # noqa: E402
 from harness import scenarios as scn  # noqa: E402
 
@@ -89,8 +90,13 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools) -> dict:
         "python3", str(eng.OPENAPI_DIFF), "{contract}", "{code}"]
     trace = case_dir / "trace.jsonl"
     sink = eng.LogSink(path=str(trace), level=eng.L_DETAIL, fmt="jsonl", enabled=True)
+    # at depth=execute a real implementer agent is required; inject the bundled
+    # autonomous one (writes working code + green tests) — swap in a smarter
+    # (LLM/Hermes) agent here for a real project
+    agents = {"implementer": auto_implementer.implement} if depth == "execute" else None
     res = eng.run_project(case, workspace=str(case_dir / "workspace"), depth=depth,
-                          tools=tools, contracts_dir=str(eng.CONTRACTS), sink=sink)
+                          tools=tools, agents=agents,
+                          contracts_dir=str(eng.CONTRACTS), sink=sink)
 
     (case_dir / "log.txt").write_text(
         "\n".join(eng.event_line(e) for e in res.events) + "\n", encoding="utf-8")
