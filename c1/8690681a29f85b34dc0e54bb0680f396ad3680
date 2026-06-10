@@ -1,0 +1,48 @@
+tests/test_full_run.py
+  s_1b99a7ec9e9aa9::t_ff618cd171e907 75-138
+docs/full-run-report.md
+  s_1b99a7ec9e9aa9::t_84877028c43031 8-10,30
+tests/harness/run_engine.py
+  s_1b99a7ec9e9aa9::t_cd362ef59b7124 510-516,518,521,532-541,547
+  s_1b99a7ec9e9aa9::t_309e946952bd57 376,382
+  s_1b99a7ec9e9aa9::t_301613ec969660 178
+  s_1b99a7ec9e9aa9::t_fd4bd9dda0bffe 353-354,357,361,367
+  s_1b99a7ec9e9aa9::t_f84f37d217be9c 216-224
+  s_1b99a7ec9e9aa9::t_dc6e5abb920eed 89
+  s_1b99a7ec9e9aa9::t_fd7cdf4e427bd0 269,271
+  s_1b99a7ec9e9aa9::t_b6f16e8457c429 64
+  s_1b99a7ec9e9aa9::t_624976898b636b 255
+  s_1b99a7ec9e9aa9::t_9e6ff0bdfee15b 232-233,236
+  s_1b99a7ec9e9aa9::t_afb145988eb934 398-399,403,407
+  s_1b99a7ec9e9aa9::t_7c112822ef80c7 305-306
+  s_1b99a7ec9e9aa9::t_8076a2731020f9 324,326-327
+  s_1b99a7ec9e9aa9::t_e78497d769863d 19-20,24-29
+  s_1b99a7ec9e9aa9::t_9a02a2168aaf9b 249-250
+  s_1b99a7ec9e9aa9::t_dbca2c69259905 294
+  s_1b99a7ec9e9aa9::t_0fe59a3b485b2f 346
+  s_1b99a7ec9e9aa9::t_0ef940470053fd 92-152,156-157,167-175,182-185
+  s_1b99a7ec9e9aa9::t_72488cdd5b0e14 430-434,437-438,442
+docs/full-run-trace.jsonl
+  s_1b99a7ec9e9aa9::t_84877028c43031 1-74
+tests/README.md
+  s_1b99a7ec9e9aa9::t_e95870f0d1a5d9 61-83
+tests/report.py
+  s_1b99a7ec9e9aa9::t_160eb51c171022 141-142
+  s_1b99a7ec9e9aa9::t_ae496136f04885 131-135
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "c18690681a29f85b34dc0e54bb0680f396ad3680",
+  "prompts": {},
+  "sessions": {
+    "s_1b99a7ec9e9aa9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5025e0d8-1d1b-4f97-8c52-eec971a58fbd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <zkowkmdx@sharklasers.com>"
+    }
+  }
+}
