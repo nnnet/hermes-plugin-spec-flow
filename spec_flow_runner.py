@@ -471,6 +471,14 @@ class Engine:
         self._target = project.get("target", "")
         self._constitution = project.get("constitution", [])
         self._decompose_calls = 0
+        # Two revision methods (from the design discussion):
+        #   * 'internal'     — continuous lane firing DURING the run (by
+        #                      accumulated tasks/errors), may reopen a branch
+        #                      mid-flight;
+        #   * 'level_return' — fires the moment a branch folds up and control
+        #                      returns one level up.
+        self._revisions = self._load_revisions(project)
+        self._fired_rev: set[str] = set()
 
         # Phase 0-1: requirements (spec-decomposer + spec-requirements)
         self.task("L0:req", "Requirements & constitution", "requirements", "spec-decomposer", "spec-requirements")
@@ -491,8 +499,9 @@ class Engine:
         root = project.get("tree") or {"id": "L0", "title": project.get("goal", "project")}
         self._visit(root, depth=0, contract_ctx=None, phase="decompose", parent=None)
 
-        # Phase: continuous research revision lane
-        self._revision(project.get("revision"))
+        # Sweep: fire any declared revision that did not meet its in-run
+        # trigger condition (back-compat + nothing declared is silently dropped).
+        self._revision_sweep()
 
         # Depth 'verify' and up: actually run the materialised test suite.
         if self.depth >= DEPTH_VERIFY:
@@ -628,8 +637,8 @@ class Engine:
 
         self.tasks[nid].status = "done"
         self._completed += 1
-        # returning up a level — check the research lane trigger
-        self._research_tick(depth)
+        # returning up a level — check both revision methods at this moment
+        self._research_tick(node, depth)
 
     def _leaf_pipeline(self, node: dict, contract_ctx: Optional[dict],
                        depth: int = 0, parent: Optional[str] = None):
@@ -856,29 +865,87 @@ class Engine:
                   f"{len(failed)} failed check(s)" if failed else "all checks passed",
                   "", verdict, level=L_MILESTONE)
 
-    def _research_tick(self, depth: int):
-        # cheap signal: only check at the moment we return to the root level
-        if depth != 0:
-            return
+    def _load_revisions(self, project: dict) -> list[dict]:
+        """Normalise the project's revision declarations into a list, each with
+        an explicit ``method``. Accepts a ``revisions:`` list (preferred) or a
+        single legacy ``revision:`` block. A block's method is taken verbatim if
+        given, else inferred: ``on_level_return`` trigger ⇒ ``level_return``,
+        anything else (every_n_tasks / m_test_errors / cron) ⇒ ``internal``."""
+        raw = project.get("revisions")
+        if raw is None:
+            single = project.get("revision")
+            raw = [single] if single else []
+        out: list[dict] = []
+        for i, rev in enumerate(raw):
+            if not rev:
+                continue
+            rev = dict(rev)
+            rev.setdefault("_id", f"rev{i}")
+            if "method" not in rev:
+                rev["method"] = ("level_return"
+                                 if rev.get("trigger", "on_level_return") == "on_level_return"
+                                 else "internal")
+            out.append(rev)
+        return out
 
-    def _revision(self, rev: Optional[dict]):
-        if not rev:
+    def _research_tick(self, node: dict, depth: int):
+        """Both revision methods are evaluated the moment a node completes and
+        control returns up a level:
+          * level_return — fire when the node whose subtree just folded is the
+            revision's target branch (a real "branch done → step up" signal);
+          * internal     — fire mid-run once enough work has accumulated
+            (every_n_tasks / m_test_errors), independent of which branch.
+        """
+        nid = node.get("id")
+        for rev in self._revisions:
+            if rev["_id"] in self._fired_rev:
+                continue
+            if rev["method"] == "level_return":
+                # the targeted branch just completed and we are stepping up
+                if nid == rev.get("invalidates") or nid == rev.get("after_node"):
+                    self._apply_revision(rev, "level_return")
+            elif rev["method"] == "internal":
+                after = int(rev.get("after_completed", self.tools.RESEARCH_LANE.get(
+                    "every_n_tasks", 20)))
+                # fire once enough work has accumulated AND the invalidated node
+                # is already done — internal revision REOPENS a finished node;
+                # if the target isn't done yet, defer to a later tick / sweep.
+                target = rev.get("invalidates")
+                target_done = (target in self.tasks
+                               and self.tasks[target].status == "done")
+                if self._completed >= after and target_done:
+                    self._apply_revision(rev, "internal")
+
+    def _revision_sweep(self):
+        """End-of-run: fire any declared revision that never met its in-run
+        condition, so nothing declared is silently dropped."""
+        for rev in self._revisions:
+            if rev["_id"] not in self._fired_rev:
+                self._apply_revision(rev, rev["method"])
+
+    def _apply_revision(self, rev: dict, method: str):
+        """Run the research trigger, then (for a declared revision) respec the
+        invalidated node: version-bump + re-derive only the affected subtree.
+        ``method`` distinguishes the two revision lanes in the trace + loops."""
+        if rev["_id"] in self._fired_rev:
             return
-        out = self._research(rev.get("trigger", "on_level_return"), self._completed, 0)
+        self._fired_rev.add(rev["_id"])
+        reason = rev.get("trigger", "on_level_return" if method == "level_return"
+                         else "every_n_tasks")
+        out = self._research(reason, self._completed, rev.get("test_errors", 0))
         self.emit("revision", "researcher", "spec-research", "revision",
-                  "research_trigger_check", f"fired_by={out['fired_by']}",
-                  "research_trigger_check", "trigger" if out["trigger"] else "—",
-                  level=L_MILESTONE)
-        if not out["trigger"]:
-            return
+                  f"research_trigger_check ({method})",
+                  f"fired_by={out['fired_by'] or [reason]}",
+                  "research_trigger_check", "trigger", level=L_MILESTONE)
         self.emit("revision", "researcher", "spec-research", "revision",
-                  "REVISION finding (upstream impact)", rev["finding"], level=L_MILESTONE)
+                  f"REVISION finding ({method})", rev["finding"], level=L_MILESTONE)
         target = rev["invalidates"]
         self.emit("respec", "spec-reviewer", "respec-gate", target,
                   "respec-gate: change the cause first, version-bump, re-derive only affected subtree",
                   rev["effect"], level=L_MILESTONE)
-        self.loops.append({"type": "revision-respec", "task": target, "detail": rev["finding"]})
-        # version-bump the target and re-run its leaves under the new spec
+        self.loops.append({"type": "revision-respec", "method": method,
+                           "task": target, "detail": rev["finding"]})
+        # version-bump the target and re-derive its subtree under the new spec
         if target in self.tasks:
             self.tasks[target].version += 1
             self.tasks[target].runs += 1

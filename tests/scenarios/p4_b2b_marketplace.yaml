@@ -127,13 +127,24 @@ tree:
       spike: {question: "Digest vs instant notifications for B2B buyers?", recommendation: "Daily digest default, instant for order events"}
       metrics: {modules: 1, tasks: 4, interfaces: 1, estimated_loc: 85, open_decisions: 0, single_concern: true, testable_criteria: true}
 
-# Continuous research lane: a PSD2/PSP rule change invalidates 'billing' ->
-# respec-gate version-bumps it and re-derives only its subtree.
-revision:
-  trigger: on_level_return
-  finding: "PSP policy change: payout transfers now require per-seller KYC level 2 before first payout."
-  invalidates: billing
-  effect: "Version-bump billing spec (supersedes v1), reopen its subtree, re-derive invoicing/payouts under the new KYC precondition."
+# Two revision methods exercised here:
+#   1. level_return — a PSD2/PSP rule change invalidates 'billing'; it fires the
+#      moment the billing branch folds up and control returns to L0.
+#   2. internal — mid-run, accumulated work surfaces a security finding that
+#      invalidates the 'architecture' baseline; fires during the run (not on a
+#      branch return) and re-derives the affected subtree.
+revisions:
+  - method: level_return
+    trigger: on_level_return
+    finding: "PSP policy change: payout transfers now require per-seller KYC level 2 before first payout."
+    invalidates: billing
+    effect: "Version-bump billing spec (supersedes v1), reopen its subtree, re-derive invoicing/payouts under the new KYC precondition."
+  - method: internal
+    trigger: every_n_tasks
+    after_completed: 10
+    finding: "Pen-test of the live design surfaces an IDOR risk in the access model — the architecture/NFR baseline must change."
+    invalidates: architecture
+    effect: "Version-bump the architecture baseline (add object-level authorization), re-derive dependent nodes."
 
 # ---- smart verification oracle ----------------------------------------------
 # The FULL-exercise oracle: this case must reach every methodology episode and
@@ -146,8 +157,8 @@ oracle:
   # contract node (orders), and the human-gated payouts node.
   anchor_nodes: [market_research, architecture, orders, payouts]
   # both drift classifications and the revision lane must all fire here.
-  expected_episodes: [spike, clarify, contract, drift_respec, drift_codefix, review_critique, revision]
-  expected_loops: {clarify: 2, review_fail: 2, drift_respec: 1, drift_codefix: 1, revision_respec: 1}
+  expected_episodes: [spike, clarify, contract, drift_respec, drift_codefix, review_critique, revision, revision_internal, revision_level_return]
+  expected_loops: {clarify: 2, review_fail: 2, drift_respec: 1, drift_codefix: 1, revision_respec: 2}
   # the full-surface case must exercise ALL skills and ALL profiles.
   coverage: {min_skills: 9, min_profiles: 6}
   research_before_impl: true

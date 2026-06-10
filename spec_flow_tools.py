@@ -1245,6 +1245,11 @@ def _oracle_loop_counts(run_result) -> dict:
 
 
 def _oracle_episode_present(run_result, episode: str) -> bool:
+    # the two revision methods are distinguished by the loop's ``method`` field
+    if episode in ("revision_internal", "revision_level_return"):
+        want = episode.split("revision_", 1)[1]   # internal | level_return
+        return any(l.get("type") == "revision-respec" and l.get("method") == want
+                   for l in run_result.loops)
     loop_type = _ORACLE_EPISODE_TO_LOOP.get(episode)
     if loop_type is not None:
         return any(l.get("type") == loop_type for l in run_result.loops)
