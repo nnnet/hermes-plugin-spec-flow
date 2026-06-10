@@ -54,3 +54,16 @@ tree:
       title: "Published R&D benchmark"
       clarify: {decision: "Benchmark axis: latency vs answer quality?", resolution: "Answer quality on a public dataset; latency as secondary"}
       metrics: {modules: 1, tasks: 4, interfaces: 1, estimated_loc: 95, open_decisions: 0, single_concern: true, testable_criteria: true}
+
+# ---- smart verification oracle ----------------------------------------------
+# Declared OUTCOME invariants — checked against the realized RunResult, not a
+# 1:1 copy of the tree above. See tests/harness/oracle.py.
+oracle:
+  min_depth: 2
+  max_depth: 3
+  # anchors: eligibility research, the applications branch, the published benchmark.
+  anchor_nodes: [eligibility, applications, benchmark]
+  expected_episodes: [spike, clarify, review_critique]
+  expected_loops: {clarify: 1, review_fail: 1}
+  coverage: {min_skills: 6, min_profiles: 5}
+  research_before_impl: true

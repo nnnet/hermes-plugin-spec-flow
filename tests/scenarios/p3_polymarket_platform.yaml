@@ -66,3 +66,18 @@ revision:
   finding: "Platform fee model changed (maker rebate removed) — backtest assumptions invalid."
   invalidates: strategy
   effect: "Version-bump strategy spec, re-derive backtest/risk_model under the new fee model."
+
+# ---- smart verification oracle ----------------------------------------------
+# Declared OUTCOME invariants — checked against the realized RunResult, not a
+# 1:1 copy of the tree above. See tests/harness/oracle.py.
+oracle:
+  min_depth: 2
+  max_depth: 3
+  # anchors: historical data ingestion, the strategy research branch (later
+  # revised), the human-gated execution node, and ROI/Sharpe reporting.
+  anchor_nodes: [data_ingest, strategy, execution_gate, reporting]
+  # this case additionally exercises the continuous-revision lane.
+  expected_episodes: [spike, clarify, review_critique, revision]
+  expected_loops: {clarify: 1, review_fail: 1, revision_respec: 1}
+  coverage: {min_skills: 7, min_profiles: 5}
+  research_before_impl: true

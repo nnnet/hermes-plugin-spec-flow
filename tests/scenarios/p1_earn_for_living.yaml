@@ -60,3 +60,23 @@ tree:
     - id: launch
       title: "Launch & opt-in outreach"
       metrics: {modules: 1, tasks: 4, interfaces: 1, estimated_loc: 70, open_decisions: 0, single_concern: true, testable_criteria: true}
+
+# ---- smart verification oracle ----------------------------------------------
+# Declared OUTCOME invariants — checked against the realized RunResult, not a
+# 1:1 copy of the tree above. See tests/harness/oracle.py.
+oracle:
+  # bounds, not the exact depth: the run must decompose at least 2 levels deep
+  # (a real branch under the root) and no deeper than 3.
+  min_depth: 2
+  max_depth: 3
+  # semantic reference points that must exist AND reach done — upfront research,
+  # the product branch, and the regulated billing/VAT node.
+  anchor_nodes: [discovery, product, billing_sub]
+  # methodology episodes that must have happened at least once.
+  expected_episodes: [spike, clarify, review_critique]
+  # minimum control-flow loop counts (RunResult.loops by type).
+  expected_loops: {clarify: 1, review_fail: 1}
+  # coverage floors (skills/profiles exercised at least this many).
+  coverage: {min_skills: 6, min_profiles: 5}
+  # R9: the first research event must precede the first implementation event.
+  research_before_impl: true
