@@ -1,0 +1,32 @@
+tests/report.py
+  s_1b99a7ec9e9aa9::t_b2b407433ba679 136,138,140,144-150
+  s_1b99a7ec9e9aa9::t_8d222ff1aa6918 153-154
+tests/README.md
+  s_1b99a7ec9e9aa9::t_881ee92211deb9 98-102
+README.md
+  s_1b99a7ec9e9aa9::t_6c79c5947d5f26 121-127
+docs/full-run-report.md
+  s_1b99a7ec9e9aa9::t_4cdb4502219f5f 3-5,9-78,81-83
+  s_1b99a7ec9e9aa9::t_a9af3181a85a64 1
+spec_flow_tools.py
+  s_1b99a7ec9e9aa9::t_1c7585d464e8db 859-864,866,870,874
+  s_1b99a7ec9e9aa9::t_26f455a1ff84d9 799-815,817-821,826-827,829-836
+docs/flawed-run-report.md
+  s_1b99a7ec9e9aa9::t_a9af3181a85a64 1-36
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "343a17779053bf8ac2e35f00762c3f56e952dddf",
+  "prompts": {},
+  "sessions": {
+    "s_1b99a7ec9e9aa9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5025e0d8-1d1b-4f97-8c52-eec971a58fbd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <zkowkmdx@sharklasers.com>"
+    }
+  }
+}
