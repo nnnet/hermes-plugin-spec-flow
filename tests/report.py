@@ -132,7 +132,11 @@ def main() -> int:
     # source data the report is built from.
     trace_path = PLUGIN_DIR / "docs" / "full-run-trace.jsonl"
     sink = eng.LogSink(path=str(trace_path), level=eng.L_DETAIL, fmt="jsonl", enabled=True)
-    run_res = eng.Engine(tools, sink=sink).run(eng.load_run())
+    # materialise real artifacts (specs/plans, contract, code & test scaffolds,
+    # commit journal, manifest) so a reviewer has deliverables to evaluate.
+    ws_dir = PLUGIN_DIR / "docs" / "run-workspace"
+    ws = eng.Workspace(root=str(ws_dir), enabled=True)
+    run_res = eng.Engine(tools, sink=sink, workspace=ws).run(eng.load_run())
     # Both reports are built by the PLUGIN's own log-based function from a trace,
     # not by the harness — same as a reviewer calling run_report(trace_path=...).
     # (1) the real/clean run:
@@ -152,7 +156,8 @@ def main() -> int:
     print(run_report)
     print(f"\n[reports written to:\n  {out_path}\n  {scn_path}\n  {run_path} (real/clean run)\n"
           f"  {flawed_path} (flawed sample run — audit catches errors)\n"
-          f"  {trace_path} (raw source events, JSONL)]")
+          f"  {trace_path} (raw source events, JSONL)\n"
+          f"  {ws_dir}/ (materialised artifacts: specs, contract, code/test, MANIFEST.json)]")
     return 0 if ok else 1
 
 

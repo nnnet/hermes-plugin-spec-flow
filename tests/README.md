@@ -81,6 +81,14 @@ file. Each event carries a `level`: **1** = milestones (gate verdicts, loops),
   Or enable via env without code: `SPEC_FLOW_RUN_LOG=run.jsonl`,
   `SPEC_FLOW_RUN_LOG_LEVEL=1`, `SPEC_FLOW_RUN_LOG_FORMAT=text|jsonl`.
   `dump_trace(res)` returns the full event stream as JSONL.
+- **Material artifacts** — an optional `Workspace` (also off by default; enable
+  with a path or `SPEC_FLOW_RUN_WORKSPACE`) writes the run's real deliverables a
+  reviewer can open and evaluate: `specs/<node>.md` (plan per node), the frozen
+  `contracts/<file>`, `src/` + `tests/` scaffolds per leaf, a `COMMITS.md`
+  journal and `MANIFEST.json` (type/size/sha256). `tests/report.py` writes them
+  to `docs/run-workspace/`. Code/test files are honest scaffolds (header +
+  NotImplementedError / failing assert), since no real LLM authored them; the
+  specs, contract and manifest are real content.
 
 ## Report & methodology audit (built by the plugin, from logs)
 

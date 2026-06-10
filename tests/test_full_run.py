@@ -136,3 +136,38 @@ class TestLogSinkAndVerbosity:
     def test_dump_trace_has_all_events(self, run):
         lines = eng.dump_trace(run).strip().splitlines()
         assert len(lines) == len(run.events)
+
+
+# ---------------------------------------------------------------------------
+# Materialised workspace artifacts (optional)
+# ---------------------------------------------------------------------------
+
+class TestWorkspaceArtifacts:
+    def test_workspace_off_by_default(self, plugin, monkeypatch):
+        monkeypatch.delenv("SPEC_FLOW_RUN_WORKSPACE", raising=False)
+        e = eng.Engine(plugin.tools)
+        assert e.workspace.enabled is False
+
+    def test_materialises_specs_code_tests_manifest(self, plugin, tmp_path):
+        ws = eng.Workspace(root=str(tmp_path / "wk"), enabled=True)
+        eng.Engine(plugin.tools, workspace=ws).run(eng.load_run())
+        root = tmp_path / "wk"
+        assert (root / "constitution.md").exists()
+        assert (root / "MANIFEST.json").exists()
+        assert (root / "COMMITS.md").exists()
+        specs = list((root / "specs").glob("*.md"))
+        srcs = list((root / "src").glob("*.py"))
+        tests = list((root / "tests").glob("test_*.py"))
+        assert specs and srcs and tests
+        # one src + one test per leaf, and a commit per leaf
+        assert len(srcs) == len(tests) == len(ws.commits)
+        # a frozen contract was materialised
+        assert list((root / "contracts").glob("*.yaml"))
+
+    def test_manifest_has_sha_and_counts(self, plugin, tmp_path):
+        ws = eng.Workspace(root=str(tmp_path / "wk"), enabled=True)
+        eng.Engine(plugin.tools, workspace=ws).run(eng.load_run())
+        manifest = json.loads((tmp_path / "wk" / "MANIFEST.json").read_text(encoding="utf-8"))
+        assert manifest["counts"].get("spec", 0) >= 5
+        assert manifest["counts"].get("code", 0) >= 1
+        assert all(a["sha256"] for a in manifest["artifacts"])

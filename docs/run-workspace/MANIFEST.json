@@ -1,0 +1,199 @@
+{
+  "artifacts": [
+    {
+      "path": "constitution.md",
+      "type": "constitution",
+      "bytes": 324,
+      "sha256": "7d51684e62c8b27b"
+    },
+    {
+      "path": "specs/l0.md",
+      "type": "spec",
+      "bytes": 438,
+      "sha256": "31f6c369b42824d7"
+    },
+    {
+      "path": "specs/consent.md",
+      "type": "spec",
+      "bytes": 404,
+      "sha256": "a786383776bd1693"
+    },
+    {
+      "path": "specs/consent_banner.md",
+      "type": "spec",
+      "bytes": 363,
+      "sha256": "9f02819e2f3a4fc2"
+    },
+    {
+      "path": "src/consent_banner.py",
+      "type": "code",
+      "bytes": 273,
+      "sha256": "a3a0efdeafd6b241"
+    },
+    {
+      "path": "tests/test_consent_banner.py",
+      "type": "test",
+      "bytes": 227,
+      "sha256": "35db60a2d87d516b"
+    },
+    {
+      "path": "specs/anonymiser.md",
+      "type": "spec",
+      "bytes": 371,
+      "sha256": "3f6d74c08579a433"
+    },
+    {
+      "path": "src/anonymiser.py",
+      "type": "code",
+      "bytes": 265,
+      "sha256": "02c44e17188abbb8"
+    },
+    {
+      "path": "tests/test_anonymiser.py",
+      "type": "test",
+      "bytes": 223,
+      "sha256": "a4804d2a44b71633"
+    },
+    {
+      "path": "specs/ingest.md",
+      "type": "spec",
+      "bytes": 347,
+      "sha256": "b4a5047e31079834"
+    },
+    {
+      "path": "src/ingest.py",
+      "type": "code",
+      "bytes": 235,
+      "sha256": "2e987ec816b33c63"
+    },
+    {
+      "path": "tests/test_ingest.py",
+      "type": "test",
+      "bytes": 197,
+      "sha256": "0af2a00c1bca1dce"
+    },
+    {
+      "path": "specs/storage.md",
+      "type": "spec",
+      "bytes": 351,
+      "sha256": "16547f717b0af801"
+    },
+    {
+      "path": "specs/schema.md",
+      "type": "spec",
+      "bytes": 352,
+      "sha256": "7158e673f4b8432c"
+    },
+    {
+      "path": "src/schema.py",
+      "type": "code",
+      "bytes": 246,
+      "sha256": "beb5c69d0fd3086e"
+    },
+    {
+      "path": "tests/test_schema.py",
+      "type": "test",
+      "bytes": 208,
+      "sha256": "23b126ffe8957b9e"
+    },
+    {
+      "path": "specs/retention.md",
+      "type": "spec",
+      "bytes": 347,
+      "sha256": "87feb646477fb456"
+    },
+    {
+      "path": "src/retention.py",
+      "type": "code",
+      "bytes": 253,
+      "sha256": "5cdc985b3690be9b"
+    },
+    {
+      "path": "tests/test_retention.py",
+      "type": "test",
+      "bytes": 212,
+      "sha256": "f8517826bdc88ef1"
+    },
+    {
+      "path": "contracts/query.openapi.yaml",
+      "type": "contract",
+      "bytes": 304,
+      "sha256": "0b362602c70befc9"
+    },
+    {
+      "path": "specs/api.md",
+      "type": "spec",
+      "bytes": 315,
+      "sha256": "1f113b2ebd7a8478"
+    },
+    {
+      "path": "specs/ep_query.md",
+      "type": "spec",
+      "bytes": 326,
+      "sha256": "cc0257b400ab5e89"
+    },
+    {
+      "path": "src/ep_query.py",
+      "type": "code",
+      "bytes": 238,
+      "sha256": "81fbcca4db53c3e7"
+    },
+    {
+      "path": "tests/test_ep_query.py",
+      "type": "test",
+      "bytes": 198,
+      "sha256": "aab5207a993da4e3"
+    },
+    {
+      "path": "specs/ep_export.md",
+      "type": "spec",
+      "bytes": 327,
+      "sha256": "cb5394471e35c453"
+    },
+    {
+      "path": "src/ep_export.py",
+      "type": "code",
+      "bytes": 243,
+      "sha256": "ea5f5bf186502d9d"
+    },
+    {
+      "path": "tests/test_ep_export.py",
+      "type": "test",
+      "bytes": 202,
+      "sha256": "c76185e2cdecc448"
+    },
+    {
+      "path": "specs/dashboard.md",
+      "type": "spec",
+      "bytes": 350,
+      "sha256": "45cf037cd6c17618"
+    },
+    {
+      "path": "src/dashboard.py",
+      "type": "code",
+      "bytes": 250,
+      "sha256": "2d78fcb7b11d0e79"
+    },
+    {
+      "path": "tests/test_dashboard.py",
+      "type": "test",
+      "bytes": 209,
+      "sha256": "0c0360b5472658f8"
+    },
+    {
+      "path": "COMMITS.md",
+      "type": "commit-log",
+      "bytes": 695,
+      "sha256": "59017a86d675df90"
+    }
+  ],
+  "commits": 8,
+  "counts": {
+    "constitution": 1,
+    "spec": 12,
+    "code": 8,
+    "test": 8,
+    "contract": 1,
+    "commit-log": 1
+  }
+}
