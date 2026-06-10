@@ -1,0 +1,52 @@
+tests/harness/run_engine.py
+  s_1b99a7ec9e9aa9::t_b54605935ef237 1-8,13-14,17-18,21-28,31-32,34-35,37-40,43-44
+README.md
+  s_1b99a7ec9e9aa9::t_c9d1077e8c3b68 98-124
+docs/full-run-report.md
+  s_1b99a7ec9e9aa9::t_77b6e5498942e9 3,31-69,71-81
+spec_flow_tools.py
+  s_1b99a7ec9e9aa9::t_bc44c50de3e679 48-60
+tests/test_full_run.py
+  s_1b99a7ec9e9aa9::t_ab8576d2a228ee 96,98,104-105,115-116,124-125,129,131-132,139
+  s_1b99a7ec9e9aa9::t_3fe52b426bde62 161-177,179,181-182,187-208,212-213
+  s_1b99a7ec9e9aa9::t_37fa61582c7681 21-26,28-34
+docs/run-workspace/MANIFEST.json
+  s_1b99a7ec9e9aa9::t_77b6e5498942e9 88,92
+tests/report.py
+  s_1b99a7ec9e9aa9::t_de87be999cf49a 135-138,140-141
+tests/test_run_report.py
+  s_1b99a7ec9e9aa9::t_30455faed35ed7 26-27,29-30
+docs/README.md
+  s_1b99a7ec9e9aa9::t_23ef743a0aae6c 16
+spec_flow_runner.py
+  s_1b99a7ec9e9aa9::t_d54daacf1bc020 488-491
+  s_1b99a7ec9e9aa9::t_b58bcf22be1571 586-589
+  s_1b99a7ec9e9aa9::t_422846d7cdb265 125-126
+  s_1b99a7ec9e9aa9::t_3be567f6bac16f 654-655,657-672
+  s_1b99a7ec9e9aa9::t_6256c7016e29d1 432-433
+  s_1b99a7ec9e9aa9::t_245c4b0491e192 21-28,30-32,42-48,67,72-124,127-306,319-335,338-366,371-372,375-395,398-419,424-431,434-487,492-527,529-533,544-585,590-593,616-653,656,673-797
+  s_1b99a7ec9e9aa9::t_d796261fd843df 396-397
+  s_1b99a7ec9e9aa9::t_3536451abb5d83 336-337
+  s_1b99a7ec9e9aa9::t_bea43011691b52 307-318
+  s_1b99a7ec9e9aa9::t_63e797c279eaea 420-423
+  s_1b99a7ec9e9aa9::t_3ca0f2f6fba728 528,534-543
+  s_1b99a7ec9e9aa9::t_653b5c5c81f8b9 594-615
+  s_1b99a7ec9e9aa9::t_454de763976867 367-370,373-374
+  s_1b99a7ec9e9aa9::t_64e78745725db2 1-20,29,33-41,49-66,68-71
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "5abb0df4a62aaf84e128d5af8c5b70c0ded94362",
+  "prompts": {},
+  "sessions": {
+    "s_1b99a7ec9e9aa9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5025e0d8-1d1b-4f97-8c52-eec971a58fbd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <zkowkmdx@sharklasers.com>"
+    }
+  }
+}
