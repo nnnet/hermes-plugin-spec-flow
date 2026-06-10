@@ -77,12 +77,23 @@ def _default_decomposer(ctx: dict) -> None:
         "running the spec-flow-decompose skill)")
 
 
+def _default_approver(ctx: dict) -> dict:
+    """Autonomous human-in-the-loop default: approve, but record honestly that
+    no human was attached. Inject a real approver (a human / Hermes HITL
+    worker) via ``agents={"approver": ...}`` to get genuine sign-off — and to
+    be able to REJECT a checkpoint, which sends the node back for rework."""
+    return {"approved": True,
+            "reason": "autonomous default approval — no human attached"}
+
+
 # Autonomous default agents per role. Spec/scaffold/verify are fully handled by
 # the deterministic engine; the 'implementer' is consulted at depth 'execute',
 # the 'decomposer' whenever a node arrives without metrics (i.e. the case did
-# not predefine the tree). Override any via the run's ``agents=`` parameter.
+# not predefine the tree), the 'approver' at every human-in-the-loop checkpoint.
+# Override any via the run's ``agents=`` parameter.
 DEFAULT_AGENTS = {"implementer": _default_implementer,
-                  "decomposer": _default_decomposer}
+                  "decomposer": _default_decomposer,
+                  "approver": _default_approver}
 
 # Hard ceiling on decomposer-agent calls per run (runaway-recursion guard).
 MAX_DECOMPOSE_CALLS = 40
@@ -94,7 +105,10 @@ PROFILE_ICON = {
     "spec-reviewer": "⚖️",
     "implementer": "🛠️",
     "verifier": "✅",
+    "approver": "🧑‍⚖️",
 }
+# blast radius (children re-derived) above which a respec needs human sign-off
+RESPEC_HITL_BLAST = 3
 # The full surface comes from the gates module, which derives it dynamically
 # from the shipped skills/ and profiles/ folders.
 ALL_SKILLS = set(_gates.ALL_SKILLS)
@@ -451,6 +465,26 @@ class Engine:
         return json.loads(self.tools._handle_research_trigger_check(
             {"reason": reason, "completed_tasks": completed, "test_errors": errors}))
 
+    def _hitl(self, kind: str, task: str, detail: str) -> bool:
+        """Human-in-the-loop checkpoint. Consults the injected ``approver``
+        agent (autonomous default approves with a note); emits a `hitl` gate
+        event with the verdict. On rejection records a `hitl-reject` loop so the
+        run shows where a human sent work back. Returns True iff approved."""
+        self.gate_calls["hitl"] = self.gate_calls.get("hitl", 0) + 1
+        out = self.agents["approver"]({"kind": kind, "task": task, "detail": detail,
+                                       "constitution": self._constitution,
+                                       "policy": getattr(self, "_policy_cfg", {})}) or {}
+        approved = bool(out.get("approved", True))
+        reason = out.get("reason", "")
+        self.emit("hitl", "approver", "spec-reviewer", task,
+                  f"HITL {kind} checkpoint → {'approved' if approved else 'REJECTED'}",
+                  reason or detail, "hitl", "approved" if approved else "rejected",
+                  level=L_MILESTONE)
+        if not approved:
+            self.loops.append({"type": "hitl-reject", "kind": kind,
+                               "task": task, "detail": reason or detail})
+        return approved
+
     # -- run ---------------------------------------------------------------
     def run(self, project: dict) -> RunResult:
         try:
@@ -493,6 +527,20 @@ class Engine:
                   "EARS requirements frozen", project.get("target", ""))
         self.workspace.constitution(project.get("constitution", []), project.get("target", ""))
         self.tasks["L0:req"].status = "done"
+
+        # HITL spec checkpoint — when the constitution puts a human in the loop,
+        # a person signs off the constitution + measurable target BEFORE any
+        # decomposition (human-in-the-loop during spec creation). A rejection
+        # sends requirements back for revision.
+        self._policy_cfg = project.get("policy", {})
+        if self._policy_cfg.get("human_in_loop"):
+            approved = self._hitl("spec", "L0:req",
+                                  "approve constitution & measurable target before decomposition")
+            if not approved:
+                self.emit("requirements", "spec-decomposer", "spec-requirements", "L0:req",
+                          "constitution revised after HITL rejection",
+                          "target & rules tightened", level=L_MILESTONE)
+                self.tasks["L0:req"].version += 1
 
         # the tree either comes predefined with the case OR is built from the
         # goal by the decomposer agent, node by node (gated at every level)
@@ -634,6 +682,19 @@ class Engine:
             self._completed += 1
         else:
             self._leaf_pipeline(node, contract_ctx, depth, parent)
+
+        # node-level HITL — a node may declare a human checkpoint (e.g. payouts
+        # above the unattended cap, outreach without prior consent). A rejection
+        # sends the node back for rework (version bump + re-derive event).
+        hitl = node.get("hitl")
+        if hitl:
+            kind = hitl.get("kind", "node") if isinstance(hitl, dict) else "node"
+            why = hitl.get("reason", "") if isinstance(hitl, dict) else str(hitl)
+            if not self._hitl(kind, nid, why or f"human approval required for {title}"):
+                self.tasks[nid].version += 1
+                self.tasks[nid].runs += 1
+                self.emit("hitl", "implementer", "spec-implement", nid,
+                          "rework after HITL rejection", why, level=L_MILESTONE)
 
         self.tasks[nid].status = "done"
         self._completed += 1
@@ -949,12 +1010,18 @@ class Engine:
         if target in self.tasks:
             self.tasks[target].version += 1
             self.tasks[target].runs += 1
-        for tid, t in list(self.tasks.items()):
-            if t.parents and target in t.parents and t.kind in {"impl", "decompose"}:
-                t.version += 1
-                t.runs += 1
-                self.emit("revision", "implementer", "spec-implement", tid,
-                          "re-derive under superseded spec", f"{target} v2")
+        affected = [tid for tid, t in list(self.tasks.items())
+                    if t.parents and target in t.parents and t.kind in {"impl", "decompose"}]
+        # large blast radius -> human sign-off (anti-thrash confirmation)
+        if len(affected) >= RESPEC_HITL_BLAST and getattr(self, "_policy_cfg", {}).get("human_in_loop"):
+            self._hitl("respec", target,
+                       f"respec invalidates {len(affected)} downstream nodes — confirm re-derive")
+        for tid in affected:
+            t = self.tasks[tid]
+            t.version += 1
+            t.runs += 1
+            self.emit("revision", "implementer", "spec-implement", tid,
+                      "re-derive under superseded spec", f"{target} v2")
 
 
 # ---------------------------------------------------------------------------

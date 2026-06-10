@@ -1,0 +1,7 @@
+name: approver
+description: >
+  Human-in-the-loop (HITL) approval role. Gates the moments the constitution
+  requires a human: spend above the unattended cap (payouts), outreach without
+  prior consent, and a respec with a large blast radius. Also signs off the
+  spec checkpoint (constitution + measurable target) before decomposition.
+  Returns approve/reject with a reason; a reject sends the node back for rework.

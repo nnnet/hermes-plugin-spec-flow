@@ -121,6 +121,9 @@ tree:
         - id: payouts
           title: "Seller payouts (human-gated)"
           clarify: {decision: "Payout rail: SEPA batch vs PSP transfer API?", resolution: "PSP transfer API, batched daily, human approval > $50"}
+          # HITL: real money leaves the system above the unattended cap -> a
+          # human must approve before this node ships (constitution rule).
+          hitl: {kind: spend, reason: "payouts above the $50/action cap need human approval"}
           metrics: {modules: 1, tasks: 4, interfaces: 1, estimated_loc: 95, open_decisions: 0, single_concern: true, testable_criteria: true}
     - id: notifications
       title: "Notifications (opt-in only)"
@@ -157,10 +160,10 @@ oracle:
   # contract node (orders), and the human-gated payouts node.
   anchor_nodes: [market_research, architecture, orders, payouts]
   # both drift classifications and the revision lane must all fire here.
-  expected_episodes: [spike, clarify, contract, drift_respec, drift_codefix, review_critique, revision, revision_internal, revision_level_return]
+  expected_episodes: [spike, clarify, contract, drift_respec, drift_codefix, review_critique, revision, revision_internal, revision_level_return, hitl]
   expected_loops: {clarify: 2, review_fail: 2, drift_respec: 1, drift_codefix: 1, revision_respec: 2}
   # the full-surface case must exercise ALL skills and ALL profiles.
-  coverage: {min_skills: 9, min_profiles: 6}
+  coverage: {min_skills: 9, min_profiles: 7}
   research_before_impl: true
 
 # ---- product acceptance (depth=product) -------------------------------------

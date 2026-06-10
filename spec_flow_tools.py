@@ -1250,6 +1250,10 @@ def _oracle_episode_present(run_result, episode: str) -> bool:
         want = episode.split("revision_", 1)[1]   # internal | level_return
         return any(l.get("type") == "revision-respec" and l.get("method") == want
                    for l in run_result.loops)
+    if episode == "hitl":          # any human-in-the-loop checkpoint happened
+        return any(e.gate == "hitl" for e in run_result.events)
+    if episode == "hitl_reject":   # a human sent work back at least once
+        return any(l.get("type") == "hitl-reject" for l in run_result.loops)
     loop_type = _ORACLE_EPISODE_TO_LOOP.get(episode)
     if loop_type is not None:
         return any(l.get("type") == loop_type for l in run_result.loops)

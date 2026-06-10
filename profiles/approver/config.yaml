@@ -1,0 +1,9 @@
+# approver — human-in-the-loop role. Reads context and approves/rejects a
+# checkpoint; cannot decompose, code or freeze contracts itself.
+tools:
+  cli:
+    enabled: [kanban, file]
+    disabled: [terminal, code_execution, delegation, web, browser]
+skills:
+  external_dirs:
+    - ~/.hermes/shared-skills
