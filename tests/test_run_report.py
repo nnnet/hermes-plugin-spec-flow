@@ -89,6 +89,11 @@ class TestFlawedRunCaught:
         rules = {f["rule"] for f in plugin.tools.audit_methodology(flawed_trace)}
         assert "R6-expanded-past-open-decision" in rules
 
+    def test_impl_before_research_warning(self, plugin, flawed_trace):
+        # R9: the flawed run implements without any upfront research
+        rules = {f["rule"] for f in plugin.tools.audit_methodology(flawed_trace)}
+        assert "R9-impl-before-research" in rules
+
 
 class TestRunReportTool:
     def test_tool_registered(self, plugin):

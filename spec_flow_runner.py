@@ -78,11 +78,10 @@ PROFILE_ICON = {
     "implementer": "🛠️",
     "verifier": "✅",
 }
-ALL_SKILLS = {
-    "spec-requirements", "spec-flow-decompose", "spec-contract", "spec-reviewer",
-    "spec-implement", "spec-integrate", "spec-research", "drift-gate", "respec-gate",
-}
-ALL_PROFILES = set(PROFILE_ICON)
+# The full surface comes from the gates module, which derives it dynamically
+# from the shipped skills/ and profiles/ folders.
+ALL_SKILLS = set(_gates.ALL_SKILLS)
+ALL_PROFILES = set(_gates.ALL_PROFILES)
 
 
 @dataclass
@@ -126,15 +125,29 @@ class RunResult:
     workspace_root: Optional[str] = None
 
 
-def event_line(e: Event) -> str:
+def event_line(e: Event, widths: Optional[dict] = None) -> str:
     """Single human line for an event — shared by the rendered log and the
-    text disk sink."""
+    text disk sink. ``widths`` (profile/skill/task) pads the columns so a
+    multi-line log reads as an aligned table."""
     icon = PROFILE_ICON.get(e.profile, "·")
-    head = f"t{e.tick:>2} │ {icon} {e.profile} · {e.skill} · [{e.task}] {e.action}"
+    w = widths or {}
+    prof = f"{e.profile:<{w.get('profile', 0)}}"
+    skill = f"{e.skill:<{w.get('skill', 0)}}"
+    task = f"{'[' + e.task + ']':<{w.get('task', 0)}}"
+    head = f"t{e.tick:>3} │ {icon} {prof} · {skill} · {task} {e.action}"
     tail = f" → {e.verdict}" if e.verdict else ""
     if e.detail:
         tail += f"  «{e.detail}»"
     return head + tail
+
+
+def _column_widths(events) -> dict:
+    """Max width per aligned column over the events that will be shown."""
+    return {
+        "profile": max((len(e.profile) for e in events), default=0),
+        "skill": max((len(e.skill) for e in events), default=0),
+        "task": max((len(e.task) + 2 for e in events), default=0),
+    }
 
 
 class LogSink:
@@ -739,15 +752,15 @@ def render_log(res: RunResult, level: int = None) -> str:
     """Render the execution log, showing events with ``event.level <= level``.
     Defaults to the run's verbosity (env SPEC_FLOW_RUN_VERBOSITY, else L_STEP)."""
     level = level if level is not None else getattr(res, "verbosity", DEFAULT_VERBOSITY)
+    shown = [e for e in res.events if e.level <= level]
+    widths = _column_widths(shown)
     lines = ["```", f"TICK │ ACTOR · SKILL · [TASK] action → result   (verbosity={level})"]
     last_phase = None
-    for e in res.events:
-        if e.level > level:
-            continue
+    for e in shown:
         if e.phase != last_phase:
             lines.append(f"── {e.phase} ──")
             last_phase = e.phase
-        lines.append(event_line(e))
+        lines.append(event_line(e, widths))
     lines.append("```")
     return "\n".join(lines)
 
@@ -786,6 +799,60 @@ def render_tree(res: RunResult) -> str:
     walk(proj["tree"], "", True, True)
     out.append("```")
     return "\n".join(out)
+
+
+def render_mermaid(res: RunResult) -> str:
+    """The same goal/task tree as a mermaid flowchart — episode tags inside the
+    node label, episode kind as a color class."""
+    proj = res.project
+    lines = ["```mermaid", "flowchart TD"]
+    classed: list[tuple[str, str]] = []
+
+    def esc(s: str) -> str:
+        return str(s).replace('"', "'")
+
+    def walk(node, parent=None):
+        nid = node["id"]
+        t = res.tasks.get(nid)
+        ver = f" v{t.version}" if t and t.version > 1 else ""
+        runs = f" ↻{t.runs}" if t and t.runs else ""
+        tags = []
+        if node.get("clarify"):
+            tags.append("clarify")
+        if node.get("spike"):
+            tags.append("spike")
+        if node.get("contract"):
+            tags.append("contract")
+        if node.get("drift"):
+            tags.append("drift→codefix" if node["drift"].get("classify") == "code_wrong"
+                        else "drift→respec")
+        if node.get("review_fails"):
+            tags.append(f"review↻{node['review_fails']}")
+        tagstr = ("<br/>⟨" + "⟩ ⟨".join(tags) + "⟩") if tags else ""
+        lines.append(f'    {nid}["{esc(node.get("title", nid))}{ver}{runs}{tagstr}"]')
+        if parent:
+            lines.append(f"    {parent} --> {nid}")
+        if node.get("drift"):
+            classed.append((nid, "drift"))
+        elif node.get("contract"):
+            classed.append((nid, "contract"))
+        elif node.get("spike"):
+            classed.append((nid, "research"))
+        elif node.get("clarify"):
+            classed.append((nid, "clarify"))
+        for c in node.get("children", []):
+            walk(c, nid)
+
+    walk(proj["tree"])
+    lines += [
+        "    classDef research fill:#0b525b,stroke:#118ab2,color:#fff",
+        "    classDef contract fill:#3a0ca3,stroke:#7209b7,color:#fff",
+        "    classDef drift fill:#9d0208,stroke:#dc2f02,color:#fff",
+        "    classDef clarify fill:#9c6644,stroke:#e09f3e,color:#fff",
+    ]
+    lines += [f"    class {nid} {cls}" for nid, cls in classed]
+    lines.append("```")
+    return "\n".join(lines)
 
 
 def render_summary(res: RunResult) -> str:
@@ -851,6 +918,12 @@ def render_report(res: RunResult, level: int = None) -> str:
         "",
         "## Дерево задач (с версиями и повторными прогонами ↻)",
         render_tree(res),
+        "",
+        "## Дерево задач — граф (mermaid)",
+        "",
+        "> Цвет: 🔵 ресёрч/spike · 🟣 контракт · 🔴 эпизод дрейфа · 🟠 clarify.",
+        "",
+        render_mermaid(res),
         "",
         "## Журнал исполнения",
         render_log(res, level),

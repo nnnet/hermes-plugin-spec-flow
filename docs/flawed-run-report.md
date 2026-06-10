@@ -2,7 +2,7 @@
 
 > Источник: трейс из 8 событий. Скиллы: 3 · профили: 3 · задач: 6 · завершён: ✅.
 > Ревизия: spike (уровень 1) — · непрерывная ревизия (уровень 2) —.
-> **Методологический вердикт: ❌ есть ошибки** (6 error, 1 прочих).
+> **Методологический вердикт: ❌ есть ошибки** (6 error, 2 прочих).
 
 ## Методологический аудит (для ревизионера)
 
@@ -13,10 +13,11 @@
 | ❌ error | `R1-policy-gate` | `L0` | no passing policy_gate — constitution / measurable-target check missing | run policy_gate on the goal before decomposing |
 | ❌ error | `R2-leaf-before-impl` | `subsys_leaf:impl` | implemented 'subsys_leaf' without a leaf_check=leaf verdict | gate every node with leaf_check; only leaves get an impl task |
 | ❌ error | `R3-silent-drift` | `svc:impl` | contract_check reported drift but no drift-gate followed | route every drift through drift-gate; never edit code silently |
-| ❌ error | `R4-impl-not-reviewed` | `svc:impl` | 'svc' implemented without a passing spec-reviewer impl-review | add a review node downstream of every impl; require PASS |
 | ❌ error | `R4-impl-not-reviewed` | `subsys_leaf:impl` | 'subsys_leaf' implemented without a passing spec-reviewer impl-review | add a review node downstream of every impl; require PASS |
+| ❌ error | `R4-impl-not-reviewed` | `svc:impl` | 'svc' implemented without a passing spec-reviewer impl-review | add a review node downstream of every impl; require PASS |
 | ❌ error | `R5-branch-no-integrate` | `subsys` | branch node has no Integrate & verify node | create an integrate node whose parents are the branch's children |
 | 🟡 warn | `R6-expanded-past-open-decision` | `subsys` | level expanded while a decision was still open (feedback loop skipped) | kanban_block on the open decision; expand only after it is resolved |
+| 🟡 warn | `R9-impl-before-research` | `L1` | implementation started before any research (analogs / build-vs-reuse / architecture & NFRs) | put a research/ADR node (analogs, differentiation, architecture, DB, load, security) before feature subtrees |
 
 ## Footprint — что делалось по шагам (детализация ≤ 2)
 

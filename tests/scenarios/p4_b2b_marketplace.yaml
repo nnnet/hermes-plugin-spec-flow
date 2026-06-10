@@ -51,6 +51,16 @@ tree:
   title: "B2B refurbished-gear marketplace"
   metrics: {modules: 7, tasks: 31, interfaces: 6, estimated_loc: 5200, open_decisions: 0, single_concern: false, testable_criteria: true}
   children:
+    # upfront research FIRST: analogs/differentiation, then architecture/NFRs —
+    # only then feature subtrees (audit rule R9 enforces this order)
+    - id: market_research
+      title: "Analogs & differentiation (build vs reuse)"
+      spike: {question: "Existing B2B refurb marketplaces — reuse/white-label or build own? What is our unique value?", recommendation: "Build a thin own marketplace; differentiation = certified condition-grading + human-gated payouts; reuse PSP and a managed search engine"}
+      metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 40, open_decisions: 0, single_concern: true, testable_criteria: true}
+    - id: architecture
+      title: "Architecture & NFR baseline (DB, load, security)"
+      clarify: {decision: "Relational vs document DB? Load target? Payout threat model?", resolution: "Postgres + outbox events; 100 rps, p95 500ms (from constitution); payouts as isolated least-privilege service"}
+      metrics: {modules: 1, tasks: 4, interfaces: 1, estimated_loc: 60, open_decisions: 0, single_concern: true, testable_criteria: true}
     - id: auth
       title: "Accounts & access (buyers, sellers, ops)"
       clarify: {decision: "Own auth vs delegated OIDC for B2B SSO?", resolution: "Delegated OIDC + service accounts for ops"}

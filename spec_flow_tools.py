@@ -666,13 +666,25 @@ _PROFILE_ICON = {
     "spec-reviewer": "⚖️", "implementer": "🛠️", "verifier": "✅",
 }
 
-# The plugin's full surface — what a run CAN use. The report counts, from the
-# log alone, how many events each one actually produced.
-ALL_SKILLS = {
+# The plugin's full surface — what a run CAN use. Built DYNAMICALLY from the
+# real shipped folders (skills/<name>/, profiles/<name>/), so adding or
+# removing a skill/profile updates coverage everywhere; the literal sets are
+# only a fallback for a stripped installation.
+def _shipped(sub: str, fallback: set) -> set:
+    base = os.path.join(os.path.dirname(os.path.abspath(__file__)), sub)
+    try:
+        found = {n for n in os.listdir(base)
+                 if os.path.isdir(os.path.join(base, n))}
+    except OSError:
+        found = set()
+    return found or set(fallback)
+
+
+ALL_SKILLS = _shipped("skills", {
     "spec-requirements", "spec-flow-decompose", "spec-contract", "spec-reviewer",
     "spec-implement", "spec-integrate", "spec-research", "drift-gate", "respec-gate",
-}
-ALL_PROFILES = set(_PROFILE_ICON)
+})
+ALL_PROFILES = _shipped("profiles", set(_PROFILE_ICON))
 
 
 def _ev(e: dict, k: str) -> Any:
@@ -794,6 +806,17 @@ def audit_methodology(events: list[dict]) -> list[dict]:
         add("R8-not-complete", "info", "L0",
             "no L0 integrate-complete event in the trace",
             "run did not reach project completion (may be a partial trace)")
+
+    # R9 — upfront research: an analogs/architecture spike must precede the
+    # first implementation (build-vs-reuse and NFRs are decided before code)
+    first_research = min((int(_ev(e, "tick") or 0) for e in events
+                          if _ev(e, "skill") == "spec-research"), default=None)
+    first_impl = min((int(_ev(e, "tick") or 0) for e in events
+                      if _ev(e, "skill") == "spec-implement"), default=None)
+    if first_impl is not None and (first_research is None or first_research > first_impl):
+        add("R9-impl-before-research", "warn", "L1",
+            "implementation started before any research (analogs / build-vs-reuse / architecture & NFRs)",
+            "put a research/ADR node (analogs, differentiation, architecture, DB, load, security) before feature subtrees")
 
     return f
 

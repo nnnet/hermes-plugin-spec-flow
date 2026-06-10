@@ -38,6 +38,27 @@ def test_scenario_pool_has_tree_cases():
     assert len(TREE_CASES) >= 4, "every scenario should carry a full-run tree"
 
 
+def test_surface_is_built_from_shipped_folders():
+    # ALL_SKILLS / ALL_PROFILES are derived from the real skills/ and profiles/
+    # folders — adding or removing one updates the coverage everywhere
+    plugin_dir = pathlib.Path(eng.__file__).resolve()
+    while plugin_dir.name != "spec-flow" and plugin_dir.parent != plugin_dir:
+        plugin_dir = plugin_dir.parent
+    skills_dirs = {p.name for p in (plugin_dir / "skills").iterdir() if p.is_dir()}
+    profile_dirs = {p.name for p in (plugin_dir / "profiles").iterdir() if p.is_dir()}
+    assert eng.ALL_SKILLS == skills_dirs
+    assert eng.ALL_PROFILES == profile_dirs
+
+
+def test_research_precedes_implementation_in_p4(plugin, tmp_path, monkeypatch):
+    # the audit's R9 rule: analogs/architecture research before any code
+    p4 = [p for p in TREE_CASES if "p4" in p.stem][0]
+    res = _run(plugin, tmp_path, monkeypatch, p4)
+    first_research = min(e.tick for e in res.events if e.skill == "spec-research")
+    first_impl = min(e.tick for e in res.events if e.skill == "spec-implement")
+    assert first_research < first_impl
+
+
 def test_p4_alone_covers_all_skills_and_profiles(plugin, tmp_path, monkeypatch):
     p4 = [p for p in TREE_CASES if "p4" in p.stem]
     assert p4, "the full-exercise case p4 is missing"

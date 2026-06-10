@@ -98,8 +98,9 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools) -> dict:
                           tools=tools, agents=agents,
                           contracts_dir=str(eng.CONTRACTS), sink=sink)
 
+    widths = eng._column_widths(res.events)
     (case_dir / "log.txt").write_text(
-        "\n".join(eng.event_line(e) for e in res.events) + "\n", encoding="utf-8")
+        "\n".join(eng.event_line(e, widths) for e in res.events) + "\n", encoding="utf-8")
     # the workflow view: goal/task tree (versions, ↻ re-runs, episode tags) +
     # the execution log + the loops table — where the run cycled and why
     (case_dir / "workflow.md").write_text(
