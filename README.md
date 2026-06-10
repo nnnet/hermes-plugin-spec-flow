@@ -101,18 +101,27 @@ The deterministic engine is fully testable offline: `tools.registry` and
 `hermes` binary.
 
 ```bash
-python3 -m pytest tests/ -q        # 60 tests: unit + battle
-python3 tests/report.py            # human-readable report -> docs/test-report.md
+python3 -m pytest tests/ -q        # 95 tests: unit + battle
+python3 tests/report.py            # human-readable reports -> docs/*.md
 ```
 
 The **battle tests** drive real projects (`tests/projects/*.yaml`) through the
 real `leaf_check`, build the realized kanban DAG and compare its branching
 graph against each project's ground-truth design; `contract_check` runs a real
 OpenAPI-vs-code validator (`tests/harness/openapi_diff.py`) over real fixtures;
-the research lane is replayed over event timelines. See
-[`docs/test-report.md`](docs/test-report.md) for the rendered result (ASCII
-decomposition trees with ✓/✗, a drift table and the lane timeline) and
-[`tests/README.md`](tests/README.md) for details.
+the research lane is replayed over event timelines; and a **full end-to-end
+run** (`tests/test_full_run.py`) drives one project to completion exercising
+**all 9 skills and all 6 profiles**. Rendered reports:
+
+- [`docs/test-report.md`](docs/test-report.md) — decomposition trees, drift
+  table, research timeline;
+- [`docs/business-scenarios-report.md`](docs/business-scenarios-report.md) —
+  the gate catching deliberately-imprecise business goals;
+- [`docs/full-run-report.md`](docs/full-run-report.md) — the full task tree +
+  tick-by-tick execution log (who ran what, every clarify/critique/drift/respec)
+  + coverage.
+
+See [`tests/README.md`](tests/README.md) for details.
 
 ## Version note
 

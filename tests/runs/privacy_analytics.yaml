@@ -1,0 +1,77 @@
+# Full end-to-end run project. Designed so EVERY skill and EVERY profile is
+# exercised and every control-flow path shows up in the log:
+#   * spec-requirements / spec-decomposer    -> root requirements + decomposition
+#   * clarify+block loop                      -> 'consent' node has an open decision
+#   * spec-research (SPIKE)                   -> 'ingest' spikes a storage question
+#   * spec-contract + spec-reviewer spec-gate -> 'api' freezes an OpenAPI contract
+#   * spec-implement (implementer) + TDD      -> every leaf
+#   * contract_check DRIFT -> drift-gate -> respec-gate (contract-first) -> re-run
+#   * spec-reviewer impl-review FAIL -> fix -> re-run loop  (critique)
+#   * spec-integrate (verifier) + parallel contract_check  -> integration nodes
+#   * spec-research (REVISION) -> respec-gate upstream      -> reopen 'consent'
+name: privacy-analytics
+goal: "Self-hosted, consent-based web analytics (no PII, GDPR-compliant)"
+constitution:
+  - "No PII is ever stored; only consented, anonymised events."
+  - "Every tracked site must show a consent banner (opt-in)."
+  - "All processing stays within the operator's own infrastructure."
+target: "ingest >= 1000 events/s; p95 query < 200ms; 0 PII fields in storage."
+# resolved policy at L0 (measurable target, no unattended spend, consented, legal reviewed)
+policy: {measurable_target: true, spend_per_action_usd: 0, human_in_loop: true, involves_outreach: false, consent_obtained: true, legal_exposure: true, legality_reviewed: true}
+
+tree:
+  id: L0
+  title: "Privacy analytics service"
+  metrics: {modules: 5, tasks: 20, interfaces: 3, estimated_loc: 3000, open_decisions: 0, single_concern: false, testable_criteria: true}
+  children:
+    - id: consent
+      title: "Consent & anonymisation (L1 policy)"
+      # open decision -> leaf_check branches AND the worker raises a clarify/block
+      clarify: {decision: "Cookieless hashing vs signed opt-in token?", resolution: "Cookieless rotating daily salt"}
+      metrics: {modules: 2, tasks: 4, interfaces: 1, estimated_loc: 150, open_decisions: 1, single_concern: false, testable_criteria: true}
+      children:
+        - id: consent_banner
+          title: "Consent banner widget"
+          metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 70, open_decisions: 0, single_concern: true, testable_criteria: true}
+        - id: anonymiser
+          title: "Event anonymiser (daily salt)"
+          metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 80, open_decisions: 0, single_concern: true, testable_criteria: true}
+    - id: ingest
+      title: "Event ingestion"
+      spike: {question: "Batch vs streaming ingestion for 1k ev/s?", recommendation: "Streaming with bounded backpressure queue"}
+      metrics: {modules: 1, tasks: 4, interfaces: 1, estimated_loc: 95, open_decisions: 0, single_concern: true, testable_criteria: true}
+    - id: storage
+      title: "Time-series storage"
+      metrics: {modules: 2, tasks: 6, interfaces: 1, estimated_loc: 240, open_decisions: 0, single_concern: false, testable_criteria: true}
+      children:
+        - id: schema
+          title: "Rollup schema + migrations"
+          metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 80, open_decisions: 0, single_concern: true, testable_criteria: true}
+        - id: retention
+          title: "Retention + purge job"
+          metrics: {modules: 1, tasks: 2, interfaces: 1, estimated_loc: 60, open_decisions: 0, single_concern: true, testable_criteria: true}
+    - id: api
+      title: "Query API"
+      contract: {artifact: query.openapi.yaml, fixed: query_fixed.openapi.yaml, code_drift: code_query_drift.json}
+      metrics: {modules: 2, tasks: 7, interfaces: 2, estimated_loc: 320, open_decisions: 0, single_concern: false, testable_criteria: true}
+      children:
+        - id: ep_query
+          title: "GET /query"
+          # drift episode: code returns count as string, contract says integer
+          drift: {classify: contract_wrong}
+          review_fails: 1
+          metrics: {modules: 1, tasks: 4, interfaces: 1, estimated_loc: 90, open_decisions: 0, single_concern: true, testable_criteria: true}
+        - id: ep_export
+          title: "GET /export"
+          metrics: {modules: 1, tasks: 3, interfaces: 1, estimated_loc: 75, open_decisions: 0, single_concern: true, testable_criteria: true}
+    - id: dashboard
+      title: "Operator dashboard"
+      metrics: {modules: 1, tasks: 4, interfaces: 1, estimated_loc: 95, open_decisions: 0, single_concern: true, testable_criteria: true}
+
+# Continuous research lane fires after decomposition returns up a level and
+# surfaces an upstream-impacting finding -> respec-gate reopens 'consent'.
+revision:
+  trigger: on_level_return
+  finding: "New ePrivacy guidance: implied consent insufficient, explicit per-purpose opt-in required."
+  invalidates: consent
+  effect: "Version-bump consent spec (supersedes v1), reopen its subtree, re-derive only affected leaves."

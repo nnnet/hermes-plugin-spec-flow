@@ -1,0 +1,1 @@
+{"endpoints": {"GET /query": {"series": "string", "count": "string"}}}
