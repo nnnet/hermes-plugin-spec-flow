@@ -95,6 +95,11 @@ python3 tests/run_report.py tests/runs/flawed_run.jsonl   # demo: audit catches 
 python3 tests/run_report.py <trace> --level 1 -o out.md
 ```
 
+`tests/report.py` writes two run reports (footprints as a markdown table +
+audit): `docs/full-run-report.md` (the real/clean run → audit green) and
+`docs/flawed-run-report.md` (the deliberately-broken sample → audit lists the
+violations). The audit checks the **run**, not the plugin code.
+
 In Hermes it is a single tool call: `run_report(trace_path=...)`. The audit
 checks invariants R1–R8 (policy gate ran, no impl without a leaf gate, no silent
 contract drift, every impl reviewed, every branch integrated, open decisions

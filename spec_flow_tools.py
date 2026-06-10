@@ -796,23 +796,44 @@ def summarize_trace(events: list[dict]) -> dict[str, Any]:
     }
 
 
+_PHASE_RU = {
+    "requirements": "Требования", "decompose": "Декомпозиция", "research": "Ресёрч",
+    "contract": "Контракт", "implement": "Реализация", "drift": "Дрейф",
+    "respec": "Respec", "review": "Ревью", "integrate": "Интеграция",
+    "revision": "Ревизия",
+}
+_VERDICT_ICON = {
+    "pass": "✅", "ok": "✅", "PASS": "✅", "leaf": "🍃", "branch": "🌿",
+    "drift": "⚠️", "FAIL": "❌", "block": "⛔", "clarify": "🟡", "trigger": "🔬",
+}
+
+
+def _md(s: Any) -> str:
+    """Make a value safe for a markdown table cell."""
+    return str(s).replace("|", "\\|").replace("\n", " ").strip()
+
+
 def render_footprints(events: list[dict], level: int = 2) -> str:
-    lines = ["```", "TICK │ ACTOR · SKILL · [TASK] action → result"]
-    last = None
+    """Readable markdown table of the run — one row per step, grouped by phase."""
+    rows = [
+        "| # | Фаза | Кто (профиль · скилл) | Задача | Действие | Итог |",
+        "|--:|---|---|---|---|---|",
+    ]
     for e in events:
         if int(_ev(e, "level") or 2) > level:
             continue
-        ph = _ev(e, "phase")
-        if ph != last:
-            lines.append(f"── {ph} ──")
-            last = ph
         icon = _PROFILE_ICON.get(_ev(e, "profile"), "·")
-        head = f"t{int(_ev(e,'tick') or 0):>2} │ {icon} {_ev(e,'profile')} · {_ev(e,'skill')} · [{_ev(e,'task')}] {_ev(e,'action')}"
+        who = f"{icon} {_ev(e, 'profile')} · `{_ev(e, 'skill')}`"
+        ph = _PHASE_RU.get(_ev(e, "phase"), _ev(e, "phase"))
         v, d = _ev(e, "verdict"), _ev(e, "detail")
-        tail = (f" → {v}" if v else "") + (f"  «{d}»" if d else "")
-        lines.append(head + tail)
-    lines.append("```")
-    return "\n".join(lines)
+        result = f"{_VERDICT_ICON.get(v, '')} {v}".strip()
+        if d:
+            result = (result + " — " if result else "") + _md(d)
+        rows.append(
+            f"| {int(_ev(e,'tick') or 0)} | {ph} | {who} | `{_md(_ev(e,'task'))}` "
+            f"| {_md(_ev(e,'action'))} | {result} |"
+        )
+    return "\n".join(rows)
 
 
 _SEV_ICON = {"error": "❌", "warn": "🟡", "info": "ℹ️"}
@@ -835,16 +856,22 @@ def build_run_report(events: list[dict], level: int = 2, title: str = "spec-flow
                f"({len(errors)} error, {len(findings) - len(errors)} прочих).")
     out.append("")
     out.append("## Методологический аудит (для ревизионера)")
+    out.append("")
+    out.append("> Аудит проверяет **этот прогон** (его лог) на соответствие методологии "
+               "spec-flow — это **не баги кода плагина**. «Зелено» = прогон шёл по методу; "
+               "находки = где метод нарушен *в этом прогоне*, и как починить **процесс** "
+               "(добавить пропущенный гейт, провести дрейф через drift-gate и т.п.).")
+    out.append("")
     if findings:
-        out.append("| | Правило | Где | Почему | Как исправить |")
+        out.append("| Уровень | Правило | Где (задача) | Что не так | Как починить прогон |")
         out.append("|---|---|---|---|---|")
         for x in findings:
             out.append(f"| {_SEV_ICON.get(x['severity'],'')} {x['severity']} | `{x['rule']}` | "
-                       f"`{x['where']}` | {x['why']} | {x['fix']} |")
+                       f"`{_md(x['where'])}` | {_md(x['why'])} | {_md(x['fix'])} |")
     else:
         out.append("_Нарушений методологии не обнаружено: все инварианты соблюдены._")
     out.append("")
-    out.append(f"## Шаги на снегу (детализация ≤ {level})")
+    out.append(f"## Шаги на снегу (что плагин делал по шагам, детализация ≤ {level})")
     out.append(render_footprints(events, level))
     out.append("")
     out.append("## Сводка")

@@ -133,15 +133,25 @@ def main() -> int:
     trace_path = PLUGIN_DIR / "docs" / "full-run-trace.jsonl"
     sink = eng.LogSink(path=str(trace_path), level=eng.L_DETAIL, fmt="jsonl", enabled=True)
     run_res = eng.Engine(tools, sink=sink).run(eng.load_run())
-    # The report is built by the PLUGIN's own log-based function from the trace,
+    # Both reports are built by the PLUGIN's own log-based function from a trace,
     # not by the harness — same as a reviewer calling run_report(trace_path=...).
+    # (1) the real/clean run:
     events = tools._load_trace(str(trace_path))
-    run_report = tools.build_run_report(events, title=run_res.project["name"])
+    run_report = tools.build_run_report(events, title=f"{run_res.project['name']} (реальный прогон)")
     run_path = PLUGIN_DIR / "docs" / "full-run-report.md"
     run_path.write_text(run_report, encoding="utf-8")
 
+    # (2) the deliberately-broken sample run — shows the audit catching errors:
+    flawed_trace = HERE / "runs" / "flawed_run.jsonl"
+    flawed_path = PLUGIN_DIR / "docs" / "flawed-run-report.md"
+    if flawed_trace.exists():
+        fevents = tools._load_trace(str(flawed_trace))
+        flawed_report = tools.build_run_report(fevents, title="flawed-run (пример с ошибками)")
+        flawed_path.write_text(flawed_report, encoding="utf-8")
+
     print(run_report)
-    print(f"\n[reports written to:\n  {out_path}\n  {scn_path}\n  {run_path}\n"
+    print(f"\n[reports written to:\n  {out_path}\n  {scn_path}\n  {run_path} (real/clean run)\n"
+          f"  {flawed_path} (flawed sample run — audit catches errors)\n"
           f"  {trace_path} (raw source events, JSONL)]")
     return 0 if ok else 1
 

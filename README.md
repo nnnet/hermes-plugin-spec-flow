@@ -118,9 +118,13 @@ run** (`tests/test_full_run.py`) drives one project to completion exercising
   table, research timeline;
 - [`docs/business-scenarios-report.md`](docs/business-scenarios-report.md) —
   the gate catching deliberately-imprecise business goals;
-- [`docs/full-run-report.md`](docs/full-run-report.md) — the full task tree +
-  tick-by-tick execution log (who ran what, every clarify/critique/drift/respec)
-  + coverage.
+- [`docs/full-run-report.md`](docs/full-run-report.md) — the real run, built by
+  the plugin's `run_report` from the trace: footprints (markdown table) +
+  methodology audit (green);
+- [`docs/flawed-run-report.md`](docs/flawed-run-report.md) — the same builder on
+  a deliberately-broken sample trace, so the audit's error findings are visible.
+
+The audit checks the **run** (its log), not the plugin code.
 
 See [`tests/README.md`](tests/README.md) for details.
 
