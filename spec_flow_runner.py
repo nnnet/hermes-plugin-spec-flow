@@ -661,9 +661,12 @@ class Engine:
         self.gate_calls["policy_gate"] += 1
         return json.loads(self.tools._handle_policy_gate(dict(policy)))
 
-    def _leaf(self, metrics):
+    def _leaf(self, metrics, atomic=None):
         self.gate_calls["leaf_check"] += 1
-        return json.loads(self.tools._handle_leaf_check(dict(metrics)))
+        args = dict(metrics)
+        if atomic is not None:
+            args["atomic"] = bool(atomic)
+        return json.loads(self.tools._handle_leaf_check(args))
 
     def _contract(self, contract, code):
         # contract_check needs the contract+code files; skip gracefully if no
@@ -867,12 +870,28 @@ class Engine:
             self.tasks[sid].status = "done"
             self._completed += 1
 
-        # the gate: leaf vs branch
-        leaf_out = self._leaf(node["metrics"])
+        # the gate: leaf vs branch. Atomicity is the PRIMARY judgment — an
+        # explicit ``atomic`` field, else inferred from whether the decomposer
+        # proposed children — and leaf_check reconciles it with the thresholds
+        # (the guardrail that prunes over-decomposition / forces under-).
+        if "atomic" in node:
+            atomic_claim = bool(node["atomic"])
+        elif node.get("children"):
+            atomic_claim = False        # proposed a split ⇒ claims not atomic
+        else:
+            atomic_claim = None         # no signal ⇒ pure thresholds
+        leaf_out = self._leaf(node["metrics"], atomic=atomic_claim)
         verdict = leaf_out["verdict"]
         reasons = leaf_out["reasons"]
+        if leaf_out.get("mismatch"):
+            self.loops.append({"type": "decomposition-guardrail",
+                               "task": nid, "detail": leaf_out["mismatch"]})
+        # over-decomposition pruned to a leaf: drop the unvisited proposed
+        # children so the realized tree honestly shows what was built.
+        if verdict == "leaf" and node.get("children"):
+            node.pop("children", None)
         self.emit("decompose", "spec-decomposer", "spec-flow-decompose", nid,
-                  "leaf_check", "; ".join(reasons) or "within all thresholds",
+                  "leaf_check", leaf_out.get("basis", "; ".join(reasons) or "within all thresholds"),
                   "leaf_check", verdict, level=L_MILESTONE)
 
         # lifecycle guard for this node (inline or fsm engine). REQUIREMENTS →

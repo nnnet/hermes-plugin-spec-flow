@@ -182,13 +182,15 @@ LEAF_CHECK_SCHEMA = {
     "function": {
         "name": "leaf_check",
         "description": (
-            "Deterministically classify a decomposition node as a LEAF "
-            "(atomic — emit implementation tasks) or a BRANCH (expand one "
-            "more level). A node is a leaf only when it stays under every "
-            "threshold: modules<=1, tasks<=5, interfaces<=2, estimated "
-            "LOC<=100, has no open decisions, is single-concern (not "
-            "'frontend+backend at once'), and all acceptance criteria are "
-            "testable. Use this instead of judging by eye."
+            "Reconcile a node's ATOMICITY judgment with hard size thresholds. "
+            "The decomposer makes the primary call via `atomic` (is this ONE "
+            "indivisible, single-prompt-solvable unit?); the thresholds are the "
+            "GUARDRAIL — modules<=1, tasks<=5, interfaces<=2, LOC<=100, no open "
+            "decisions, single-concern, testable. The guardrail overrides in "
+            "both directions: a node claimed splittable but already within every "
+            "threshold is pruned to a LEAF (over-decomposition); one claimed "
+            "atomic but over a threshold is forced to BRANCH (under-decomposition). "
+            "Omit `atomic` for pure-threshold behaviour."
         ),
         "parameters": {
             "type": "object",
@@ -200,6 +202,7 @@ LEAF_CHECK_SCHEMA = {
                 "open_decisions": {"type": "integer", "description": "Count of unresolved design decisions; >0 forces branch."},
                 "single_concern": {"type": "boolean", "description": "True if the node is one concern (e.g. only DB, only API). 'frontend+backend together' is False."},
                 "testable_criteria": {"type": "boolean", "description": "True if every acceptance criterion is mechanically testable."},
+                "atomic": {"type": "boolean", "description": "The decomposer's primary judgment: True if this is ONE indivisible, single-prompt-solvable unit of work (a leaf). Reconciled with the thresholds; omit for pure-threshold behaviour."},
             },
             "required": ["modules", "tasks", "interfaces", "estimated_loc"],
         },
@@ -232,10 +235,40 @@ def _handle_leaf_check(args: dict[str, Any], **_: Any) -> str:
     if not testable_criteria:
         reasons.append("acceptance criteria not all testable")
 
-    verdict = "leaf" if not reasons else "branch"
+    threshold_verdict = "leaf" if not reasons else "branch"
+
+    # Atomicity-first reconciliation (Stage 4): the decomposer makes the PRIMARY
+    # judgment — is this ONE indivisible unit of work? — and the hard thresholds
+    # are the GUARDRAIL that can override it in BOTH directions. ``atomic`` is
+    # the decomposer's claim (True = leaf). Absent ⇒ pure-threshold behaviour
+    # (back-compat). See README "Principle" and docs/e2e-analysis.md (Finding A).
+    atomic = args.get("atomic")
+    verdict = threshold_verdict
+    basis = "thresholds"
+    mismatch = None
+    if atomic is not None:
+        claim = "leaf" if bool(atomic) else "branch"
+        if claim == threshold_verdict:
+            basis = "atomicity+thresholds agree"
+        elif claim == "branch" and threshold_verdict == "leaf":
+            # over-decomposition: the node is already atomic by every threshold
+            # but the decomposer proposed a split — the guardrail prunes it.
+            verdict = "leaf"
+            basis = "guardrail override → leaf: already atomic (proposed split pruned)"
+            mismatch = "over-decomposition"
+        else:  # claim == "leaf" and threshold_verdict == "branch"
+            # under-decomposition: claimed atomic but exceeds a hard threshold —
+            # thresholds win, the node must still be split.
+            verdict = "branch"
+            basis = "guardrail override → branch: too big/coupled to be atomic"
+            mismatch = "under-decomposition"
+
     payload = {
         "verdict": verdict,
         "reasons": reasons,
+        "basis": basis,
+        "atomic_claim": (None if atomic is None else bool(atomic)),
+        "mismatch": mismatch,
         "thresholds": {
             "max_modules": MAX_MODULES,
             "max_tasks": MAX_TASKS,

@@ -28,7 +28,7 @@ spec + the parent handoff — context stays clean.
 
 | Tool | Role |
 |---|---|
-| `leaf_check` | leaf vs branch by hard levels (modules≤1, tasks≤5, interfaces≤2, LOC≤100, no open decisions, single-concern, testable) |
+| `leaf_check` | leaf vs branch — atomicity-first: the decomposer's `atomic` judgment (one indivisible, single-prompt-solvable unit) reconciled with hard thresholds (modules≤1, tasks≤5, interfaces≤2, LOC≤100, no open decisions, single-concern, testable). The guardrail overrides both ways: prunes an over-decomposed node to a leaf, forces an under-decomposed one to branch |
 | `contract_check` | code↔contract drift; OpenAPI default, Zod/Protobuf, parallel mode; strict = unavailable validator also fails |
 | `research_trigger_check` | fire the revision lane: `every_n_tasks` / `m_test_errors` / `on_level_return` / `cron`, plus product-level signals — acceptance failures (`k_acceptance_errors`), degraded metrics (`j_metric_regressions`), environment-rule change (`on_env_rule_change`); with cooldown |
 | `policy_gate` | deterministic constitution check — measurable target, unattended spend cap, outreach consent, legality review; verdict `pass`/`clarify`/`block`. Catches a vague/risky spec before it is decomposed |
@@ -74,6 +74,15 @@ research: Hermes MCP servers) is plugged in via adapters, never rewritten. Our
 own code is only what nobody else has: recursive depth gates, drift→respec, the
 two revision lanes (internal + on-level-return), role isolation, and re-deriving
 only the affected subtree over the DAG.
+
+The branching rule is **atomicity-first with a threshold guardrail**: the
+decomposer judges atomicity semantically (reusing the named criteria —
+atomicity-as-executability, single-prompt solvability — not reinventing them),
+and `leaf_check` reconciles that claim against hard thresholds, overriding in
+both directions to catch over- and under-decomposition. No third-party library
+does this reconciliation drop-in (HTN planners need hand-written method
+libraries; agent frameworks leave the atomicity test to your prompt), so the
+guardrail is in-house — but the *criteria* it enforces are the established ones.
 
 ## Four echelons
 

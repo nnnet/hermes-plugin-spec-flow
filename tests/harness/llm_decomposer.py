@@ -27,25 +27,37 @@ Constitution (non-negotiable): {constitution}
 
 Current node: "{title}" (id: {id}, depth: {depth}, parent: {parent})
 
-Task: estimate THIS node's size and, if it is too big to be one atomic work
-package, propose its children — ONE level down only.
+Task: FIRST judge atomicity, THEN size the node.
 
-Rules:
+Step 1 — atomicity (the PRIMARY decision). Ask: is this ONE indivisible unit of
+work — a single concern that a competent implementer could solve in a SINGLE
+focused session / one prompt, with no unresolved design decision? Set
+"atomic": true if yes, false if it genuinely needs splitting. (Criteria:
+atomicity-as-executability + single-prompt solvability. Do NOT over-split — a
+node that is already one small concern is atomic even if you could imagine
+sub-steps.)
+
+Step 2 — metrics (the GUARDRAIL the engine checks your claim against):
 - metrics keys (exact): modules, tasks, interfaces, estimated_loc,
   open_decisions, single_concern (bool), testable_criteria (bool)
-- a node is atomic (leaf) only if: modules <= 1, tasks <= 5, interfaces <= 2,
+- atomic nodes satisfy: modules <= 1, tasks <= 5, interfaces <= 2,
   estimated_loc <= 100, open_decisions == 0, single_concern, testable_criteria
-- if the node is bigger -> give it honest big metrics AND 2-4 children
+- if atomic=false, give honest big metrics AND 2-4 children
   (id: snake_case slug, title: short English); children get NO metrics
+
+Rules:
+- keep "atomic" and the metrics CONSISTENT: atomic=true ⇒ metrics within the
+  leaf thresholds and NO children; atomic=false ⇒ at least one threshold
+  exceeded and 2-4 children
 - the FIRST child of the root must be upfront research (analogs,
   build-vs-reuse, differentiation), the second an architecture/NFR baseline
-- be FRUGAL: a minimal viable tree, <= 20 nodes total; at depth >= 2 prefer
-  leaf-sized nodes; the tree must converge by depth 3
+- be FRUGAL: a minimal viable tree, <= 20 nodes total; prefer fewer, LARGER
+  leaves over many tiny ones; the tree must converge quickly
 - if something is genuinely unknown, add a research spike:
   "spike": {{"question": "...", "recommendation": "..."}}
 
 Return ONLY a JSON object, no prose, no markdown fence:
-{{"metrics": {{...}}, "children": [{{"id": "...", "title": "..."}}], "spike": {{...}}}}
+{{"atomic": true, "metrics": {{...}}, "children": [{{"id": "...", "title": "..."}}], "spike": {{...}}}}
 """
 
 LEAF_RULE = """
@@ -93,10 +105,11 @@ def decompose(ctx: dict) -> dict:
     reply = llm_log.timed_ask(_ask, role="decomposer", node=nid,
                               depth=ctx["depth"], model=MODEL, prompt=prompt)
     out = _extract_json(reply)
-    # keep only the keys the engine understands
-    keep = {k: out[k] for k in ("metrics", "children", "spike", "clarify") if k in out}
+    # keep only the keys the engine understands (incl. the atomicity judgment)
+    keep = {k: out[k] for k in ("atomic", "metrics", "children", "spike", "clarify") if k in out}
     if ctx["depth"] >= LEAF_DEPTH:
         keep.pop("children", None)          # convergence is enforced, not hoped for
+        keep["atomic"] = True               # forced-leaf depth ⇒ declare atomic
     # bound fan-out so a wide tree cannot blow the call budget
     if keep.get("children") and len(keep["children"]) > MAX_CHILDREN:
         keep["children"] = keep["children"][:MAX_CHILDREN]
