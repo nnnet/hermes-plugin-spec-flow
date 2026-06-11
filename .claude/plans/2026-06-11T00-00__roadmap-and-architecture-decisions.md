@@ -258,5 +258,11 @@ spec-flow — это **движок дисциплины и durable-оркест
       (`_close_revision_loop`, петли `revision-recheck`/`revision-verified`,
       опции `recheck`/`recheck_fails`). Оракул видит эпизод `self_improve` (добавлен
       в p4). `tests/test_self_improvement.py` (6).
-- [ ] D2 живой implementer-агент (реальный код листа) — тратит реальную квоту,
-      запускать только с подтверждения пользователя.
+- [x] D2 живой implementer-агент (реальный код листа): адаптер
+      `tests/harness/llm_implementer.py` (`make_implementer(ask=...)`), бэкенд —
+      `claude -p --model haiku`, вызов модели инъектируется. Промпт-контракт,
+      разбор ответа (JSON или два code-fence) и раскладка файлов проверены ОФЛАЙН
+      стабом через раннер на глубине execute — квота не тратится.
+      `tests/test_llm_implementer.py` (5).
+  - [ ] Живой прогон одного листа на haiku — тратит реальную квоту, запускать
+        ТОЛЬКО с подтверждения пользователя.
