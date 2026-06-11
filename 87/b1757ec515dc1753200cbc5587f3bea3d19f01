@@ -1,0 +1,23 @@
+tests/live_dashboard.py
+  s_1b99a7ec9e9aa9::t_97e99182727cd6 539,544
+  s_1b99a7ec9e9aa9::t_c94d41873aab52 489
+  s_1b99a7ec9e9aa9::t_e9402c034b5310 523-524,526
+  s_1b99a7ec9e9aa9::t_0e9ad6bd602692 669-670
+  s_1b99a7ec9e9aa9::t_759f4a95db8fba 566,568
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "87b1757ec515dc1753200cbc5587f3bea3d19f01",
+  "prompts": {},
+  "sessions": {
+    "s_1b99a7ec9e9aa9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5025e0d8-1d1b-4f97-8c52-eec971a58fbd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <zkowkmdx@sharklasers.com>"
+    }
+  }
+}
