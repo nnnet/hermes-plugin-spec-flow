@@ -1566,9 +1566,17 @@ def render_summary(res: RunResult) -> str:
         "drift-respec": "📐 дрейф контракта → drift-gate → respec",
         "drift-codefix": "🛠️ дрейф: код неправ → исправление кода → re-check",
         "revision-respec": "🔬 ревизия research → respec-gate",
+        "revision-recheck": "🔁 ре-проверка ревизии (сигнал ещё жив)",
+        "revision-verified": "✅ ревизия подтверждена (сигнал устранён)",
+        "hitl-reject": "🧑‍⚖️ человек отклонил → доработка",
+        "judge-reject": "👀 судья отклонил → доработка",
+        "decomposition-guardrail": "✂️ guardrail декомпозиции (пере/недо-измельчение)",
     }
     for l in res.loops:
-        lines.append(f"| {label.get(l['type'], l['type'])} | `{l['task']}` | {l['detail']} |")
+        # loops are heterogeneous — not every type carries task/detail
+        where = l.get("task") or l.get("kind") or "—"
+        what = l.get("detail") or l.get("finding") or l.get("reason") or ""
+        lines.append(f"| {label.get(l['type'], l['type'])} | `{where}` | {what} |")
     return "\n".join(lines)
 
 

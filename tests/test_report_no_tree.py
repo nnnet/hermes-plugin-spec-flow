@@ -68,6 +68,19 @@ def test_render_report_does_not_crash_without_predefined_tree(plugin, tmp_path):
     assert "flowchart" in mermaid
 
 
+def test_render_report_handles_heterogeneous_loops(plugin, tmp_path):
+    # a run with a revision produces loops WITHOUT a 'detail' key
+    # (revision-verified/recheck) — render_report must not KeyError
+    proj = dict(GOAL, revisions=[{
+        "method": "level_return", "trigger": "on_level_return",
+        "finding": "signal", "invalidates": "alpha", "effect": "re-derive"}])
+    res = eng.run_project(proj, workspace=str(tmp_path / "wk"), tools=plugin.tools,
+                          agents={"decomposer": _stub_decomposer()})
+    assert any(l["type"] == "revision-verified" for l in res.loops)
+    report = eng.render_report(res, level=eng.L_DETAIL)   # must not raise
+    assert "ревизия подтверждена" in report or "revision-verified" in report
+
+
 def test_renderers_degrade_when_tree_truly_absent(plugin, tmp_path):
     res = eng.run_project(dict(GOAL), workspace=str(tmp_path / "wk"), tools=plugin.tools,
                           agents={"decomposer": _stub_decomposer()})
