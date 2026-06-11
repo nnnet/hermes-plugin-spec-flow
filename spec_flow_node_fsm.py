@@ -308,6 +308,38 @@ class NodeLifecycle:
             self._machine = _FallbackMachine(REQUIREMENTS)
         return self
 
+    # ─── persistence (C4 — the node survives a worker restart) ────
+
+    def snapshot(self) -> dict:
+        """Serializable node state: kind, phase, fired gates, open decision.
+        Plain JSON-able dict — write it anywhere (file, kanban run, redis)."""
+        if self.kind is None:
+            raise ValueError("snapshot() before start() — nothing to persist")
+        return {"kind": self.kind, "phase": self.phase,
+                "gates": sorted(self._gates.fired),
+                "open_decision": self._open_decision}
+
+    @classmethod
+    def restore(cls, snap: dict, *, prefer_engine: bool = True) -> "NodeLifecycle":
+        """Rebuild a node mid-lifecycle from a snapshot: same phase, same
+        fired gates, same open-decision flag. The DONE guard stays intact —
+        a restored node still refuses to close over a missing gate."""
+        kind = snap.get("kind")
+        if kind not in ("leaf", "branch"):
+            raise ValueError(f"snapshot has bad kind: {kind!r}")
+        phase = snap.get("phase", REQUIREMENTS)
+        if phase not in PHASES:
+            raise ValueError(f"snapshot has unknown phase: {phase!r}")
+        n = cls(prefer_engine=prefer_engine).start(kind)
+        if n._use_engine:
+            n._machine = _build_engine_machine(phase)
+        else:
+            n._machine = _FallbackMachine(phase)
+        n._open_decision = bool(snap.get("open_decision"))
+        for gate in snap.get("gates", []):
+            n._gates.record(gate)
+        return n
+
     def open_decision(self) -> None:
         """Why: model the clarify loop — an open decision raised during
         DECOMPOSE blocks forward progress until resolved.

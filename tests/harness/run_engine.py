@@ -30,6 +30,7 @@ def _load(name: str):
 
 _load("spec_flow_tools")                 # standalone (guarded registry import)
 _runner = _load("spec_flow_runner")
+board = _load("spec_flow_board")         # offline kanban-execution core (Ф8)
 
 # re-export everything from the runner
 globals().update({k: getattr(_runner, k) for k in dir(_runner) if not k.startswith("__")})

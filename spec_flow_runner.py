@@ -299,23 +299,58 @@ class Workspace:
     no real LLM wrote them; the specs, contract and manifest are real content.
     """
 
-    def __init__(self, root: Optional[str] = None, enabled: Optional[bool] = None):
+    def __init__(self, root: Optional[str] = None, enabled: Optional[bool] = None,
+                 git_provenance: bool = False):
         self.root = root or os.environ.get("SPEC_FLOW_RUN_WORKSPACE")
         self.enabled = enabled if enabled is not None else bool(self.root)
         self.artifacts: list[dict] = []
         self.commits: list[dict] = []
+        # E5: optional local-git provenance — every milestone becomes a real
+        # commit in the workspace repo, so the full respec history survives.
+        self.git_provenance = git_provenance
+        self._git_ready = False
 
     @classmethod
     def from_env(cls) -> "Workspace":
         return cls()
 
-    def open(self) -> "Workspace":
+    def open(self, preserve: bool = False) -> "Workspace":
+        """Create the workspace dir. ``preserve=True`` keeps an existing one
+        (resume mode — persisted artifacts and the journal survive)."""
         if self.enabled and self.root:
             p = Path(self.root)
-            if p.exists():
+            if p.exists() and not preserve:
                 shutil.rmtree(p)
             p.mkdir(parents=True, exist_ok=True)
         return self
+
+    # -- run journal (C4: a restartable run) --------------------------------
+    def _journal_path(self) -> Optional[Path]:
+        if not (self.enabled and self.root):
+            return None
+        return Path(self.root) / ".spec-flow" / "journal.jsonl"
+
+    def journal_mark(self, node: str, version: int) -> None:
+        """Append a completed-node record — the resume index."""
+        path = self._journal_path()
+        if path is None:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"node": node, "version": version}) + "\n")
+
+    def journal_nodes(self) -> set:
+        """Node ids already completed by a previous run of this workspace."""
+        path = self._journal_path()
+        if path is None or not path.is_file():
+            return set()
+        done = set()
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                done.add(json.loads(line)["node"])
+            except Exception:  # noqa: BLE001 — a torn line is not fatal
+                continue
+        return done
 
     def _write(self, rel: str, content: str, kind: str) -> str:
         if not self.enabled:
@@ -409,9 +444,62 @@ class Workspace:
                 f'    assert False, "write the real test"\n')
         return self._write(f"tests/test_{fn}.py", body, "test")
 
+    # -- git provenance (E5) -------------------------------------------------
+    def _git(self, *args: str) -> bool:
+        """Quiet git call inside the workspace; never raises (provenance must
+        not break a run when git is unavailable)."""
+        if not (self.enabled and self.root):
+            return False
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(self.root),
+                 "-c", "user.email=spec-flow@local", "-c", "user.name=spec-flow",
+                 *args],
+                capture_output=True, text=True, timeout=60)
+            return proc.returncode == 0
+        except Exception:  # noqa: BLE001
+            return False
+
+    def git_commit(self, msg: str) -> bool:
+        """Record the workspace state as a real local commit (opt-in)."""
+        if not (self.enabled and self.root and self.git_provenance):
+            return False
+        if not self._git_ready:
+            if not (Path(self.root) / ".git").exists():
+                if not self._git("init", "-q"):
+                    return False
+            self._git_ready = True
+        self._git("add", "-A")
+        return self._git("commit", "-qm", msg)
+
+    def respec_archive(self, node_id: str, old_version: int, new_version: int,
+                       finding: str) -> Optional[str]:
+        """E5 provenance: when a respec supersedes a spec, keep v(old) as
+        ``specs/<id>.v{old}.md`` marked ``superseded_by`` and stamp the live
+        spec with the revision history. Returns the archived rel path."""
+        if not (self.enabled and self.root):
+            return None
+        fn = _snake(node_id)
+        cur = Path(self.root) / "specs" / f"{fn}.md"
+        if not cur.is_file():
+            return None
+        body = cur.read_text(encoding="utf-8")
+        archived_rel = f"specs/{fn}.v{old_version}.md"
+        header = (f"> SUPERSEDED — this is v{old_version} of the spec.\n"
+                  f"> superseded_by: v{new_version}\n"
+                  f"> reason: {finding}\n\n")
+        self._write(archived_rel, header + body, "spec-archive")
+        cur.write_text(
+            body + f"\n## Revision history\n"
+                   f"- v{new_version} supersedes v{old_version}: {finding}\n",
+            encoding="utf-8")
+        self.git_commit(f"respec({node_id}): v{old_version} -> v{new_version} — {finding}")
+        return archived_rel
+
     def commit(self, msg: str, files: list[str]) -> None:
         if self.enabled:
             self.commits.append({"n": len(self.commits) + 1, "message": msg, "files": files})
+            self.git_commit(msg)
 
     def finalize(self) -> None:
         if not self.enabled:
@@ -502,7 +590,8 @@ class Engine:
                  contracts_dir: Optional[str] = None,
                  sink: Optional[Any] = None, verbosity: int = DEFAULT_VERBOSITY,
                  max_decompose_calls: int = MAX_DECOMPOSE_CALLS,
-                 node_engine: str = "inline", runtime_guard: bool = False):
+                 node_engine: str = "inline", runtime_guard: bool = False,
+                 resume: bool = False, git_provenance: bool = False):
         if not workspace:
             raise ValueError("Workspace is mandatory — pass a path or a Workspace")
         # tools (gate provider) is injectable; default to the bundled gates so
@@ -521,6 +610,10 @@ class Engine:
         # InvariantViolation on a hard (error-severity) breach instead of only
         # reporting it in build_run_report. Default off — back-compat.
         self.runtime_guard = runtime_guard
+        # C4: resume a restarted run from the workspace journal — completed
+        # leaves keep their persisted artifacts, the implementer is not re-run.
+        self.resume = resume
+        self._journal_done: set = set()
         self.agents = {**DEFAULT_AGENTS, **(agents or {})}
         self.contracts_dir = Path(contracts_dir) if contracts_dir else None
         self.events: list[Event] = []
@@ -545,6 +638,8 @@ class Engine:
             self.workspace = workspace
         else:
             self.workspace = Workspace(root=str(workspace), enabled=True)
+        if git_provenance:
+            self.workspace.git_provenance = True
 
     # -- logging helpers ---------------------------------------------------
     def emit(self, phase, profile, skill, task, action, detail="", gate="", verdict="", level=L_STEP):
@@ -617,7 +712,9 @@ class Engine:
         try:
             if self.sink is not None:
                 self.sink.open()
-            self.workspace.open()
+            self.workspace.open(preserve=self.resume)
+            if self.resume:
+                self._journal_done = self.workspace.journal_nodes()
             return self._run(project)
         finally:
             if self.sink is not None:
@@ -847,6 +944,10 @@ class Engine:
 
         self.tasks[nid].status = "done"
         self._completed += 1
+        # C4: record the completed leaf in the run journal — a restarted run
+        # (resume=True) reuses its persisted artifact instead of re-implementing
+        if verdict == "leaf":
+            self.workspace.journal_mark(nid, self.tasks[nid].version)
         # returning up a level — check both revision methods at this moment
         self._research_tick(node, depth)
 
@@ -866,9 +967,20 @@ class Engine:
         # an injected implementer agent produces real code instead of a scaffold.
         code_rel = test_rel = None
         if self.depth >= DEPTH_EXECUTE:
-            self.agents["implementer"]({"node": nid, "title": title,
-                                        "workspace": self.workspace, "spec": f"specs/{_snake(nid)}.md"})
-            code_rel, test_rel = f"src/{_snake(nid)}.py", f"tests/test_{_snake(nid)}.py"
+            fn = _snake(nid)
+            code_rel, test_rel = f"src/{fn}.py", f"tests/test_{fn}.py"
+            # C4 resume: the journal says this leaf finished and its artifact
+            # survived the restart — reuse it, do not re-run the implementer.
+            persisted = (self.resume and nid in self._journal_done
+                         and self.workspace.enabled and self.workspace.root
+                         and (Path(self.workspace.root) / code_rel).is_file())
+            if persisted:
+                self.emit("implement", "implementer", "spec-implement", f"{nid}:impl",
+                          "resume: reuse persisted artifact (run journal)", code_rel,
+                          level=L_DETAIL)
+            else:
+                self.agents["implementer"]({"node": nid, "title": title,
+                                            "workspace": self.workspace, "spec": f"specs/{fn}.md"})
         elif self.depth >= DEPTH_SCAFFOLD:
             code_rel = self.workspace.code(nid, title)
             test_rel = self.workspace.test(nid, title)
@@ -1174,8 +1286,12 @@ class Engine:
                            "task": target, "detail": rev["finding"]})
         # version-bump the target and re-derive its subtree under the new spec
         if target in self.tasks:
+            old_v = self.tasks[target].version
             self.tasks[target].version += 1
             self.tasks[target].runs += 1
+            # E5 provenance: the superseded spec is archived, not overwritten
+            self.workspace.respec_archive(target, old_v, self.tasks[target].version,
+                                          rev.get("finding", ""))
         affected = [tid for tid, t in list(self.tasks.items())
                     if t.parents and target in t.parents and t.kind in {"impl", "decompose"}]
         # large blast radius -> human sign-off (anti-thrash confirmation)
@@ -1234,7 +1350,8 @@ def run_project(project: dict, *, workspace, depth: Any = DEPTH_SPEC,
                 verbosity: int = DEFAULT_VERBOSITY,
                 max_decompose_calls: int = MAX_DECOMPOSE_CALLS,
                 node_engine: str = "inline",
-                runtime_guard: bool = False) -> RunResult:
+                runtime_guard: bool = False, resume: bool = False,
+                git_provenance: bool = False) -> RunResult:
     """Public entry: run a project to completion. ``workspace`` is mandatory.
 
     ``depth`` is one of spec|scaffold|verify|execute|product (or 1..5).
@@ -1248,7 +1365,8 @@ def run_project(project: dict, *, workspace, depth: Any = DEPTH_SPEC,
     return Engine(tools=tools, workspace=workspace, depth=depth, agents=agents,
                   contracts_dir=contracts_dir, sink=sink, verbosity=verbosity,
                   max_decompose_calls=max_decompose_calls,
-                  node_engine=node_engine, runtime_guard=runtime_guard).run(project)
+                  node_engine=node_engine, runtime_guard=runtime_guard,
+                  resume=resume, git_provenance=git_provenance).run(project)
 
 
 def render_log(res: RunResult, level: int = None) -> str:
