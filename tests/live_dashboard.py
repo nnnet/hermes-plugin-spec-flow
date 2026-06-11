@@ -550,6 +550,8 @@ pre.code{background:#161b22;padding:10px;border-radius:6px;overflow:auto;white-s
 .feed{padding-left:38px;max-height:150px;overflow:auto}.feed li{margin:1px 0}
 .diff .add{background:#12361f;color:#3fb950}.diff .del{background:#3a1620;color:#f85149}
 .muted{color:#6e7681}.kv{color:#8b949e}
+.badge{font-size:9px;vertical-align:middle;letter-spacing:1px}
+.errbox{background:#3a162040;border:1px solid #f8514966;border-radius:6px;padding:6px 10px;margin:8px 0;font-size:12px}.errbox li{margin:2px 0}
 .gtabs{margin-top:8px}
 </style></head><body>
 <div class=bar>
@@ -643,9 +645,11 @@ function graphSVG(){
  nodes.forEach(n=>{const leaf=!(n.children&&n.children.length);const sel=SEL===n.id;const coll=!leaf&&GCOLL[n.id];
   const ico=coll?'▸🌿':(leaf?'🍃':'🌿');
   const tail=coll?` +${countDesc(n)}`:'';
+  const bdg=badgeStr(n.episodes);
   s+=`<g class=gnode data-id="${n.id}" transform="translate(${X(n)},${Y(n)})" style="cursor:pointer">`+
      `<rect width="${BW}" height="${BH}" rx="5" fill="${sel?'#1f6feb55':(leaf?'#161b22':'#13251a')}" stroke="${sel?'#1f6feb':(leaf?'#30363d':'#3fb950')}"/>`+
-     `<text x="7" y="15" fill="#c9d1d9" font-size="11">${ico} ${esc(n.id).slice(0,15)}${tail} ${badgeStr(n.episodes)}</text></g>`;});
+     `<text x="7" y="15" fill="#c9d1d9" font-size="11">${ico} ${esc(n.id).slice(0,14)}${tail}</text>`+
+     (bdg?`<text x="${BW-5}" y="14" text-anchor="end" font-size="8">${bdg}</text>`:'')+`</g>`;});
  s+='</svg>';return '<div style="overflow:auto;border:1px solid #21262d;border-radius:6px;padding:6px">'+s+'</div>';
 }
 
@@ -657,6 +661,12 @@ function renderNode(){
  h+=`<div class=kv>вердикт: <b>${nd.verdict}</b> · уровень: L${nd.depth} · родитель: ${nd.parent||'—'}`;
  const m=nd.metrics||{};if(Object.keys(m).length)h+=` · LOC≈${m.estimated_loc??'?'} · задач ${m.tasks??'?'} · решений ${m.open_decisions??'?'}`;
  h+=`</div>`;
+ const errs=(nd.events||[]).filter(e=>['REJECT','FAIL','ERROR'].includes(String(e.verdict)));
+ if(errs.length){
+  h+='<div class=errbox><b>❌ проблемы узла ('+errs.length+'):</b><ul>'+
+   errs.map(e=>`<li><b>${esc(e.gate||e.phase||'')}</b> → ${esc(e.verdict)}: ${esc(e.detail||e.action||'')}</li>`).join('')+
+   '</ul></div>';
+ }
  h+='<div class=tabs><span class="tab" data-n="__back">⬅ обзор</span>'+tabs.map(([k,t,on])=>on?`<span class="tab${NTAB===k?' on':''}" data-n="${k}">${t}</span>`:'').join('')+'</div>';
  h+='<div id=nbody>загрузка…</div>';
  $('#detail').innerHTML=h;
@@ -673,8 +683,8 @@ async function renderNodeBody(nd){
  else if(NTAB==='test'){b.innerHTML='<pre class=code>'+esc(await getFile(f.test))+'</pre>';}
  else if(NTAB==='contract'){b.innerHTML='<pre class=code>'+esc(await getFile(f.contract))+'</pre>';}
  else if(NTAB==='events'){
-   b.innerHTML='<table><thead><tr><th>#</th><th>фаза</th><th>роль</th><th>скилл</th><th>действие</th><th>гейт</th><th>вердикт</th></tr></thead><tbody>'+
-   nd.events.map(e=>`<tr><td>${e.tick??''}</td><td>${esc(e.phase)}</td><td>${esc(e.profile)}</td><td>${esc(e.skill)}</td><td>${esc(e.action)}</td><td>${esc(e.gate)}</td><td>${esc(e.verdict)}</td></tr>`).join('')+'</tbody></table>';
+   b.innerHTML='<table><thead><tr><th title="номер события в полном журнале">соб.№</th><th>фаза</th><th>роль</th><th>действие</th><th>гейт</th><th>вердикт</th><th>детали</th></tr></thead><tbody>'+
+   nd.events.map(e=>`<tr><td>${e.tick??''}</td><td>${esc(e.phase)}</td><td>${esc(e.profile)}</td><td>${esc(e.action)}</td><td>${esc(e.gate)}</td><td>${e.verdict?('<b>'+esc(e.verdict)+'</b>'):''}</td><td>${esc(e.detail||'')}</td></tr>`).join('')+'</tbody></table>';
  }
  else if(NTAB==='versions'){
    // ordered: v1..vN (superseded) then current spec = newest

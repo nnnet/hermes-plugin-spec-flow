@@ -91,14 +91,23 @@ class HumanChannel:
 
     # -- human → workers ---------------------------------------------------
     def poll_note(self) -> Optional[str]:
-        """Read-and-consume the operator's pending note, if any."""
-        if not self.inbox.exists():
-            return None
-        note = self.inbox.read_text(encoding="utf-8").strip()
-        if not note:
-            return None
-        self.inbox.write_text("", encoding="utf-8")
-        return note
+        """Read-and-consume the operator's pending note, if any.
+
+        An orphan ``answer.md`` (the human answered a worker question AFTER
+        its waiting window expired) is consumed here too — a late answer is
+        still heard, as an operator note to the next worker."""
+        note = ""
+        if self.inbox.exists():
+            note = self.inbox.read_text(encoding="utf-8").strip()
+            if note:
+                self.inbox.write_text("", encoding="utf-8")
+        if not note and self.answer.exists():
+            late = self.answer.read_text(encoding="utf-8").strip()
+            if late:
+                self.answer.unlink(missing_ok=True)
+                note = ("late answer to an earlier worker question "
+                        "(the wait window had expired): " + late)
+        return note or None
 
     def record_reply(self, role: str, node: str, position: str,
                      response: str, note: str) -> None:
