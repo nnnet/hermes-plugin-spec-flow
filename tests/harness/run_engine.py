@@ -43,3 +43,21 @@ RUNS_DIR = _HERE.parent / "runs"
 
 def load_run(path=None):
     return _runner.load_run(path or (RUNS_DIR / "privacy_analytics.yaml"))
+
+
+def run_scenario(case: dict, **kw):
+    """Run a scenario the HONEST way: the plugin BUILDS the task tree itself by
+    calling a deterministic decomposer over the case ``blueprint`` (the engine
+    visits + gates every node, exactly like a live run). The scenario structure
+    never drives the engine directly. ``oracle``/anchors stay analysis-only.
+
+    A caller may still pass its own ``agents`` (e.g. an implementer, or a live
+    ``decomposer``); only a missing decomposer is filled from the blueprint.
+    """
+    from harness import blueprint_decomposer as _bp
+    bp = case.get("blueprint")
+    exec_case = {k: v for k, v in case.items() if k != "blueprint"}
+    agents = dict(kw.pop("agents", None) or {})
+    if bp and "decomposer" not in agents:
+        agents["decomposer"] = _bp.make(bp)
+    return _runner.run_project(exec_case, agents=(agents or None), **kw)

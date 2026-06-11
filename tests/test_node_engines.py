@@ -35,7 +35,9 @@ def _run(plugin, tmp_path, monkeypatch, case_file, engine):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / f"hh_{case_file}_{engine}"))
     plugin.tools.CONTRACT_VALIDATORS["openapi"] = [
         "python3", str(eng.OPENAPI_DIFF), "{contract}", "{code}"]
-    return eng.run_project(
+    # the plugin builds the tree itself from the blueprint (deterministic
+    # decomposer) — the scenario structure never drives the engine
+    return eng.run_scenario(
         case, workspace=str(tmp_path / f"wk_{case_file}_{engine}"),
         depth="spec", tools=plugin.tools, contracts_dir=str(eng.CONTRACTS),
         node_engine=engine)

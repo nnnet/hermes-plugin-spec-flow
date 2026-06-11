@@ -32,7 +32,7 @@ constitution:
 target: "Backtest: ROI >= X% and Sharpe >= Y on 2 years of history; live trades human-approved <= $50."
 policy: {measurable_target: true, spend_per_action_usd: 50, human_in_loop: true, involves_outreach: false, consent_obtained: true, legal_exposure: true, legality_reviewed: true}
 
-tree:
+blueprint:
   id: L0
   title: "Prediction-market research platform (backtest-first)"
   metrics: {modules: 5, tasks: 16, interfaces: 3, estimated_loc: 2500, open_decisions: 0, single_concern: false, testable_criteria: true}

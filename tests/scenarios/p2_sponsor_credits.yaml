@@ -30,7 +30,7 @@ constitution:
 target: "Approved credits from >= 2 eligible programs; published R&D benchmark within 60d."
 policy: {measurable_target: true, spend_per_action_usd: 0, human_in_loop: true, involves_outreach: false, consent_obtained: true, legal_exposure: true, legality_reviewed: true}
 
-tree:
+blueprint:
   id: L0
   title: "Sponsor LLM credits for honest R&D"
   metrics: {modules: 3, tasks: 9, interfaces: 2, estimated_loc: 500, open_decisions: 0, single_concern: true, testable_criteria: true}

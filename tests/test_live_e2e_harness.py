@@ -74,10 +74,12 @@ def test_run_full_writes_cost_and_reports(tmp_path, monkeypatch):
                    "human_in_loop": False, "involves_outreach": False,
                    "consent_obtained": True, "legal_exposure": False,
                    "legality_reviewed": True},
-        "tree": {"id": "L0", "title": "Svc",
-                 "metrics": {"modules": 1, "tasks": 4, "interfaces": 1,
-                             "estimated_loc": 80, "open_decisions": 0,
-                             "single_concern": True, "testable_criteria": True}},
+        # blueprint = deterministic decomposer input (the plugin builds the
+        # tree itself); never read by the engine as a finished structure
+        "blueprint": {"id": "L0", "title": "Svc",
+                      "metrics": {"modules": 1, "tasks": 4, "interfaces": 1,
+                                  "estimated_loc": 80, "open_decisions": 0,
+                                  "single_concern": True, "testable_criteria": True}},
     }
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hh"))
     case_dir = tmp_path / "run"

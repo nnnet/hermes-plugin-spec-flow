@@ -38,9 +38,9 @@ def _run(plugin, tmp_path, monkeypatch, path):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / f"hh_{path.stem}"))
     plugin.tools.CONTRACT_VALIDATORS["openapi"] = [
         "python3", str(eng.OPENAPI_DIFF), "{contract}", "{code}"]
-    res = eng.run_project(case, workspace=str(tmp_path / f"wk_{path.stem}"),
-                          depth="spec", tools=plugin.tools,
-                          contracts_dir=str(eng.CONTRACTS))
+    res = eng.run_scenario(case, workspace=str(tmp_path / f"wk_{path.stem}"),
+                           depth="spec", tools=plugin.tools,
+                           contracts_dir=str(eng.CONTRACTS))
     # summarize_trace works on event dicts — feed it the dumped event stream.
     summary = plugin.tools.summarize_trace(
         [eng.asdict(e) for e in res.events])

@@ -46,7 +46,11 @@ constitution:
 target: "GMV >= $20k in 90d; payout error rate < 0.1%; p95 checkout < 500ms."
 policy: {measurable_target: true, spend_per_action_usd: 50, human_in_loop: true, involves_outreach: true, consent_obtained: true, legal_exposure: true, legality_reviewed: true}
 
-tree:
+# `blueprint` is EXECUTION INPUT for the deterministic decomposer — the plugin
+# builds its task tree node-by-node from it (same agent interface the live LLM
+# uses), it is NEVER read by the engine as a finished tree. The analysis
+# reference (anchors/depth/episodes) is the `oracle:` block below.
+blueprint:
   id: L0
   title: "B2B refurbished-gear marketplace"
   metrics: {modules: 7, tasks: 31, interfaces: 6, estimated_loc: 5200, open_decisions: 0, single_concern: false, testable_criteria: true}

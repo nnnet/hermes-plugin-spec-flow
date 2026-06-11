@@ -16,7 +16,7 @@ Config: `SPEC_FLOW_LLM_LEAF_DEPTH=2`, `SPEC_FLOW_LLM_MAX_CHILDREN=3` (see
 
 ### What the plugin built (the goal → tree, fully self-derived)
 
-The case `tree` was DROPPED; the plugin decomposed the bare goal itself:
+The case `blueprint` was DROPPED (llm builds its own ids); the plugin decomposed the bare goal itself:
 
 ```
 L0  (goal: a niche micro-business that earns a living)
@@ -82,7 +82,7 @@ small metrics for borderline nodes) so atomicity and metrics both shrink — the
 guardrail then enforces it for free.
 
 ### Finding C — reports crashed on a self-built tree (BUG, fixed)
-In decomposer mode the case has no `tree`; `render_tree`/`render_mermaid` did
+In decomposer mode the case has no `blueprint`/`tree`; `render_tree`/`render_mermaid` did
 `proj["tree"]` and KeyError'd, crashing report generation AFTER the run finished
 (so the first live runs produced no `report.md`/`SUMMARY.md`). Found by reading
 the log + file mtimes, not by guessing. Fixed: the engine now persists the

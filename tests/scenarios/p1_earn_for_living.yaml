@@ -33,7 +33,7 @@ constitution:
 target: "SaaS in niche X: revenue >= $N in 90d; churn < 5%/mo; CAC < $40."
 policy: {measurable_target: true, spend_per_action_usd: 50, human_in_loop: true, involves_outreach: true, consent_obtained: true, legal_exposure: true, legality_reviewed: true}
 
-tree:
+blueprint:
   id: L0
   title: "Niche SaaS to fund living & development"
   metrics: {modules: 6, tasks: 24, interfaces: 4, estimated_loc: 4000, open_decisions: 0, single_concern: false, testable_criteria: true}

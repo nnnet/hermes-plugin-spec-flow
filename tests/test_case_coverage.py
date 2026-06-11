@@ -20,7 +20,7 @@ from harness import run_engine as eng  # noqa: E402
 
 SCENARIOS_DIR = pathlib.Path(__file__).resolve().parent / "scenarios"
 TREE_CASES = [p for p in sorted(SCENARIOS_DIR.glob("*.yaml"))
-              if "tree" in yaml.safe_load(p.read_text(encoding="utf-8"))]
+              if "blueprint" in yaml.safe_load(p.read_text(encoding="utf-8"))]
 
 
 def _run(plugin, tmp_path, monkeypatch, path):
@@ -29,9 +29,11 @@ def _run(plugin, tmp_path, monkeypatch, path):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / f"hh_{path.stem}"))
     plugin.tools.CONTRACT_VALIDATORS["openapi"] = [
         "python3", str(eng.OPENAPI_DIFF), "{contract}", "{code}"]
-    return eng.run_project(case, workspace=str(tmp_path / f"wk_{path.stem}"),
-                           depth="spec", tools=plugin.tools,
-                           contracts_dir=str(eng.CONTRACTS))
+    # the plugin BUILDS the tree itself from the case blueprint (deterministic
+    # decomposer); the scenario structure never drives the engine directly
+    return eng.run_scenario(case, workspace=str(tmp_path / f"wk_{path.stem}"),
+                            depth="spec", tools=plugin.tools,
+                            contracts_dir=str(eng.CONTRACTS))
 
 
 def test_scenario_pool_has_tree_cases():

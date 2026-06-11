@@ -84,7 +84,7 @@ def _load_tools():
 
 
 def _run_full(case: dict, case_dir: Path, depth: str, tools,
-              decomposer: str = "case", implementer: str = "auto",
+              decomposer: str = "blueprint", implementer: str = "auto",
               meter=None, model: str = "") -> dict:
     """The real production run: mandatory workspace inside the case folder,
     disk sink at full detail, the plugin's own report built from the trace.
@@ -101,9 +101,10 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
         os.environ["SPEC_FLOW_LLM_LOG"] = str(case_dir / "llm-log.jsonl")
     trace = case_dir / "trace.jsonl"
     sink = eng.LogSink(path=str(trace), level=eng.L_DETAIL, fmt="jsonl", enabled=True)
-    # agents are injectable: at depth=execute a real implementer is required
-    # (bundled autonomous one by default; 'llm' = live model); with
-    # --decomposer llm the case's predefined tree is DROPPED, the plugin builds it
+    # the plugin ALWAYS builds the tree itself by calling a decomposer — the
+    # case `blueprint` never drives the engine directly (it is execution INPUT
+    # for the deterministic decomposer; the analysis reference is the `oracle`
+    # block). 'blueprint' = deterministic, offline, no quota; 'llm' = live model.
     agents = {}
     if depth in ("execute", "product"):
         if implementer == "llm":
@@ -121,9 +122,15 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
         if meter is not None:
             dec_fn = meter.wrap("decomposer", dec_fn)
         agents["decomposer"] = dec_fn
-        case = {k: v for k, v in case.items() if k not in ("tree", "revision")}
+        # the live LLM builds its own ids → the blueprint and the id-bound
+        # revisions are dropped; the oracle still checks the realized run
+        exec_case = {k: v for k, v in case.items() if k not in ("blueprint", "revisions", "revision")}
         max_calls = 80      # a live LLM is thorough; convergence is enforced at depth 3
-    res = eng.run_project(case, workspace=str(case_dir / "workspace"), depth=depth,
+    else:
+        from harness import blueprint_decomposer
+        agents["decomposer"] = blueprint_decomposer.make(case["blueprint"])
+        exec_case = {k: v for k, v in case.items() if k != "blueprint"}
+    res = eng.run_project(exec_case, workspace=str(case_dir / "workspace"), depth=depth,
                           tools=tools, agents=agents or None,
                           contracts_dir=str(eng.CONTRACTS), sink=sink,
                           max_decompose_calls=max_calls)
@@ -242,10 +249,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Run scenario cases as real plugin runs")
     ap.add_argument("--depth", default="spec", choices=sorted(eng.DEPTHS, key=eng.DEPTHS.get))
     ap.add_argument("--case", default="", help="substring filter on the case file name")
-    ap.add_argument("--decomposer", default="case", choices=["case", "llm"],
-                    help="'case' replays the predefined tree; 'llm' DROPS it and "
-                         "the plugin builds the tree itself from the goal "
-                         "(local `claude` CLI, haiku model)")
+    ap.add_argument("--decomposer", default="blueprint", choices=["blueprint", "llm"],
+                    help="how the plugin BUILDS its tree: 'blueprint' = a "
+                         "deterministic decomposer fed by the case blueprint "
+                         "(offline, no quota); 'llm' = a live model builds it "
+                         "from the goal (local `claude` CLI). Either way the "
+                         "engine visits + gates every node itself")
     ap.add_argument("--implementer", default="auto", choices=["auto", "llm"],
                     help="'auto' deterministic stand-in; 'llm' live model "
                          "implementer (depth execute/product only)")
@@ -273,7 +282,7 @@ def main() -> int:
         os.environ["HERMES_HOME"] = tempfile.mkdtemp(prefix=f"specflow-{name}-")
 
         policy = _run_policy(path, case_dir, tools) if "imprecise" in case else None
-        runnable = "tree" in case or args.decomposer == "llm"
+        runnable = "blueprint" in case or args.decomposer == "llm"
         live = args.decomposer == "llm" or args.implementer == "llm"
         meter = None
         if live:
