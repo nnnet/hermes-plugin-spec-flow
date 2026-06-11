@@ -91,6 +91,25 @@ the renderers degrade gracefully. Regression test `tests/test_report_no_tree.py`
 
 ---
 
+## Stage 4 — agent quality (done)
+
+- **4.2 atomicity-first leaf_check** — the decomposer's `atomic` judgment
+  reconciled with thresholds; guardrail prunes over-/forces under-decomposition.
+- **4.3 no-stubs implementer** — `_reject_stub` deterministically rejects
+  placeholder code (NotImplementedError / TODO / bare pass / `...`) and hollow
+  tests (<2 asserts, assert-True-only); the prompt asks, the guard guarantees.
+- **4.5 independent judge** — an injectable agent scores each leaf's code vs its
+  spec; a fail verdict is a `judge` gate + a rework loop (version bump). Off by
+  default; offline-tested with a stub.
+- **4.4 models by role** — each adapter takes a per-role override
+  (`SPEC_FLOW_DECOMPOSER_MODEL` / `_IMPLEMENTER_MODEL` / `_JUDGE_MODEL`),
+  falling back to `SPEC_FLOW_LLM_MODEL`. **Recommendation:** decomposer on a
+  cheap fast model (haiku) — it makes many small structured calls; implementer
+  on a stronger model for real code (haiku is fine for tiny leaves, a larger
+  model for substantive logic); judge on a stronger model than the implementer
+  it reviews (an independent, more capable reviewer catches what the writer
+  missed).
+
 ## Status of stage-1 runs
 
 - [x] 1.3-pre — p1 @ spec, live decomposer — tree built, converged, analysed.

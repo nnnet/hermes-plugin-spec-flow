@@ -67,7 +67,8 @@ Return metrics WITHIN the leaf thresholds and NO children."""
 
 
 # cheap & fast model for tree decomposition test runs; override via env
-MODEL = os.environ.get("SPEC_FLOW_LLM_MODEL", "haiku")
+# per-role model: SPEC_FLOW_DECOMPOSER_MODEL overrides the shared SPEC_FLOW_LLM_MODEL
+MODEL = os.environ.get("SPEC_FLOW_DECOMPOSER_MODEL") or os.environ.get("SPEC_FLOW_LLM_MODEL", "haiku")
 # depth at which the decomposer is forced to leaf — bound the tree (and thus the
 # call count / wall time) for tractable live calibration. Default 3; the p1
 # calibration showed fanout ~4 to depth 3 = ~85 calls > the 80 budget, so a

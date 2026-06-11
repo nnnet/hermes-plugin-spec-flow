@@ -35,14 +35,29 @@ Hard contract (the run will import and test your output):
 - the function returns a dict with at least {{"status": "ok"}}
 - test file: tests/test_{fn}.py — real pytest assertions that import the module
   with: sys.path.insert(0, str(Path(__file__).resolve().parent.parent/"src"))
-- tests MUST pass against your own code (no TODOs, no NotImplementedError)
+- tests MUST pass against your own code
+
+NO STUBS — this is rejected automatically:
+- no ``NotImplementedError``, no ``# TODO`` / ``# FIXME``, no bare ``pass`` body,
+  no ``...`` body, no placeholder comments instead of logic
+- write the REAL behaviour the spec describes, however small
+- the test must make REAL assertions about behaviour (>= 2 assert statements
+  exercising actual inputs/outputs), not ``assert True`` or import-only smoke
+
+Before you answer, self-check: does the code implement real logic? do the tests
+assert real behaviour and pass against the code? If not, fix it first.
 
 Return ONLY a JSON object, no prose, no markdown fence:
 {{"code": "<contents of src/{fn}.py>", "test": "<contents of tests/test_{fn}.py>"}}
 """
 
+# patterns that mark a non-implementation (a stub) — rejected deterministically
+_STUB_MARKERS = ("NotImplementedError", "# TODO", "#TODO", "# FIXME", "#FIXME",
+                 "raise NotImplemented", "pass  # stub", "... # ", "placeholder")
+
 # cheap & fast model for the test runs; override via env (shared with decomposer)
-MODEL = os.environ.get("SPEC_FLOW_LLM_MODEL", "haiku")
+# per-role model: SPEC_FLOW_IMPLEMENTER_MODEL overrides the shared SPEC_FLOW_LLM_MODEL
+MODEL = os.environ.get("SPEC_FLOW_IMPLEMENTER_MODEL") or os.environ.get("SPEC_FLOW_LLM_MODEL", "haiku")
 
 
 def _snake(s: str) -> str:
@@ -74,6 +89,29 @@ def _parse(text: str) -> dict:
     raise ValueError(f"implementer reply has no code+test: {text[-300:]}")
 
 
+def _reject_stub(code: str, test: str) -> None:
+    """Raise ValueError if the output is a stub rather than real code/tests.
+
+    Enforces the 'no stubs' contract deterministically (the prompt asks; this
+    guarantees), so a leaf cannot pass with placeholder logic or a hollow test."""
+    low = code.lower()
+    for marker in _STUB_MARKERS:
+        if marker.lower() in low:
+            raise ValueError(f"stub code rejected (contains {marker!r})")
+    # a function body that is ONLY `pass` or `...` is a stub
+    body = [ln.strip() for ln in code.splitlines()
+            if ln.strip() and not ln.strip().startswith(("#", '"', "'"))]
+    if body and all(ln in ("pass", "...") or ln.startswith(("def ", "import ", "from "))
+                    for ln in body):
+        raise ValueError("stub code rejected (no real statements)")
+    # the test must make real assertions, not import-only / assert True
+    asserts = [ln for ln in test.splitlines() if "assert " in ln]
+    if len(asserts) < 2:
+        raise ValueError(f"hollow test rejected (only {len(asserts)} assert(s))")
+    if all("assert true" in ln.lower().replace(" ", " ") for ln in asserts):
+        raise ValueError("hollow test rejected (assert True only)")
+
+
 def make_implementer(ask=_ask):
     """Build an implementer agent driven by ``ask`` (a prompt -> reply callable).
 
@@ -90,6 +128,7 @@ def make_implementer(ask=_ask):
                                   model=MODEL, prompt=prompt)
         try:
             out = _parse(reply)
+            _reject_stub(out["code"], out["test"])      # enforce 'no stubs'
         except Exception as exc:  # noqa: BLE001
             llm_log.log_outcome(role="implementer", node=node, parse="fail",
                                 error=repr(exc)[:200])

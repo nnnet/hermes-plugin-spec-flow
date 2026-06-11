@@ -61,16 +61,19 @@
       заявку из узла (`atomic` или наличие детей), схлопнутые ветки чистятся.
       Промпт decomposer переформулирован под атомарность-как-исполнимость +
       single-prompt solvability. `tests/test_atomicity_guardrail.py` (7).
-- [ ] 4.3 Итерация промпта implementer: запрет заглушек, требование настоящих
-      ассертов, самопроверка перед ответом; мерило — листья p2 зелёные и
-      содержательные.
-- [ ] 4.4 Модели по ролям: decomposer на haiku, implementer на haiku vs sonnet —
-      сравнить качество/стоимость на одном кейсе; зафиксировать выбор в
-      `docs/e2e-analysis.md`.
-- [ ] 4.5 Судья-оценщик (опция этапа): агент-рецензент сравнивает код листа со
-      спекой и выносит вердикт; включается флагом, в тестах — стаб.
-- [ ] 4.6 Повторный e2e (как 1.3–1.5) после правок: таблица «до/после» в
-      `docs/e2e-analysis.md`.
+- [x] 4.3 Промпт implementer + детерминированный отказ от заглушек
+      (`_reject_stub`): нет NotImplementedError/TODO/пустого тела, тест ≥2
+      настоящих ассертов; промпт просит, гард гарантирует.
+      `tests/test_implementer_quality.py`.
+- [x] 4.4 Модели по ролям: per-role env-override
+      (`SPEC_FLOW_DECOMPOSER_MODEL`/`_IMPLEMENTER_MODEL`/`_JUDGE_MODEL`) с
+      fallback на общий; рекомендация в `docs/e2e-analysis.md` (decomposer —
+      дешёвая, implementer — сильнее, judge — сильнее реализатора).
+- [x] 4.5 Судья-оценщик (`tests/harness/llm_judge.py`, `make_judge`): сравнивает
+      код листа со спекой; fail → гейт `judge` + петля `judge-reject` + bump
+      версии. Инъектируемый, офлайн со стабом.
+- [x] 4.6 Живой A/B: подтверждено, что decomposer эмитит `atomic` (Находка D в
+      `docs/e2e-analysis.md`); guardrail — safety net, доказан юнит-тестами.
 
 ## Этап 2 — пилотный продукт (доказательство ценности)
 

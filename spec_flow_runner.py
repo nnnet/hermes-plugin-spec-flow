@@ -668,6 +668,36 @@ class Engine:
             args["atomic"] = bool(atomic)
         return json.loads(self.tools._handle_leaf_check(args))
 
+    def _judge_leaf(self, nid, title, fn, code_rel, test_rel):
+        """Optional independent reviewer (4.5): score the produced code against
+        the spec. Runs only when a ``judge`` agent is injected; a fail verdict
+        is recorded as a gate event + a rework loop and bumps the leaf version."""
+        judge = self.agents.get("judge")
+        if not judge or not (self.workspace.enabled and self.workspace.root):
+            return
+        root = Path(self.workspace.root)
+
+        def _read(rel):
+            p = root / rel
+            return p.read_text(encoding="utf-8") if p.is_file() else ""
+
+        try:
+            out = judge({"node": nid, "title": title, "spec": f"specs/{fn}.md",
+                         "code": _read(code_rel), "test": _read(test_rel)}) or {}
+        except Exception as exc:  # noqa: BLE001 — a judge failure must not crash the run
+            out = {"verdict": "error", "reasons": repr(exc)[:200]}
+        verdict = str(out.get("verdict", "")).lower()
+        self.gate_calls["judge"] = self.gate_calls.get("judge", 0) + 1
+        self.emit("review", "spec-reviewer", "spec-reviewer", f"{nid}:impl",
+                  "independent judge: code vs spec", out.get("reasons", ""),
+                  "judge", "PASS" if verdict == "pass" else "FAIL", level=L_MILESTONE)
+        if verdict == "fail":
+            self.loops.append({"type": "judge-reject", "task": nid,
+                               "detail": out.get("reasons", "")})
+            if nid in self.tasks:
+                self.tasks[nid].version += 1
+                self.tasks[nid].runs += 1
+
     def _contract(self, contract, code):
         # contract_check needs the contract+code files; skip gracefully if no
         # contracts_dir was provided (keeps the runner domain-agnostic).
@@ -1007,6 +1037,7 @@ class Engine:
             else:
                 self.agents["implementer"]({"node": nid, "title": title,
                                             "workspace": self.workspace, "spec": f"specs/{fn}.md"})
+                self._judge_leaf(nid, title, fn, code_rel, test_rel)
         elif self.depth >= DEPTH_SCAFFOLD:
             code_rel = self.workspace.code(nid, title)
             test_rel = self.workspace.test(nid, title)
