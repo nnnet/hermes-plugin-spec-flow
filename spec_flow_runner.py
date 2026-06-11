@@ -155,6 +155,31 @@ def _dedup_tokens(node_id: str, title: str) -> set:
     return toks
 
 
+# the leaf_check clause that becomes stale when a rework closes decisions
+_OPEN_DECISIONS_REASON_RE = re.compile(
+    r"\d+ open decision\(s\) — resolve before leafing")
+_OPEN_DECISIONS_NONE_RE = re.compile(r"\bnone\b", re.IGNORECASE)
+
+
+def _count_open_decisions(spec_md: str) -> Optional[int]:
+    """Count list items in the authored '## Open decisions' section.
+    Returns None when the section is absent (nothing to recount)."""
+    in_section = False
+    found = False
+    count = 0
+    for raw in spec_md.splitlines():
+        line = raw.strip()
+        if line.lower().startswith("## open decisions"):
+            in_section, found = True, True
+            continue
+        if in_section and line.startswith("## "):
+            break
+        if in_section and line.startswith(("- ", "* ")):
+            if not _OPEN_DECISIONS_NONE_RE.search(line):
+                count += 1
+    return count if found else None
+
+
 def node_similarity(a_id: str, a_title: str, b_id: str, b_title: str) -> float:
     """0..1 similarity between two nodes by id+title token stems."""
     a, b = _dedup_tokens(a_id, a_title), _dedup_tokens(b_id, b_title)
@@ -1050,10 +1075,37 @@ class Engine:
                 new_md = str(out.get("spec_markdown") or "").strip()
                 if new_md:
                     node["spec_markdown"] = new_md
+                    # a rework legitimately CLOSES open decisions in the text;
+                    # the engine header / metrics must follow, or the reviewer
+                    # keeps rejecting the contradiction (header says N open,
+                    # body says none) until the budget burns out
+                    n_open = _count_open_decisions(new_md)
+                    metrics = node.setdefault("metrics", {})
+                    was = metrics.get("open_decisions")
+                    if n_open is not None and was is not None \
+                            and int(was) != n_open:
+                        metrics["open_decisions"] = n_open
+                        cleaned = _OPEN_DECISIONS_REASON_RE.sub(
+                            (f"{n_open} open decision(s) — resolve before"
+                             " leafing") if n_open else "",
+                            str(spec_args["reasons"] or ""))
+                        spec_args["reasons"] = re.sub(
+                            r";\s*(?=;)|;\s*$|^\s*;", "",
+                            cleaned).strip("; ").strip()
+                        self.emit("review", "spec-decomposer",
+                                  "spec-flow-decompose", nid,
+                                  f"rework closed open decisions {was} → {n_open}",
+                                  "", level=L_MILESTONE)
                 spec_rel = self.workspace.spec(
                     nid, title, depth, spec_args["verdict"], spec_args["reasons"],
                     parent, spec_args["plan"], node=node, target=self._target)
                 verdict, reasons = self._consult_reviewer(nid, title, spec_rel)
+            if verdict == "REJECT":
+                self.emit("review", "spec-reviewer", "spec-reviewer", nid,
+                          f"rework budget exhausted ({budget}) — REJECT stands;"
+                          " needs research or a human decision",
+                          reasons[:200], "spec_review", "REJECT",
+                          level=L_MILESTONE)
             return
         if mode == "halt":
             raise RuntimeError(

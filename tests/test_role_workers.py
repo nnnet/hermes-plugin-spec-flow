@@ -338,3 +338,47 @@ def test_reject_policy_record_keeps_old_behaviour(plugin, tmp_path):
                           agents={"decomposer": decomposer, "reviewer": reviewer},
                           review_policy={"on_reject": "record"})
     assert [l for l in res.loops if l["type"] == "spec-review-reject"]
+
+
+def test_rework_closes_open_decisions_updates_header(plugin, tmp_path):
+    # the reviewer demands open decisions be closed; the reworked spec closes
+    # them in text — the engine must recount, sync node metrics and scrub the
+    # stale 'N open decision(s)' clause from the header, or the reviewer
+    # rejects the header/body contradiction until the budget burns out
+    open_md = ("## Requirements\n- REQ-editor-1\n"
+               "## Open decisions\n- storage: sqlite vs files\n"
+               "- export format: pdf vs html\n"
+               "## Acceptance criteria\n- ACR-editor-1")
+    closed_md = ("## Requirements\n- REQ-editor-1\n"
+                 "## Open decisions\n- None — sqlite and pdf chosen "
+                 "(simplest path to the goal)\n"
+                 "## Acceptance criteria\n- ACR-editor-1")
+
+    def decomposer(ctx):
+        if ctx.get("rework"):
+            return {"spec_markdown": closed_md}
+        if ctx["depth"] == 0:
+            return {"metrics": dict(BIG),
+                    "children": [{"id": "editor", "title": "Invoice editor"}]}
+        return {"metrics": {**SMALL, "open_decisions": 2},
+                "spec_markdown": open_md}
+
+    state = {"rejected": False}
+
+    def reviewer(ctx):
+        if ctx["node"] == "editor" and not state["rejected"]:
+            state["rejected"] = True
+            return {"verdict": "REJECT",
+                    "reasons": ["2 open decisions remain unresolved"]}
+        return {"verdict": "PASS", "reasons": []}
+
+    res = eng.run_project(dict(GOAL), workspace=str(tmp_path / "wk"),
+                          tools=plugin.tools,
+                          agents={"decomposer": decomposer, "reviewer": reviewer})
+    closed = [e for e in res.events
+              if "rework closed open decisions 2 → 0" in e.action]
+    assert closed, "engine must record that the rework closed the decisions"
+    spec = (tmp_path / "wk" / "specs" / "editor.md").read_text(encoding="utf-8")
+    assert "resolve before leafing" not in spec
+    assert "| open_decisions | 0 |" in spec
+    assert "None — sqlite and pdf chosen" in spec

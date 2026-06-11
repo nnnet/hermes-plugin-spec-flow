@@ -263,11 +263,17 @@ def make_decomposer(workspace_dir: Optional[str] = None,
             prompt += ("\n\nREWORK ROUND — the reviewer REJECTED the previous"
                        " version of this node's spec. The exact reasons:\n"
                        + feedback +
-                       "\nThe node's atomicity, metrics and children are"
-                       " already decided and MUST NOT change. Re-author ONLY"
-                       " the specification text fixing EVERY point above —"
+                       "\nThe node's atomicity and children are already"
+                       " decided and MUST NOT change. Re-author ONLY the"
+                       " specification text fixing EVERY point above —"
                        " split coupled requirements, cover each REQ with an"
                        " acceptance criterion, keep REQ ids stable."
+                       "\nIf the reviewer demands open decisions be CLOSED,"
+                       " actually decide: pick the option that best serves"
+                       " the project goal and constitution, state the choice"
+                       " and its rationale in the spec, and keep '## Open"
+                       " decisions' honest — list ONLY what truly remains"
+                       " open ('None — <why>' when nothing does)."
                        "\nReply with ONLY: {\"spec_markdown\": \"...\"}")
         parent_id = ctx.get("parent_id")
         if parent_id:
