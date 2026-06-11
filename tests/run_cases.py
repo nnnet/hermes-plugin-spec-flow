@@ -99,6 +99,9 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
     live = decomposer == "llm" or implementer == "llm"
     if live:
         os.environ["SPEC_FLOW_LLM_LOG"] = str(case_dir / "llm-log.jsonl")
+        # claude -p is a full agent: its incidental file writes land here, not
+        # in the plugin root (the engine's REAL artifacts go to workspace/)
+        os.environ["SPEC_FLOW_LLM_CWD"] = str(case_dir / "agent-scratch")
     trace = case_dir / "trace.jsonl"
     sink = eng.LogSink(path=str(trace), level=eng.L_DETAIL, fmt="jsonl", enabled=True)
     # the plugin ALWAYS builds the tree itself by calling a decomposer — the

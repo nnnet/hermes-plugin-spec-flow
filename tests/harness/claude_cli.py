@@ -71,3 +71,17 @@ def mcp_args_no_serena() -> list[str]:
     servers.pop("serena", None)
     return ["--strict-mcp-config", "--mcp-config",
             json.dumps({"mcpServers": servers})]
+
+
+def agent_cwd() -> str:
+    """Working directory for the claude subprocess. claude -p is a full agent
+    and may create files in its cwd as a side effect of reasoning; pointing the
+    cwd into the run folder (env SPEC_FLOW_LLM_CWD, set by the case runner)
+    keeps that noise out of the plugin root. Falls back to a temp dir."""
+    import os as _os
+    import tempfile as _tf
+    d = _os.environ.get("SPEC_FLOW_LLM_CWD")
+    if d:
+        _os.makedirs(d, exist_ok=True)
+        return d
+    return _tf.gettempdir()

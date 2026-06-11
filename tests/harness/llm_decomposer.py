@@ -88,7 +88,8 @@ def _ask(prompt: str) -> str:
     for i in range(attempts):
         proc = subprocess.run([*claude_cli.claude_cmd(), "-p", "--model", MODEL,
                                *claude_cli.mcp_args_no_serena()],
-                              input=prompt, capture_output=True, text=True, timeout=300)
+                              input=prompt, capture_output=True, text=True, timeout=300,
+                              cwd=claude_cli.agent_cwd())
         if proc.returncode == 0 and proc.stdout.strip():
             return claude_cli.strip_headroom_banner(proc.stdout)
         last = (proc.stderr or proc.stdout)[-300:]
