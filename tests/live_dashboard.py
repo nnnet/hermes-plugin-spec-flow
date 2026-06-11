@@ -610,7 +610,10 @@ function trackActive(){const a=STATE&&STATE.active;
  if(!a){ACTIVE={node:null,role:null,since:0};return;}
  if(a.node!==ACTIVE.node||a.role!==ACTIVE.role)ACTIVE={node:a.node,role:a.role,since:Date.now()};}
 setInterval(()=>{const el=document.getElementById('elapsed');
- if(el&&ACTIVE.since)el.textContent=' · уже '+Math.round((Date.now()-ACTIVE.since)/1000)+'с';},1000);
+ if(!el)return;
+ // with auto-refresh OFF the data is frozen — a ticking counter would lie
+ if(!AUTO){el.textContent='';return;}
+ if(ACTIVE.since)el.textContent=' · уже '+Math.round((Date.now()-ACTIVE.since)/1000)+'с';},1000);
 const $=s=>document.querySelector(s);
 function mray(){if(window.mermaid){try{mermaid.run({querySelector:'#detail .mermaid'});}catch(e){}}}
 
