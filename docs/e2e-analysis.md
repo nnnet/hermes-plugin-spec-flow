@@ -68,6 +68,19 @@ is dominated by call count, so bounding the tree (Finding A) is also the main
 lever on speed. **Stage-4 work:** smaller/sharper decomposer prompts; consider a
 cheaper call for sizing vs a richer call only where a node is borderline.
 
+### Finding D — atomicity-first works, but the guardrail is a safety net (A/B)
+After the Stage-4 change the live decomposer DOES emit an explicit `atomic`
+judgment (confirmed in the call log: p1 produced atomic=False at depth 0–2,
+atomic=True at the forced-leaf depth). But haiku is internally CONSISTENT — when
+it claims `atomic:false` it also reports above-threshold metrics — so the
+guardrail's inconsistency catch (small metrics yet claimed splittable) rarely
+fires live. **Conclusion:** atomicity-first gives the decomposer a first-class
+judgment and the guardrail is a proven safety net (unit tests), but the
+practical lever on live tree size remains the depth/fan-out caps. **Stage-4
+follow-up:** push the decomposer prompt to prefer larger leaves (report honest
+small metrics for borderline nodes) so atomicity and metrics both shrink — the
+guardrail then enforces it for free.
+
 ### Finding C — reports crashed on a self-built tree (BUG, fixed)
 In decomposer mode the case has no `tree`; `render_tree`/`render_mermaid` did
 `proj["tree"]` and KeyError'd, crashing report generation AFTER the run finished

@@ -117,6 +117,7 @@ def decompose(ctx: dict) -> dict:
         child.pop("metrics", None)          # children are sized on their own visit
     children = [c.get("id", "?") for c in keep.get("children", []) or []]
     llm_log.log_outcome(role="decomposer", node=nid, depth=ctx["depth"],
+                        atomic=keep.get("atomic"),
                         verdict="leaf" if not children else "branch",
                         children=children)
     return keep
