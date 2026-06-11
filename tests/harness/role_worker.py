@@ -106,6 +106,71 @@ def _extract_json(text: str) -> dict:
     return json.loads(m.group(0))
 
 
+_ASK_RULE = """
+If (and ONLY if) a genuine blocker needs a HUMAN decision you cannot make
+yourself, reply with ONLY {"question": "<one specific question>"} instead of
+the normal output — you will be re-invoked with the human's answer."""
+
+_NOTE_RULE = """
+
+OPERATOR NOTE (the human watching this run addressed you — you MUST react):
+{note}
+
+Address it in your reply by ADDING the key
+"operator_reply": {{"position": "comply"|"defend", "response": "<your answer>"}}
+— "comply" = you accept it as a directive and your output reflects it;
+"defend" = you keep your course and argue why. Then produce the normal
+output as specified above."""
+
+
+def _dialog_round(prompt: str, *, role: str, node: str, system: str,
+                  allowed: list[str], disallowed: list[str],
+                  cwd: Optional[str], model: str, channel: Any) -> str:
+    """One worker session + at most one human Q&A round.
+
+    A reply consisting of {"question": ...} pauses the work, asks the human
+    through the channel and re-runs the session with the answer appended.
+    No channel / no answer → the worker is told to proceed on its own
+    judgement and state its assumption."""
+    raw = _run_claude(prompt, system=system, allowed=allowed,
+                      disallowed=disallowed, cwd=cwd, model=model)
+    try:
+        probe = _extract_json(raw)
+    except ValueError:
+        return raw
+    question = str(probe.get("question", "")).strip()
+    if not question or len(probe) > 1:
+        return raw
+    answer = channel.ask(role, node, question) if channel is not None else None
+    if answer:
+        followup = (f"{prompt}\n\nYOU ASKED: {question}\n"
+                    f"HUMAN ANSWER: {answer}\n"
+                    "Fold the answer into your work and produce the normal "
+                    "output now (no more questions).")
+    else:
+        followup = (f"{prompt}\n\nYOU ASKED: {question}\n"
+                    "No human answer arrived. Proceed on your own best "
+                    "judgement, STATE the assumption you made, and produce "
+                    "the normal output now (no more questions).")
+    return _run_claude(followup, system=system, allowed=allowed,
+                       disallowed=disallowed, cwd=cwd, model=model)
+
+
+def _handle_operator_reply(out: dict, *, role: str, node: str,
+                           note: Optional[str], channel: Any) -> dict:
+    """Record the worker's comply/defend answer to an operator note."""
+    reply = out.pop("operator_reply", None)
+    if note and channel is not None:
+        if isinstance(reply, dict) and str(reply.get("response", "")).strip():
+            channel.record_reply(role, node,
+                                 str(reply.get("position", "comply")).lower(),
+                                 str(reply["response"]), note)
+        else:
+            channel.record_reply(role, node, "unaddressed",
+                                 "(worker did not address the note)", note)
+    return out
+
+
 def _ws_root(ws: Any) -> Optional[str]:
     root = getattr(ws, "root", None) if not isinstance(ws, str) else ws
     return str(root) if root else None
@@ -143,35 +208,47 @@ LEAF_DEPTH = int(os.environ.get("SPEC_FLOW_LLM_LEAF_DEPTH", "3"))
 MAX_CHILDREN = int(os.environ.get("SPEC_FLOW_LLM_MAX_CHILDREN", "4"))
 
 
-def make_decomposer(workspace_dir: Optional[str] = None) -> Callable[[dict], dict]:
+def make_decomposer(workspace_dir: Optional[str] = None,
+                    channel: Any = None) -> Callable[[dict], dict]:
     system = load_skill_md("spec-flow-decompose")
     allowed, disallowed = load_profile_policy("spec-decomposer")
     model = _model_for("decomposer")
 
     def decompose(ctx: dict) -> dict:
         p = ctx["project"]
+        nid = ctx["node"]["id"]
         existing = "; ".join(
             f"{n['id']} ({n['title']})" for n in ctx.get("existing_nodes") or []) or "—"
         prompt = _DECOMPOSE_TASK.format(
             goal=p.get("goal", ""), target=p.get("target", ""),
             constitution="; ".join(p.get("constitution", [])),
-            title=ctx["node"]["title"], id=ctx["node"]["id"],
+            title=ctx["node"]["title"], id=nid,
             depth=ctx["depth"], parent=ctx.get("parent") or "—",
             ancestors=" → ".join(ctx.get("ancestors") or []) or "—",
-            existing=existing)
+            existing=existing) + _ASK_RULE
         if ctx["depth"] >= LEAF_DEPTH:
             prompt += (f"\n\nHARD CONSTRAINT: depth {ctx['depth']} >= "
                        f"{LEAF_DEPTH} — this node MUST be atomic (no children).")
-        raw = _run_claude(prompt, system=system, allowed=allowed,
-                          disallowed=disallowed, cwd=workspace_dir, model=model)
-        out = _extract_json(raw)
-        llm_log.log_outcome(role="worker-decomposer", node=ctx["node"]["id"],
-                            depth=ctx["depth"], model=model, prompt=prompt,
-                            reply=raw, ok=True)
+        note = channel.poll_note() if channel is not None else None
+        if note:
+            prompt += _NOTE_RULE.format(note=note)
+        raw = _dialog_round(prompt, role="decomposer", node=nid, system=system,
+                            allowed=allowed, disallowed=disallowed,
+                            cwd=workspace_dir, model=model, channel=channel)
+        out = _handle_operator_reply(_extract_json(raw), role="decomposer",
+                                     node=nid, note=note, channel=channel)
         if ctx["depth"] >= LEAF_DEPTH:
             out.pop("children", None)
         if out.get("children"):
             out["children"] = out["children"][:MAX_CHILDREN]
+        # canonical role name + children ids — the live dashboard rebuilds
+        # the growing tree from exactly these fields; ``worker`` marks the
+        # real-worker (skill+profile) origin
+        llm_log.log_outcome(role="decomposer", worker=True, node=nid,
+                            depth=ctx["depth"], model=model,
+                            atomic=bool(out.get("atomic")),
+                            children=[c.get("id") for c in out.get("children") or []],
+                            prompt=prompt, reply=raw, ok=True)
         return out
 
     return decompose
@@ -192,19 +269,33 @@ When done reply with ONLY: {{"done": true, "files": ["src/{fn}.py",
 "tests/test_{fn}.py"], "tests_passed": true|false}}"""
 
 
-def make_implementer() -> Callable[[dict], Any]:
+def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
     system = load_skill_md("spec-implement")
     allowed, disallowed = load_profile_policy("implementer")
     model = _model_for("implementer")
 
     def implement(ctx: dict) -> Any:
         ws_root = _ws_root(ctx.get("workspace"))
-        fn = re.sub(r"\W+", "_", ctx["node"]).strip("_").lower()
-        prompt = _IMPLEMENT_TASK.format(title=ctx["title"], id=ctx["node"],
-                                        spec=ctx["spec"], fn=fn)
-        raw = _run_claude(prompt, system=system, allowed=allowed,
-                          disallowed=disallowed, cwd=ws_root, model=model)
-        llm_log.log_outcome(role="worker-implementer", node=ctx["node"], depth=-1,
+        nid = ctx["node"]
+        fn = re.sub(r"\W+", "_", nid).strip("_").lower()
+        prompt = _IMPLEMENT_TASK.format(title=ctx["title"], id=nid,
+                                        spec=ctx["spec"], fn=fn) + _ASK_RULE
+        note = channel.poll_note() if channel is not None else None
+        if note:
+            prompt += _NOTE_RULE.format(note=note)
+        raw = _dialog_round(prompt, role="implementer", node=nid, system=system,
+                            allowed=allowed, disallowed=disallowed,
+                            cwd=ws_root, model=model, channel=channel)
+        try:
+            _handle_operator_reply(_extract_json(raw), role="implementer",
+                                   node=nid, note=note, channel=channel)
+        except ValueError:
+            # non-JSON final reply: artifacts still judge the work; an
+            # unaddressed operator note is recorded honestly
+            if note and channel is not None:
+                channel.record_reply("implementer", nid, "unaddressed",
+                                     "(worker did not address the note)", note)
+        llm_log.log_outcome(role="implementer", worker=True, node=nid, depth=-1,
                             model=model, prompt=prompt, reply=raw, ok=True)
         return None     # the engine judges by the artifacts, not the reply
 
@@ -237,7 +328,7 @@ def make_reviewer() -> Callable[[dict], dict]:
                           disallowed=disallowed, cwd=ctx.get("workspace_root"),
                           model=model)
         out = _extract_json(raw)
-        llm_log.log_outcome(role="worker-reviewer", node=ctx.get("node", "?"),
+        llm_log.log_outcome(role="reviewer", worker=True, node=ctx.get("node", "?"),
                             depth=-1, model=model, prompt=prompt, reply=raw, ok=True)
         verdict = str(out.get("verdict", "PASS")).upper()
         return {"verdict": "REJECT" if verdict == "REJECT" else "PASS",
@@ -274,7 +365,7 @@ def make_researcher() -> Callable[[dict], dict]:
                           disallowed=disallowed, cwd=ctx.get("workspace_root"),
                           model=model)
         out = _extract_json(raw)
-        llm_log.log_outcome(role="worker-researcher", node=ctx.get("node", "?"),
+        llm_log.log_outcome(role="researcher", worker=True, node=ctx.get("node", "?"),
                             depth=-1, model=model, prompt=prompt, reply=raw, ok=True)
         return {"recommendation": str(out.get("recommendation", "")).strip(),
                 "basis": str(out.get("basis", "")).strip()}

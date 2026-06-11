@@ -110,12 +110,27 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
     # for the deterministic decomposer; the analysis reference is the `oracle`
     # block). 'blueprint' = deterministic, offline, no quota; 'llm' = live model.
     agents = {}
+    # HITL levels come from the CASE itself (hitl: block, all default ON for
+    # dialogue, approve defaults to auto-true) — the CLI --hitl console only
+    # switches WHO approves, not whether the dialogue channel exists.
+    hitl_cfg = case.get("hitl") or {}
+    hitl_approve = bool(hitl_cfg.get("approve", True))
+    hitl_questions = bool(hitl_cfg.get("questions", True))
+    hitl_notes = bool(hitl_cfg.get("notes", True))
+    channel = None
+    if workers == "real" and (hitl_questions or hitl_notes):
+        from harness import hitl as hitl_mod
+        channel = hitl_mod.HumanChannel(case_dir / "hitl")
+        print(f"  HITL channel: {channel.root}  "
+              f"(inbox.md <- operator notes; answer.md <- reply to a worker "
+              f"question; outbox.md -> comply/defend audit)")
     if workers == "real":
         # Industrial mode without Hermes: real worker sessions from the
         # plugin's own SKILL.md + profile tool policy, per role.
         from harness import role_worker
         ws_dir = str(case_dir / "workspace")
-        dec_fn = role_worker.make_decomposer(workspace_dir=ws_dir)
+        q_chan = channel if hitl_questions or hitl_notes else None
+        dec_fn = role_worker.make_decomposer(workspace_dir=ws_dir, channel=q_chan)
         rev_fn = role_worker.make_reviewer()
         res_fn = role_worker.make_researcher()
         if meter is not None:
@@ -126,13 +141,21 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
         agents["reviewer"] = rev_fn
         agents["researcher"] = res_fn
         if depth in ("execute", "product"):
-            impl_fn = role_worker.make_implementer()
+            impl_fn = role_worker.make_implementer(channel=q_chan)
             if meter is not None:
                 impl_fn = meter.wrap("implementer", impl_fn)
             agents["implementer"] = impl_fn
     if hitl == "console":
         from harness import hitl as hitl_mod
         agents["approver"] = hitl_mod.console_approver
+    elif not hitl_approve:
+        # the case explicitly demands real sign-off: a checkpoint without a
+        # human attached is a REJECT, not a silent pass
+        def _strict_approver(ctx):
+            return {"approved": False,
+                    "reason": "case demands human sign-off (hitl.approve: false) "
+                              "and no human is attached — rejected"}
+        agents["approver"] = _strict_approver
     if "implementer" not in agents and depth in ("execute", "product"):
         if implementer == "llm":
             from harness import llm_implementer
@@ -145,7 +168,8 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
     max_calls = eng.MAX_DECOMPOSE_CALLS
     if workers == "real":
         # live tree building: same blueprint/revision drop as llm mode
-        exec_case = {k: v for k, v in case.items() if k not in ("blueprint", "revisions", "revision")}
+        exec_case = {k: v for k, v in case.items()
+                     if k not in ("blueprint", "revisions", "revision", "hitl")}
         max_calls = int(os.environ.get("SPEC_FLOW_MAX_DECOMPOSE_CALLS", "80"))
     elif decomposer == "llm":
         from harness import llm_decomposer

@@ -68,3 +68,17 @@ oracle:
   expected_loops: {clarify: 1, review_fail: 1}
   coverage: {min_skills: 6, min_profiles: 5}
   research_before_impl: true
+
+# Human-in-the-loop levels for real-worker runs (harness reads this; the
+# engine itself never sees the block):
+#   approve:   true  = checkpoints auto-approve (honest note in the trace);
+#              false = a checkpoint with no human attached is a REJECT
+#   questions: workers may ask the human a clarifying question and fold
+#              the answer into their work (hitl/answer.md or tty)
+#   notes:     the human may interject via hitl/inbox.md at any moment;
+#              the next worker must COMPLY (take it as a directive) or
+#              DEFEND its course with arguments (hitl/outbox.md)
+hitl:
+  approve: true
+  questions: true
+  notes: true

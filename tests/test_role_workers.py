@@ -178,3 +178,102 @@ def test_without_workers_behaviour_unchanged(plugin, tmp_path):
     assert not [e for e in res.events if e.gate in ("spec_review", "integrate_verify")]
     assert not [l for l in res.loops
                 if l["type"] in ("spec-review-reject", "integrate-fail")]
+
+
+# ── dialogue HITL: worker questions + operator notes ─────────────────────
+
+
+class _FakeChannel:
+    def __init__(self, answer=None):
+        self.answer = answer
+        self.asked = []
+        self.replies = []
+        self.note = None
+
+    def ask(self, role, node, question):
+        self.asked.append((role, node, question))
+        return self.answer
+
+    def poll_note(self):
+        n, self.note = self.note, None
+        return n
+
+    def record_reply(self, role, node, position, response, note):
+        self.replies.append((role, node, position, response, note))
+
+
+def test_worker_question_gets_human_answer(monkeypatch):
+    calls = []
+
+    def fake_run(prompt, **kw):
+        calls.append(prompt)
+        if len(calls) == 1:
+            return '{"question": "Which currency for payouts?"}'
+        assert "HUMAN ANSWER: EUR only" in prompt
+        return '{"atomic": true, "metrics": {"modules": 1, "tasks": 2, ' \
+               '"interfaces": 1, "estimated_loc": 40, "open_decisions": 0, ' \
+               '"single_concern": true, "testable_criteria": true}}'
+
+    monkeypatch.setattr(rw, "_run_claude", fake_run)
+    chan = _FakeChannel(answer="EUR only")
+    dec = rw.make_decomposer(channel=chan)
+    out = dec({"project": {"goal": "g", "target": "", "constitution": []},
+               "node": {"id": "pay", "title": "Payouts"}, "parent": None,
+               "depth": 1})
+    assert out["atomic"] is True
+    assert chan.asked == [("decomposer", "pay", "Which currency for payouts?")]
+    assert len(calls) == 2
+
+
+def test_worker_question_without_answer_proceeds(monkeypatch):
+    calls = []
+
+    def fake_run(prompt, **kw):
+        calls.append(prompt)
+        if len(calls) == 1:
+            return '{"question": "Stripe or Adyen?"}'
+        assert "Proceed on your own best" in prompt
+        return '{"atomic": true, "metrics": {"modules": 1, "tasks": 1, ' \
+               '"interfaces": 0, "estimated_loc": 20, "open_decisions": 0, ' \
+               '"single_concern": true, "testable_criteria": true}}'
+
+    monkeypatch.setattr(rw, "_run_claude", fake_run)
+    dec = rw.make_decomposer(channel=_FakeChannel(answer=None))
+    out = dec({"project": {"goal": "g", "target": "", "constitution": []},
+               "node": {"id": "n", "title": "N"}, "parent": None, "depth": 1})
+    assert out["atomic"] is True and len(calls) == 2
+
+
+def test_operator_note_comply_recorded(monkeypatch):
+    def fake_run(prompt, **kw):
+        assert "OPERATOR NOTE" in prompt and "no crypto payouts" in prompt
+        return '{"atomic": true, "metrics": {"modules": 1, "tasks": 1, ' \
+               '"interfaces": 0, "estimated_loc": 20, "open_decisions": 0, ' \
+               '"single_concern": true, "testable_criteria": true}, ' \
+               '"operator_reply": {"position": "comply", ' \
+               '"response": "dropping crypto rail from scope"}}'
+
+    monkeypatch.setattr(rw, "_run_claude", fake_run)
+    chan = _FakeChannel()
+    chan.note = "no crypto payouts"
+    dec = rw.make_decomposer(channel=chan)
+    out = dec({"project": {"goal": "g", "target": "", "constitution": []},
+               "node": {"id": "n", "title": "N"}, "parent": None, "depth": 1})
+    assert "operator_reply" not in out          # consumed, not leaked to engine
+    assert chan.replies == [("decomposer", "n", "comply",
+                             "dropping crypto rail from scope",
+                             "no crypto payouts")]
+
+
+def test_human_channel_files(tmp_path):
+    from harness import hitl as hm
+    chan = hm.HumanChannel(tmp_path / "hitl")
+    # operator note: written → consumed once
+    chan.inbox.write_text("ship EU first", encoding="utf-8")
+    assert chan.poll_note() == "ship EU first"
+    assert chan.poll_note() is None
+    # comply/defend audit lands in outbox
+    chan.record_reply("decomposer", "n1", "defend", "EU-only cuts GMV target",
+                      "ship EU first")
+    out = chan.outbox.read_text(encoding="utf-8")
+    assert "DEFEND" in out and "EU-only cuts GMV target" in out
