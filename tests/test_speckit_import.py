@@ -97,12 +97,68 @@ def test_import_parse_only(plugin):
     assert any(p.startswith("Phase 3.2") for p in out["phases"])
 
 
-def test_import_seeds_every_card_without_hermes(plugin):
+def test_import_seeds_open_cards_without_hermes(plugin):
     out = json.loads(plugin.tools._handle_speckit_import(
         {"project": "photo", "tasks": TASKS_MD}))
-    # one seed attempt per parsed card, even though hermes is absent
-    assert len(out["seeded"]) == out["parsed"] == 6
+    # one seed attempt per OPEN card (done T001 skipped), even without hermes
+    assert out["parsed"] == 6
+    assert {s["id"] for s in out["seeded"]} == {"T002", "T004", "T005", "T008", "T009"}
+
+
+def test_include_done_seeds_checked_tasks_too(plugin):
+    out = json.loads(plugin.tools._handle_speckit_import(
+        {"project": "photo", "tasks": TASKS_MD, "include_done": True}))
     assert {s["id"] for s in out["seeded"]} == {"T001", "T002", "T004", "T005", "T008", "T009"}
+
+
+def test_seeding_follows_dependency_order(plugin):
+    out = json.loads(plugin.tools._handle_speckit_import(
+        {"project": "photo", "tasks": TASKS_MD}))
+    order = [s["id"] for s in out["seeded"]]
+    # every prerequisite is seeded before its dependents
+    assert order.index("T004") < order.index("T008")
+    assert order.index("T005") < order.index("T008")
+    assert order.index("T008") < order.index("T009")
+
+
+def test_parent_wired_when_card_ids_resolve(plugin, monkeypatch):
+    # emulate a live hermes that returns an id per created card
+    created = {"n": 0, "argv": []}
+
+    def fake_kanban(kanban_args):
+        created["n"] += 1
+        created["argv"].append(list(kanban_args))
+        return {"ok": True, "stdout": f"card {100 + created['n']} created"}
+
+    monkeypatch.setattr(plugin.tools, "_run_kanban", fake_kanban)
+    out = json.loads(plugin.tools._handle_speckit_import(
+        {"project": "photo", "tasks": TASKS_MD}))
+    by = {s["id"]: s for s in out["seeded"]}
+    # T009 depends on T004, T005, T008 -> three resolved --parent links
+    assert len(by["T009"]["parents"]) == 3
+    t009_argv = next(a for a in created["argv"] if any("T009" in p for p in a))
+    assert t009_argv.count("--parent") == 3
+    # no unresolved leftovers when ids resolve
+    assert "parents_unresolved" not in by["T009"]
+
+
+def test_unresolved_parents_reported_offline(plugin):
+    # without hermes no card ids exist -> deps surface as unresolved
+    out = json.loads(plugin.tools._handle_speckit_import(
+        {"project": "photo", "tasks": TASKS_MD}))
+    by = {s["id"]: s for s in out["seeded"]}
+    assert set(by["T009"]["parents_unresolved"]) == {"T004", "T005", "T008"}
+
+
+def test_topo_sort_survives_cycle(plugin):
+    cards = [
+        {"id": "A", "deps": ["B"], "done": False},
+        {"id": "B", "deps": ["A"], "done": False},
+        {"id": "C", "deps": [], "done": False},
+    ]
+    out = plugin.tools.topo_sort_cards(cards)
+    assert {c["id"] for c in out} == {"A", "B", "C"}  # nothing dropped
+    assert out[0]["id"] == "C"                        # the free card goes first
 
 
 def test_import_reads_file(plugin, tmp_path):

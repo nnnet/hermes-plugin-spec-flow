@@ -67,7 +67,18 @@ def test_request_body_becomes_input(plugin):
     tools = {t["name"]: t for t in plugin.tools.openapi_to_mcp_tools(SPEC)}
     create = tools["createOrder"]
     assert "body" in create["input_schema"]["properties"]
-    assert "body" in create["input_schema"]["required"]
+    # OpenAPI default: a request body is optional unless required: true
+    assert "body" not in create["input_schema"]["required"]
+
+
+def test_required_request_body_is_required_input(plugin):
+    spec = {"info": {"title": "X"}, "paths": {"/x": {"post": {
+        "operationId": "makeX",
+        "requestBody": {"required": True, "content": {"application/json": {
+            "schema": {"type": "object"}}}},
+    }}}}
+    tools = {t["name"]: t for t in plugin.tools.openapi_to_mcp_tools(spec)}
+    assert "body" in tools["makeX"]["input_schema"]["required"]
 
 
 def test_optional_query_not_required(plugin):

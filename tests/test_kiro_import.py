@@ -88,6 +88,23 @@ def test_tasks_with_numbering_and_refs(plugin):
     assert by["3"]["requirements"] == ["2.1"]
 
 
+def test_criteria_classified_as_ears(plugin):
+    reqs = plugin.tools.parse_kiro_requirements(REQUIREMENTS_MD)
+    # all fixture criteria are WHEN...SHALL -> event-driven EARS
+    assert reqs[0]["ears"] == ["event", "event"]
+    assert reqs[1]["ears"] == ["event"]
+
+
+def test_classify_ears_patterns(plugin):
+    c = plugin.tools.classify_ears
+    assert c("WHEN a user clicks THEN the system SHALL save") == "event"
+    assert c("WHILE charging the system SHALL show progress") == "state"
+    assert c("WHERE GPS is fitted the system SHALL log position") == "optional"
+    assert c("IF the battery is low THEN the system SHALL alert") == "unwanted"
+    assert c("The system SHALL respond within 500ms") == "ubiquitous"
+    assert c("It would be nice to have dark mode") == "non-ears"
+
+
 def test_design_sections(plugin):
     design = plugin.tools.parse_kiro_design(DESIGN_MD)
     assert "Overview" in design and "Security" in design

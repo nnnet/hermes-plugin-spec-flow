@@ -714,6 +714,46 @@ def parse_speckit_tasks(text: str) -> list[dict]:
     return cards
 
 
+def topo_sort_cards(cards: list[dict]) -> list[dict]:
+    """Order cards so every dependency precedes its dependents (stable).
+
+    Unknown/external dep refs are ignored; on a cycle the remaining cards are
+    appended in their original order rather than dropped."""
+    by_id = {c["id"]: c for c in cards}
+    placed: set = set()
+    out: list[dict] = []
+    pending = list(cards)
+    while pending:
+        progress = False
+        rest: list[dict] = []
+        for c in pending:
+            deps = [d for d in c.get("deps", []) if d in by_id]
+            if all(d in placed for d in deps):
+                out.append(c)
+                placed.add(c["id"])
+                progress = True
+            else:
+                rest.append(c)
+        if not progress:  # dependency cycle — keep original order, do not drop
+            out.extend(rest)
+            break
+        pending = rest
+    return out
+
+
+_CARD_ID = re.compile(r"\b(\d+)\b")
+
+
+def _created_card_id(result: dict) -> Optional[str]:
+    """Pull the created card id out of a kanban create result, if any."""
+    if not result.get("ok"):
+        return None
+    if result.get("id"):
+        return str(result["id"])
+    m = _CARD_ID.search(result.get("stdout", "") or "")
+    return m.group(1) if m else None
+
+
 SPECKIT_IMPORT_SCHEMA = {
     "type": "function",
     "function": {
@@ -722,8 +762,9 @@ SPECKIT_IMPORT_SCHEMA = {
             "Import a spec-kit tasks.md (phased '- [ ] T001 [P] ...' checklist) "
             "into kanban cards on a spec-flow board. Parses phases, the [P] "
             "parallel marker, file paths and the Dependencies section, then "
-            "seeds one card per task. Use to start from an existing spec-kit "
-            "spec instead of decomposing from scratch."
+            "seeds one card per task in dependency order, wiring each card's "
+            "--parent to its prerequisite cards. Use to start from an existing "
+            "spec-kit spec instead of decomposing from scratch."
         ),
         "parameters": {
             "type": "object",
@@ -733,6 +774,7 @@ SPECKIT_IMPORT_SCHEMA = {
                 "tasks": {"type": "string", "description": "Raw tasks.md content (alternative to tasks_md)."},
                 "dir": {"type": "string", "description": "Project workspace directory (optional)."},
                 "seed": {"type": "boolean", "description": "Create the cards on the board (default true). False = parse only."},
+                "include_done": {"type": "boolean", "description": "Also seed tasks already checked [x] (default false)."},
             },
             "required": ["project"],
         },
@@ -761,19 +803,41 @@ def _handle_speckit_import(args: dict[str, Any], **_: Any) -> str:
 
     workdir = args.get("dir")
     seed = args.get("seed", True)
+    include_done = bool(args.get("include_done", False))
     seeded: list[dict] = []
     if seed:
-        for card in cards:
+        # seed in dependency order, wiring --parent to the created prereq cards
+        # so the board enforces the spec-kit ordering (the plan's B1 contract)
+        card_ids: dict[str, str] = {}  # task id (T008) -> created card id
+        for card in topo_sort_cards(cards):
+            if card["done"] and not include_done:
+                continue
             kanban_args = [
                 "create", "--board", str(project),
                 "--title", f"{card['id']}: {card['title']}",
                 "--assignee", "implementer",
                 "--skill", "spec-implement",
             ]
+            resolved, unresolved = [], []
+            for dep in card.get("deps", []):
+                if dep in card_ids:
+                    resolved.append(card_ids[dep])
+                else:
+                    unresolved.append(dep)
+            for pid in resolved:
+                kanban_args += ["--parent", pid]
             if workdir:
                 kanban_args += ["--workspace", f"dir:{workdir}"]
             res = _run_kanban(kanban_args)
-            seeded.append({"id": card["id"], "result": res})
+            cid = _created_card_id(res)
+            if cid:
+                card_ids[card["id"]] = cid
+            entry = {"id": card["id"], "result": res}
+            if resolved:
+                entry["parents"] = resolved
+            if unresolved:
+                entry["parents_unresolved"] = unresolved
+            seeded.append(entry)
 
     phases = sorted({c["phase"] for c in cards if c["phase"]})
     return json.dumps({
@@ -803,10 +867,32 @@ _KIRO_TASK = re.compile(r"^(?P<indent>\s*)-\s*\[(?P<done>[ xX])\]\s*(?P<num>\d+(
 _KIRO_REQ_REF = re.compile(r"_Requirements?:\s*(?P<refs>[0-9.,\s]+)_", re.IGNORECASE)
 
 
-def parse_kiro_requirements(text: str) -> list[dict]:
-    """Parse Kiro requirements.md into [{id, title, story, criteria[]}].
+def classify_ears(clause: str) -> str:
+    """Classify a requirement clause into its EARS pattern (B4 — the notation
+    as CODE, not just prose in the spec-requirements skill).
 
-    ``criteria`` are the EARS 'SHALL' lines (the testable acceptance clauses).
+    Patterns: 'event' (WHEN), 'state' (WHILE), 'optional' (WHERE), 'unwanted'
+    (IF...THEN), 'ubiquitous' (a bare SHALL), or 'non-ears' (no SHALL at all —
+    not a testable EARS requirement)."""
+    low = clause.strip().lower()
+    if "shall" not in low:
+        return "non-ears"
+    if low.startswith("while ") or " while " in low.split("shall")[0]:
+        return "state"
+    if low.startswith("where "):
+        return "optional"
+    if low.startswith("if ") and "then" in low:
+        return "unwanted"
+    if low.startswith("when "):
+        return "event"
+    return "ubiquitous"
+
+
+def parse_kiro_requirements(text: str) -> list[dict]:
+    """Parse Kiro requirements.md into [{id, title, story, criteria[], ears[]}].
+
+    ``criteria`` are the EARS 'SHALL' lines (the testable acceptance clauses);
+    ``ears`` holds the matching EARS pattern per criterion (see classify_ears).
     """
     reqs: list[dict] = []
     cur: Optional[dict] = None
@@ -814,7 +900,7 @@ def parse_kiro_requirements(text: str) -> list[dict]:
         h = _KIRO_REQ_HEADER.match(ln)
         if h:
             cur = {"id": h.group("n"), "title": h.group("t").strip(),
-                   "story": "", "criteria": []}
+                   "story": "", "criteria": [], "ears": []}
             reqs.append(cur)
             continue
         if cur is None:
@@ -826,6 +912,7 @@ def parse_kiro_requirements(text: str) -> list[dict]:
             clause = ln.strip().lstrip("0123456789.").strip().lstrip("-*").strip()
             if clause:
                 cur["criteria"].append(clause)
+                cur["ears"].append(classify_ears(clause))
     return reqs
 
 
@@ -944,6 +1031,11 @@ def _handle_kiro_import(args: dict[str, Any], **_: Any) -> str:
 
 _OPENSPEC_OP = re.compile(r"^\s*##\s+(?P<op>ADDED|MODIFIED|REMOVED|RENAMED)\s+Requirements?\b", re.IGNORECASE)
 _OPENSPEC_REQ = re.compile(r"^\s*###\s+Requirement:\s*(?P<name>.+?)\s*$", re.IGNORECASE)
+# OpenSpec's actual RENAMED form is a FROM/TO pair of list items, the header
+# quoted in backticks: - FROM: `### Requirement: Old` / - TO: `### Requirement: New`
+_OPENSPEC_FROMTO = re.compile(
+    r"^\s*-\s*(?P<kind>FROM|TO):\s*`?#*\s*Requirement:\s*(?P<name>.+?)`?\s*$",
+    re.IGNORECASE)
 
 _OP_ACTION = {
     "ADDED": ("create", "decompose & implement a new node"),
@@ -972,13 +1064,30 @@ def parse_openspec_delta(text: str) -> list[dict]:
             cur["body"] = "\n".join(cur["_buf"]).strip()
             cur.pop("_buf", None)
 
+    rename_from: Optional[str] = None
     for ln in text.splitlines():
         mop = _OPENSPEC_OP.match(ln)
         if mop:
             _close()
             cur = None
+            rename_from = None
             op = mop.group("op").upper()
             continue
+        if op == "RENAMED":
+            # the FROM/TO pair form: the TO name becomes the respec node, the
+            # FROM name is kept in the body for provenance
+            mft = _OPENSPEC_FROMTO.match(ln)
+            if mft:
+                name = mft.group("name").strip()
+                if mft.group("kind").upper() == "FROM":
+                    rename_from = name
+                else:
+                    _close()
+                    cur = {"op": "RENAMED", "name": name, "id": _slug(name),
+                           "_buf": [f"renamed from: {rename_from}" if rename_from else ""]}
+                    deltas.append(cur)
+                    rename_from = None
+                continue
         mreq = _OPENSPEC_REQ.match(ln)
         if mreq and op:
             _close()
@@ -1156,12 +1265,15 @@ def openapi_to_mcp_tools(spec: dict) -> list[dict]:
             name = op.get("operationId") or _slug(f"{method}_{path}")
             merged = _openapi_param_schema(list(shared) + list(op.get("parameters", [])))
             props, required = merged["properties"], merged["required"]
-            body = (((op.get("requestBody") or {}).get("content") or {})
+            req_body = op.get("requestBody") or {}
+            body = ((req_body.get("content") or {})
                     .get("application/json") or {}).get("schema")
             if isinstance(body, dict):
                 props["body"] = {"type": body.get("type", "object"),
                                  "description": "JSON request body"}
-                required.append("body")
+                # OpenAPI: a request body is OPTIONAL unless required: true
+                if req_body.get("required"):
+                    required.append("body")
             tools.append({
                 "name": name,
                 "method": method.upper(),

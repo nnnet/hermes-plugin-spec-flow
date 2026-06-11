@@ -30,12 +30,17 @@ spec + the parent handoff — context stays clean.
 |---|---|
 | `leaf_check` | leaf vs branch by hard levels (modules≤1, tasks≤5, interfaces≤2, LOC≤100, no open decisions, single-concern, testable) |
 | `contract_check` | code↔contract drift; OpenAPI default, Zod/Protobuf, parallel mode; strict = unavailable validator also fails |
-| `research_trigger_check` | fire the revision lane: `every_n_tasks` / `m_test_errors` / `on_level_return` / `cron`, with cooldown |
+| `research_trigger_check` | fire the revision lane: `every_n_tasks` / `m_test_errors` / `on_level_return` / `cron`, plus product-level signals — acceptance failures (`k_acceptance_errors`), degraded metrics (`j_metric_regressions`), environment-rule change (`on_env_rule_change`); with cooldown |
 | `policy_gate` | deterministic constitution check — measurable target, unattended spend cap, outreach consent, legality review; verdict `pass`/`clarify`/`block`. Catches a vague/risky spec before it is decomposed |
 | `run_report` | log-based report builder + **methodology audit** — consumes a run trace (JSONL) and returns footprints (what the plugin did, step by step) plus findings where the method was violated (silent drift, impl without a leaf gate, branch without integration, revision without re-derivation, green-on-red). A reviewer initiates it to see methodological errors |
 | `specflow_init` | board + `constitution.md` + `specs/` |
 | `specflow_start` | seed the L0 decomposition task |
 | `specflow_status` | compact board summary |
+| `speckit_import` | spec-kit `tasks.md` → kanban cards: phases, `[P]` parallel marker, file paths, Dependencies section; seeds in dependency order with `--parent` wiring, done `[x]` tasks skipped by default |
+| `kiro_import` | Kiro spec bundle (requirements/design/tasks .md) → run context: EARS criteria (classified per pattern), dotted task plan with `_Requirements:_` refs, design sections |
+| `openspec_import` | OpenSpec change delta (ADDED/MODIFIED/REMOVED/RENAMED, incl. FROM/TO renames) → respec plan: create / respec / retire per node |
+| `contract_test` | run the OpenAPI contract as LIVE tests against a running service (specmatic); `pass`/`fail`/`skipped` (no specmatic), strict mode turns skip into fail |
+| `openapi_mcp` | OpenAPI contract → MCP tool manifest: one tool per operation, JSON-Schema input from parameters + request body |
 
 ### Skills
 
@@ -53,9 +58,22 @@ spec + the parent handoff — context stays clean.
 
 ### Profiles
 
-Six role profiles with cut-down toolsets so a role physically cannot do
+Seven role profiles with cut-down toolsets so a role physically cannot do
 another's job (the decomposer has no `terminal`/`code_execution`/`delegation`;
-only `implementer` codes). See `profiles/`.
+only `implementer` codes; `approver` is the injectable human-in-the-loop role
+that signs off spec checkpoints, capped spends and large-blast respecs). See
+`profiles/`.
+
+## Principle
+
+spec-flow is a **discipline & durable-orchestration engine** — not a spec
+generator and not a validator. Everything open source already solves (spec
+artifact generation: spec-kit / OpenSpec / Kiro; contract validation: redocly /
+specmatic / tsc / buf; the EARS notation; the FSM runtime: workflow-engine; web
+research: Hermes MCP servers) is plugged in via adapters, never rewritten. Our
+own code is only what nobody else has: recursive depth gates, drift→respec, the
+two revision lanes (internal + on-level-return), role isolation, and re-deriving
+only the affected subtree over the DAG.
 
 ## Four echelons
 

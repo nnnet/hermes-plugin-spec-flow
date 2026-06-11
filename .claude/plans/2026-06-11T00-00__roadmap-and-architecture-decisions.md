@@ -298,6 +298,26 @@ spec-flow — это **движок дисциплины и durable-оркест
 Итого Фаза 6: 247 → 277 тестов. Новые тулы: `kiro_import`, `openspec_import`,
 `contract_test`, `openapi_mcp` (+ `speckit_import` из Фазы 5).
 
+## Фаза 7 — аудит реализации: расхождения с планом и улучшения
+
+Найдено аудитом 2026-06-11. Всё без Hermes.
+
+- [x] B1-fix: сидинг spec-kit в порядке зависимостей + `--parent` (план прямо
+      требует «карточки Kanban с `--parent` по зависимостям»): `topo_sort_cards`
+      (устойчив к циклам), карточка получает `--parent <id>` созданного предка
+      (`_created_card_id` из ответа kanban); выполненные `[x]` пропускаются
+      (опция `include_done`); офлайн — зависимости в `parents_unresolved`.
+- [x] B4-fix: EARS как код: `classify_ears(clause)` — 5 паттернов (ubiquitous /
+      event WHEN / state WHILE / optional WHERE / unwanted IF-THEN) + `non-ears`;
+      критерии в `kiro_import` размечены полем `ears`.
+- [x] B3-fix: формат OpenSpec RENAMED `- FROM:`/`- TO:` → respec-узел под новым
+      именем, старое имя в body (провенанс).
+- [x] B5-fix: `body` обязателен только при `requestBody.required: true`.
+- [x] Косметика: `_EVENT_GATE` пустой в fallback-ветке (нет None-ключей).
+- [x] README: 5 новых тулов в таблице, профилей семь (с `approver`), новые
+      сигналы `research_trigger_check`, раздел «Principle» зафиксирован.
+- [x] Полный прогон: 277 → 286 тестов, все зелёные; коммит + пуш.
+
 ## Остаётся (требует интеграции в Hermes)
 - F1–F4 — нативное исполнение на Kanban (дерево=карточки, диспетчер-воркеры,
   block→unblock, HITL через шлюз).

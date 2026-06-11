@@ -85,12 +85,13 @@ else:  # pragma: no cover — only when the FSM module is unavailable
     _NODE_FSM_OK = False
 
 # Which mandatory gate(s) each lifecycle event satisfies (the inline ledger maps
-# events through this; the FSM records the same internally).
+# events through this; the FSM records the same internally). Built only when
+# the FSM module supplied real event names — None keys would collide.
 _EVENT_GATE = {
     EV_CONTRACT: ("contract_check",),
     EV_REVIEW_PASS: ("review_pass", "verification"),
     EV_BRANCH_INTEGRATE: ("integrate",),
-}
+} if _NODE_FSM_OK else {}
 
 NODE_ENGINES = ("inline", "fsm")
 

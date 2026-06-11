@@ -64,6 +64,25 @@ def test_map_to_respec_actions(plugin):
     assert by["Legacy Coupon Codes"]["action"] == "retire"
 
 
+RENAMED_MD = """# Spec Delta
+
+## RENAMED Requirements
+- FROM: `### Requirement: Coupon Codes`
+- TO: `### Requirement: Promotions`
+"""
+
+
+def test_renamed_from_to_pair(plugin):
+    deltas = plugin.tools.parse_openspec_delta(RENAMED_MD)
+    assert len(deltas) == 1
+    d = deltas[0]
+    assert d["op"] == "RENAMED"
+    assert d["name"] == "Promotions"            # the respec node is the NEW name
+    assert "Coupon Codes" in d["body"]          # provenance keeps the old one
+    nodes = plugin.tools.map_deltas_to_respec(deltas)
+    assert nodes[0]["action"] == "respec"
+
+
 def test_import_tool_counts(plugin):
     out = json.loads(plugin.tools._handle_openspec_import({"delta": DELTA_MD}))
     assert out["parsed"] == 3
