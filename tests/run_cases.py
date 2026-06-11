@@ -110,13 +110,18 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
     # for the deterministic decomposer; the analysis reference is the `oracle`
     # block). 'blueprint' = deterministic, offline, no quota; 'llm' = live model.
     agents = {}
-    # HITL levels come from the CASE itself (hitl: block, all default ON for
-    # dialogue, approve defaults to auto-true) — the CLI --hitl console only
-    # switches WHO approves, not whether the dialogue channel exists.
+    # HITL levels come from the CASE itself (hitl: block) — the CLI --hitl
+    # console only switches WHO approves, not whether the dialogue exists.
+    #   approve_required:     true = a checkpoint NEEDS a real human;
+    #                         without one it REJECTS (default false =
+    #                         auto-approve with an honest note)
+    #   worker_may_ask_human: a blocked worker may ask and gets the answer
+    #   human_may_intervene:  operator notes reach the next worker, which
+    #                         must comply or defend
     hitl_cfg = case.get("hitl") or {}
-    hitl_approve = bool(hitl_cfg.get("approve", True))
-    hitl_questions = bool(hitl_cfg.get("questions", True))
-    hitl_notes = bool(hitl_cfg.get("notes", True))
+    hitl_approve_required = bool(hitl_cfg.get("approve_required", False))
+    hitl_questions = bool(hitl_cfg.get("worker_may_ask_human", True))
+    hitl_notes = bool(hitl_cfg.get("human_may_intervene", True))
     channel = None
     if workers == "real" and (hitl_questions or hitl_notes):
         from harness import hitl as hitl_mod
@@ -148,13 +153,14 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
     if hitl == "console":
         from harness import hitl as hitl_mod
         agents["approver"] = hitl_mod.console_approver
-    elif not hitl_approve:
+    elif hitl_approve_required:
         # the case explicitly demands real sign-off: a checkpoint without a
         # human attached is a REJECT, not a silent pass
         def _strict_approver(ctx):
             return {"approved": False,
-                    "reason": "case demands human sign-off (hitl.approve: false) "
-                              "and no human is attached — rejected"}
+                    "reason": "case demands human sign-off "
+                              "(hitl.approve_required: true) and no human "
+                              "is attached — rejected"}
         agents["approver"] = _strict_approver
     if "implementer" not in agents and depth in ("execute", "product"):
         if implementer == "llm":

@@ -71,14 +71,15 @@ oracle:
 
 # Human-in-the-loop levels for real-worker runs (harness reads this; the
 # engine itself never sees the block):
-#   approve:   true  = checkpoints auto-approve (honest note in the trace);
-#              false = a checkpoint with no human attached is a REJECT
-#   questions: workers may ask the human a clarifying question and fold
-#              the answer into their work (hitl/answer.md or tty)
-#   notes:     the human may interject via hitl/inbox.md at any moment;
-#              the next worker must COMPLY (take it as a directive) or
-#              DEFEND its course with arguments (hitl/outbox.md)
+#   approve_required:     true = every checkpoint needs a REAL human
+#                         decision; no human attached -> REJECT.
+#                         false (default) = auto-approve, honest note.
+#   worker_may_ask_human: a worker hitting a real blocker may ask ONE
+#                         clarifying question and folds the answer in.
+#   human_may_intervene:  the operator may interject a note/order at any
+#                         moment; the next worker must COMPLY (directive)
+#                         or DEFEND its course with arguments.
 hitl:
-  approve: true
-  questions: true
-  notes: true
+  approve_required: false
+  worker_may_ask_human: true
+  human_may_intervene: true

@@ -46,6 +46,10 @@ Step 2 — metrics (the GUARDRAIL the engine checks your claim against):
   estimated_loc <= 100, open_decisions == 0, single_concern, testable_criteria
 - if atomic=false, give honest big metrics AND 2-4 children
   (id: snake_case slug, title: short English); children get NO metrics
+- child ids name the WORK ITSELF (catalog_schema, seller_onboarding); do
+  NOT encode phase/type into the id — no req-/spec-/task-/research-
+  prefixes, no kebab-case (the engine tracks phases; prefixes pollute
+  ids and dedup)
 
 Rules:
 - keep "atomic" and the metrics CONSISTENT: atomic=true ⇒ metrics within the

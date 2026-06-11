@@ -193,6 +193,11 @@ Apply the skill: judge atomicity first, then size the node. NEVER propose a
 child that repeats work already covered by an existing node (any branch) —
 reference it via "depends_on" instead.
 
+Child id rule: a short snake_case slug naming the WORK ITSELF
+(e.g. catalog_schema, seller_onboarding). Do NOT encode phase/type into the
+id — no req-/spec-/task-/research- prefixes and no kebab-case: the engine
+already tracks phases, prefixes only pollute ids and dedup.
+
 Reply with ONLY a JSON object (no prose, no fence):
 {{"atomic": true|false,
   "metrics": {{"modules": n, "tasks": n, "interfaces": n, "estimated_loc": n,
