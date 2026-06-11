@@ -466,8 +466,12 @@ class _H(BaseHTTPRequestHandler):
                 return self._send(403, "text/plain", b"forbidden")
             if not target.exists():
                 return self._send(404, "text/plain", b"missing")
-            return self._send(200, "text/plain; charset=utf-8",
-                              target.read_text(encoding="utf-8", errors="ignore").encode("utf-8"))
+            text = target.read_text(encoding="utf-8", errors="ignore")
+            fmt = urllib.parse.parse_qs(parsed.query).get("fmt", [""])[0]
+            if fmt == "md":
+                return self._send(200, "text/html; charset=utf-8",
+                                  _md_to_html(text).encode("utf-8"))
+            return self._send(200, "text/plain; charset=utf-8", text.encode("utf-8"))
         return self._send(404, "text/plain", b"not found")
 
     def _send(self, code, ctype, body):
@@ -626,10 +630,11 @@ function renderNode(){
 }
 
 async function getFile(p){if(!p)return '';if(FILECACHE[p]!=null)return FILECACHE[p];const r=await fetch('/api/file?path='+encodeURIComponent(p));const t=await r.text();FILECACHE[p]=t;return t;}
+async function getMD(p){if(!p)return '';const k='md:'+p;if(FILECACHE[k]!=null)return FILECACHE[k];const r=await fetch('/api/file?path='+encodeURIComponent(p)+'&fmt=md');const t=await r.text();FILECACHE[k]=t;return t;}
 
 async function renderNodeBody(nd){
  const f=nd.files||{},b=$('#nbody');if(!b)return;
- if(NTAB==='spec'){b.innerHTML='<pre class=code>'+esc(await getFile(f.spec))+'</pre>';}
+ if(NTAB==='spec'){b.innerHTML=await getMD(f.spec);}
  else if(NTAB==='code'){b.innerHTML='<pre class=code>'+esc(await getFile(f.code))+'</pre>';}
  else if(NTAB==='test'){b.innerHTML='<pre class=code>'+esc(await getFile(f.test))+'</pre>';}
  else if(NTAB==='contract'){b.innerHTML='<pre class=code>'+esc(await getFile(f.contract))+'</pre>';}
@@ -640,8 +645,9 @@ async function renderNodeBody(nd){
  else if(NTAB==='versions'){
    // ordered: v1..vN (superseded) then current spec = newest
    const vers=(f.versions||[]).slice();const all=vers.concat(f.spec?[f.spec]:[]);
-   if(all.length<=1){b.innerHTML='<p class=dim>ревизий не было — одна версия спеки</p>'+(f.spec?'<pre class=code>'+esc(await getFile(f.spec))+'</pre>':'');return;}
+   if(all.length<=1){b.innerHTML='<p class=dim>ревизий не было — одна версия спеки</p>'+(await getMD(f.spec));return;}
    const texts=await Promise.all(all.map(getFile));
+   const htmls=await Promise.all(all.map(getMD));
    let h='<p class=muted>история ревизий узла (старое → новое); diff = изменения относительно предыдущей версии</p>';
    for(let i=0;i<all.length;i++){
      const label=all[i].includes('.v')?all[i].match(/\.v(\d+)\./)[0].replace(/\./g,''):'current';
@@ -649,7 +655,7 @@ async function renderNodeBody(nd){
      h+=`<h4>${label} <span class=muted>${esc(all[i])}</span></h4>`;
      if(finding)h+=`<p class=muted>причина: ${esc(finding)}</p>`;
      if(i>0){h+='<div class=diff>'+lineDiff(texts[i-1],texts[i])+'</div>';}
-     else{h+='<pre class=code>'+esc(texts[i].slice(0,1200))+'</pre>';}
+     else{h+='<div class=mdwrap>'+htmls[i]+'</div>';}
    }
    b.innerHTML=h;
  }
