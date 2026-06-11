@@ -1,0 +1,31 @@
+spec_flow_runner.py
+  s_a7f45290e91181::t_152b71b5b8731a 1127-1130
+  s_a7f45290e91181::t_137d5422988a26 1150-1171
+  s_a7f45290e91181::t_b328d51ce4eb57 942-972
+  s_a7f45290e91181::t_5cf365492d8800 1050-1067
+  s_a7f45290e91181::t_1218a921a5a774 1209-1216
+tests/run_cases.py
+  s_a7f45290e91181::t_f99f4776c87432 88-89,100,113-136,146-150,302-311,333,375-376,382-383
+tests/test_role_workers.py
+  s_a7f45290e91181::t_9dd9b08a308de4 1-180
+tests/harness/role_worker.py
+  s_a7f45290e91181::t_34f6c68b214069 1-282
+tests/harness/hitl.py
+  s_a7f45290e91181::t_84f32f86cf91dc 1-58
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "79983cf40110ac61b2a00e2d130e19d54d7245de",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-fable-5"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
