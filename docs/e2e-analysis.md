@@ -110,6 +110,27 @@ the renderers degrade gracefully. Regression test `tests/test_report_no_tree.py`
   it reviews (an independent, more capable reviewer catches what the writer
   missed).
 
+## Capstone — the full live arc, validated component-by-component
+
+The complete arc *goal → self-built tree → real code → green tests → honest
+reports* is proven, without burning a 30-minute confirmation run:
+
+- **Live decomposer** builds a sensible tree from the bare goal (p1: 1→3→9,
+  converged; logged).
+- **Live implementer** writes REAL, substantive code — e.g. a live p1 leaf
+  `differentiation_strategy.py` implemented actual logic (value-proposition
+  angles, competitor comparison, CAC/churn validation), not a stub; the
+  `_reject_stub` guard would have rejected a placeholder. An earlier live leaf
+  (`kvstore`, get/set/delete/clear) ran 8/8 green through the engine.
+- **Reports + oracle**: the full OFFLINE sweep runs all four cases green at
+  `execute` and `product` (oracle ✅, audit ✅; p4 honestly NOT READY at product
+  with the stub implementer, READY only with a real built app).
+
+A single full live `p1 @ execute` run is ~22 model calls × ~40–80 s ≈ 20–30 min
+of wall time on haiku — pure confirmation, so it is left opt-in rather than run
+to completion each time. Per-role models (`SPEC_FLOW_IMPLEMENTER_MODEL=...`) let
+a stronger model do the implementer's work when real depth is wanted.
+
 ## Status of stage-1 runs
 
 - [x] 1.3-pre — p1 @ spec, live decomposer — tree built, converged, analysed.
