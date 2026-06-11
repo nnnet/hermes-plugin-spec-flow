@@ -96,6 +96,9 @@ RESEARCH_LANE: dict[str, Any] = {
     "enabled": True,
     "every_n_tasks": 20,        # fire after N completed tasks since baseline
     "m_test_errors": 10,        # ... or after M accumulated test errors
+    "k_acceptance_errors": 1,   # ... or after K accumulated acceptance failures
+    "j_metric_regressions": 1,  # ... or after J degraded acceptance metrics
+    "on_env_rule_change": True, # ... or when an environment rule changed (law/PSP/policy)
     "on_level_return": True,    # ... or when decomposition returns up a level
     "cron": None,               # ... or on an external cron (handled outside)
     "cooldown_tasks": 5,        # don't re-fire within this many tasks
@@ -360,6 +363,9 @@ RESEARCH_TRIGGER_SCHEMA = {
                 },
                 "completed_tasks": {"type": "integer", "description": "Total completed tasks so far (absolute counter)."},
                 "test_errors": {"type": "integer", "description": "Total accumulated test errors so far (absolute counter)."},
+                "acceptance_errors": {"type": "integer", "description": "Total accumulated acceptance (smoke/e2e/metric) failures so far."},
+                "metric_regressions": {"type": "integer", "description": "Count of acceptance metrics that degraded vs target."},
+                "env_rule_changed": {"type": "boolean", "description": "An environment rule changed (law/PSP/policy) — forces a revision check."},
             },
             "required": ["reason"],
         },
@@ -390,6 +396,10 @@ def _handle_research_trigger_check(args: dict[str, Any], **_: Any) -> str:
     reason = args.get("reason", "tick")
     completed = int(args.get("completed_tasks", 0))
     errors = int(args.get("test_errors", 0))
+    # E1 extra signal sources beyond the two original (tasks / test errors):
+    acceptance_errors = int(args.get("acceptance_errors", 0))   # failed smoke/e2e/metric checks
+    metric_regressions = int(args.get("metric_regressions", 0))  # degraded acceptance metrics
+    env_rule_changed = bool(args.get("env_rule_changed", False))  # law/PSP/policy changed
 
     if not cfg.get("enabled", True):
         return json.dumps({"trigger": False, "reason": "lane disabled"}, ensure_ascii=False)
@@ -397,6 +407,7 @@ def _handle_research_trigger_check(args: dict[str, Any], **_: Any) -> str:
     state = _load_lane_state()
     d_completed = completed - int(state.get("baseline_completed", 0))
     d_errors = errors - int(state.get("baseline_errors", 0))
+    d_accept = acceptance_errors - int(state.get("baseline_acceptance", 0))
     since_fire = completed - int(state.get("last_fire_completed", 0))
 
     cooldown = int(cfg.get("cooldown_tasks", 0))
@@ -415,19 +426,31 @@ def _handle_research_trigger_check(args: dict[str, Any], **_: Any) -> str:
     m_err = cfg.get("m_test_errors")
     if m_err and d_errors >= int(m_err):
         fired.append(f"m_test_errors>={m_err}")
+    k_acc = cfg.get("k_acceptance_errors")
+    if k_acc and d_accept >= int(k_acc):
+        fired.append(f"acceptance_errors>={k_acc}")
+    j_reg = cfg.get("j_metric_regressions")
+    if j_reg and metric_regressions >= int(j_reg):
+        fired.append(f"metric_regressions>={j_reg}")
+    if cfg.get("on_env_rule_change") and env_rule_changed:
+        fired.append("env_rule_change")
 
     trigger = bool(fired) and not on_cooldown
     if trigger:
         state["last_fire_completed"] = completed
         state["baseline_completed"] = completed
         state["baseline_errors"] = errors
+        state["baseline_acceptance"] = acceptance_errors
         _save_lane_state(state)
 
     payload = {
         "trigger": trigger,
         "fired_by": fired,
         "on_cooldown": on_cooldown,
-        "deltas": {"completed": d_completed, "errors": d_errors, "since_last_fire": since_fire},
+        "deltas": {"completed": d_completed, "errors": d_errors,
+                   "acceptance": d_accept, "since_last_fire": since_fire},
+        "signals": {"metric_regressions": metric_regressions,
+                    "env_rule_changed": env_rule_changed},
         "action": "route to spec-research (revision mode) → respec-gate if findings invalidate a spec" if trigger else "continue",
     }
     return json.dumps(payload, ensure_ascii=False)
