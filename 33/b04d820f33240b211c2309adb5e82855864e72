@@ -1,0 +1,21 @@
+tests/harness/hitl.py
+  s_a7f45290e91181::t_d565358533a842 94-110
+tests/live_dashboard.py
+  s_a7f45290e91181::t_d565358533a842 553-554,648,651-652,664-669,686-687
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "33b04d820f33240b211c2309adb5e82855864e72",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-fable-5"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
