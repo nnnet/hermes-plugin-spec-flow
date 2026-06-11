@@ -120,19 +120,34 @@ def make_implementer(ask=_ask):
         fn = _snake(node)
         prompt = PROMPT.format(id=node, title=title, spec=spec, fn=fn,
                                goal=ctx.get("goal", ""))
-        reply = llm_log.timed_ask(ask, role="implementer", node=node, depth="-",
-                                  model=MODEL, prompt=prompt)
-        try:
-            out = _parse(reply)
-            _reject_stub(out["code"], out["test"])      # enforce 'no stubs'
-        except Exception as exc:  # noqa: BLE001
-            llm_log.log_outcome(role="implementer", node=node, parse="fail",
-                                error=repr(exc)[:200])
-            raise
-        ws._write(f"src/{fn}.py", out["code"], "code")
-        ws._write(f"tests/test_{fn}.py", out["test"], "test")
-        llm_log.log_outcome(role="implementer", node=node, parse="ok",
-                            code_chars=len(out["code"]), test_chars=len(out["test"]))
+        # a weaker model often returns a parse-failure or a stub on the first
+        # try; re-prompt with the exact rejection reason instead of crashing the
+        # whole run on one bad leaf. Only a persistent failure is fatal.
+        attempts = int(os.environ.get("SPEC_FLOW_IMPL_ATTEMPTS", "3"))
+        last = None
+        for i in range(attempts):
+            p = prompt if i == 0 else (
+                prompt + f"\n\nYour previous answer was REJECTED: {last}. "
+                "Return REAL working code + real assertions, no placeholders, "
+                "no TODO/FIXME, no the word 'placeholder'. Output ONLY the JSON.")
+            reply = llm_log.timed_ask(ask, role="implementer", node=node,
+                                      depth="-", model=MODEL, prompt=p)
+            try:
+                out = _parse(reply)
+                _reject_stub(out["code"], out["test"])  # enforce 'no stubs'
+            except Exception as exc:  # noqa: BLE001
+                last = repr(exc)[:160]
+                llm_log.log_outcome(role="implementer", node=node, parse="retry",
+                                    attempt=i + 1, error=last)
+                continue
+            ws._write(f"src/{fn}.py", out["code"], "code")
+            ws._write(f"tests/test_{fn}.py", out["test"], "test")
+            llm_log.log_outcome(role="implementer", node=node, parse="ok",
+                                attempt=i + 1, code_chars=len(out["code"]),
+                                test_chars=len(out["test"]))
+            return
+        llm_log.log_outcome(role="implementer", node=node, parse="fail", error=last)
+        raise ValueError(f"implementer failed after {attempts} attempts: {last}")
 
     return implement
 
