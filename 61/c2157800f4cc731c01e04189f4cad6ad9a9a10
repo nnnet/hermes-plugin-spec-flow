@@ -1,0 +1,35 @@
+tests/harness/llm_backend.py
+  s_a7f45290e91181::t_4b4ffe134e3028 43-51,53-56,59-90,92,95
+  s_a7f45290e91181::t_8a482465d9f3e9 117,120-122,124,141,146-148
+tests/test_role_workers.py
+  s_a7f45290e91181::t_48c18fb1141583 385-501
+tests/harness/role_worker.py
+  s_a7f45290e91181::t_94ddec767809b3 314-325
+  s_a7f45290e91181::t_25eaf7e21c9ffc 527-532,534,537
+  s_a7f45290e91181::t_85c73a6fcd3e6e 81-83,85-113
+  s_a7f45290e91181::t_f06141c77185f2 502
+  s_a7f45290e91181::t_481ea284709b57 205
+  s_a7f45290e91181::t_c87c7be91c78b6 370-426,436-437,460-493
+  s_a7f45290e91181::t_c5710207bd6a6f 35,43-45
+  s_a7f45290e91181::t_defffb26c31ef6 185
+  s_a7f45290e91181::t_240440cc98e6be 575
+tests/run_cases.py
+  s_a7f45290e91181::t_b6b67a9d05970d 345-352
+  s_a7f45290e91181::t_60cbd306bd3ef1 372-375
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "61c2157800f4cc731c01e04189f4cad6ad9a9a10",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-fable-5"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
