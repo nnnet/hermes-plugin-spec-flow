@@ -100,9 +100,28 @@ def decompose(ctx: dict) -> dict:
     if ctx["depth"] >= LEAF_DEPTH:
         prompt += LEAF_RULE.format(depth=ctx["depth"], leaf_depth=LEAF_DEPTH)
     nid = ctx["node"]["id"]
-    reply = llm_log.timed_ask(_ask, role="decomposer", node=nid,
-                              depth=ctx["depth"], model=MODEL, prompt=prompt)
-    out = _extract_json(reply)
+    # a weaker free model often returns malformed/partial JSON on the first try;
+    # re-prompt with the exact failure instead of crashing the whole run on one
+    # bad node. Only a persistent failure is fatal. Mirrors llm_implementer.
+    attempts = int(os.environ.get("SPEC_FLOW_DECOMPOSE_ATTEMPTS", "3"))
+    out, last = None, None
+    for i in range(attempts):
+        p = prompt if i == 0 else (
+            prompt + f"\n\nYour previous answer could not be parsed: {last}. "
+            "Return ONLY a single valid JSON object, no prose, no markdown fence.")
+        reply = llm_log.timed_ask(_ask, role="decomposer", node=nid,
+                                  depth=ctx["depth"], model=MODEL, prompt=p)
+        try:
+            out = _extract_json(reply)
+            break
+        except (ValueError, json.JSONDecodeError) as exc:
+            last = repr(exc)[:160]
+            llm_log.log_outcome(role="decomposer", node=nid, depth=ctx["depth"],
+                                parse="retry", attempt=i + 1, error=last)
+    if out is None:
+        llm_log.log_outcome(role="decomposer", node=nid, depth=ctx["depth"],
+                            parse="fail", error=last)
+        raise ValueError(f"decomposer failed after {attempts} attempts: {last}")
     # keep only the keys the engine understands (incl. the atomicity judgment)
     keep = {k: out[k] for k in ("atomic", "metrics", "children", "spike", "clarify") if k in out}
     if ctx["depth"] >= LEAF_DEPTH:
