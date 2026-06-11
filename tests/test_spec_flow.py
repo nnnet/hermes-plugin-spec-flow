@@ -24,6 +24,7 @@ EXPECTED_TOOLS = {
     "specflow_status",
     "speckit_import",
     "kiro_import",
+    "openspec_import",
 }
 
 

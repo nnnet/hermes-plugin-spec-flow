@@ -927,6 +927,123 @@ def _handle_kiro_import(args: dict[str, Any], **_: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
+# openspec_import — map OpenSpec change deltas onto respec nodes (brownfield)
+# ---------------------------------------------------------------------------
+# OpenSpec describes a brownfield change as a spec delta with operation headers:
+#   ## ADDED Requirements / ## MODIFIED Requirements / ## REMOVED Requirements
+#   (and RENAMED), each holding '### Requirement: <name>' blocks.
+# spec-flow maps each delta onto a respec ACTION: ADDED -> create a new node,
+# MODIFIED -> respec (version-bump + re-derive) the existing node, REMOVED ->
+# retire it, RENAMED -> respec under the new name. Pure plugin code.
+
+_OPENSPEC_OP = re.compile(r"^\s*##\s+(?P<op>ADDED|MODIFIED|REMOVED|RENAMED)\s+Requirements?\b", re.IGNORECASE)
+_OPENSPEC_REQ = re.compile(r"^\s*###\s+Requirement:\s*(?P<name>.+?)\s*$", re.IGNORECASE)
+
+_OP_ACTION = {
+    "ADDED": ("create", "decompose & implement a new node"),
+    "MODIFIED": ("respec", "version-bump the node, re-derive its affected subtree"),
+    "REMOVED": ("retire", "remove the node and its subtree, re-integrate the parent"),
+    "RENAMED": ("respec", "version-bump under the new name, re-derive"),
+}
+
+
+def _slug(name: str) -> str:
+    return "_".join(re.findall(r"[a-z0-9]+", name.lower())) or "node"
+
+
+def parse_openspec_delta(text: str) -> list[dict]:
+    """Parse an OpenSpec spec delta into [{op, name, id, body}].
+
+    ``op`` is ADDED/MODIFIED/REMOVED/RENAMED; ``id`` is a slug of the
+    requirement name; ``body`` is the text under the requirement header.
+    """
+    deltas: list[dict] = []
+    op: Optional[str] = None
+    cur: Optional[dict] = None
+
+    def _close() -> None:
+        if cur is not None:
+            cur["body"] = "\n".join(cur["_buf"]).strip()
+            cur.pop("_buf", None)
+
+    for ln in text.splitlines():
+        mop = _OPENSPEC_OP.match(ln)
+        if mop:
+            _close()
+            cur = None
+            op = mop.group("op").upper()
+            continue
+        mreq = _OPENSPEC_REQ.match(ln)
+        if mreq and op:
+            _close()
+            name = mreq.group("name").strip()
+            cur = {"op": op, "name": name, "id": _slug(name), "_buf": []}
+            deltas.append(cur)
+            continue
+        if cur is not None:
+            cur["_buf"].append(ln)
+    _close()
+    return deltas
+
+
+def map_deltas_to_respec(deltas: list[dict]) -> list[dict]:
+    """Turn parsed deltas into respec nodes: {id, name, op, action, effect}."""
+    nodes: list[dict] = []
+    for d in deltas:
+        action, effect = _OP_ACTION.get(d["op"], ("respec", "re-derive"))
+        nodes.append({"id": d["id"], "name": d["name"], "op": d["op"],
+                      "action": action, "effect": effect})
+    return nodes
+
+
+OPENSPEC_IMPORT_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "openspec_import",
+        "description": (
+            "Map an OpenSpec change delta (## ADDED/MODIFIED/REMOVED "
+            "Requirements) onto spec-flow respec nodes for a brownfield change: "
+            "ADDED->create, MODIFIED/RENAMED->respec (version-bump + re-derive), "
+            "REMOVED->retire. Returns the respec plan."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "delta_md": {"type": "string", "description": "Path to an OpenSpec spec delta file."},
+                "delta": {"type": "string", "description": "Raw delta markdown (alternative to delta_md)."},
+            },
+        },
+    },
+}
+
+
+def _handle_openspec_import(args: dict[str, Any], **_: Any) -> str:
+    text = args.get("delta")
+    if not text:
+        path = args.get("delta_md")
+        if not path:
+            return tool_error("openspec_import requires 'delta_md' path or 'delta' content")
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except Exception as exc:  # noqa: BLE001
+            return tool_error(f"openspec_import cannot read delta: {exc}")
+
+    deltas = parse_openspec_delta(text)
+    if not deltas:
+        return tool_error("openspec_import parsed no requirement deltas — is this an OpenSpec delta?")
+    nodes = map_deltas_to_respec(deltas)
+    counts: dict[str, int] = {}
+    for n in nodes:
+        counts[n["op"]] = counts.get(n["op"], 0) + 1
+    return json.dumps({
+        "parsed": len(deltas),
+        "counts": counts,
+        "respec_nodes": nodes,
+    }, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
 # policy_gate — deterministic constitution check
 # ---------------------------------------------------------------------------
 
@@ -1567,6 +1684,15 @@ registry.register(
     handler=_handle_kiro_import,
     check_fn=_check_specflow,
     emoji="📘",
+)
+
+registry.register(
+    name="openspec_import",
+    toolset="kanban",
+    schema=OPENSPEC_IMPORT_SCHEMA,
+    handler=_handle_openspec_import,
+    check_fn=_check_specflow,
+    emoji="♻️",
 )
 
 

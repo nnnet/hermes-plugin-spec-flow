@@ -32,6 +32,7 @@ _TOOL_NAMES = (
     "specflow_status",
     "speckit_import",
     "kiro_import",
+    "openspec_import",
 )
 
 
