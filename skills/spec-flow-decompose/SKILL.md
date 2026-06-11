@@ -60,6 +60,21 @@ A leaf may only be created once its governing **L2 contract node is `done`**.
 On returning up a level call `research_trigger_check(reason="on_level_return",
 ...)`; if it returns `trigger:true`, open a `spec-research` revision task.
 
+## No duplicate work — reference, don't re-create
+
+Before proposing a child, check the engine-provided context (`ancestors`,
+`existing_nodes` — the registry of every node already created in the tree).
+If the work is already covered by ANY existing node (not just your own
+ancestor line), do NOT create a new child for it — declare the dependency
+instead: `"depends_on": ["<existing-node-id>"]`. Re-creating existing work
+(e.g. an L6 branch re-spawning the L1 "research analogs") burns real worker
+runs twice and forks the source of truth. The engine's dedup gate prunes
+such children deterministically — a pruned child means this rule was
+violated.
+
+Root-only shaping: upfront research / architecture-NFR children belong to
+the ROOT decomposition only. Deeper nodes must not re-introduce them.
+
 ## Anti-temptation
 
 One run expands exactly one level. Never "just finish the tree". Depth and

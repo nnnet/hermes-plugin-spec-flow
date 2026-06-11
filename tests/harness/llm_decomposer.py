@@ -26,6 +26,8 @@ Measurable target: {target}
 Constitution (non-negotiable): {constitution}
 
 Current node: "{title}" (id: {id}, depth: {depth}, parent: {parent})
+Ancestor chain (root → parent): {ancestors}
+Nodes ALREADY created elsewhere in the tree: {existing}
 
 Task: FIRST judge atomicity, THEN size the node.
 
@@ -49,16 +51,28 @@ Rules:
 - keep "atomic" and the metrics CONSISTENT: atomic=true ⇒ metrics within the
   leaf thresholds and NO children; atomic=false ⇒ at least one threshold
   exceeded and 2-4 children
-- the FIRST child of the root must be upfront research (analogs,
-  build-vs-reuse, differentiation), the second an architecture/NFR baseline
+- NEVER propose a child that repeats work already covered by a node in the
+  "already created" list above (ANY branch — not just your ancestors). If
+  this node needs that result, reference it instead:
+  "depends_on": ["<existing-node-id>"]. Re-creating existing work is the
+  worst failure mode of this run.
 - be FRUGAL: a minimal viable tree, <= 20 nodes total; prefer fewer, LARGER
   leaves over many tiny ones; the tree must converge quickly
 - if something is genuinely unknown, add a research spike:
   "spike": {{"question": "...", "recommendation": "..."}}
 
 Return ONLY a JSON object, no prose, no markdown fence:
-{{"atomic": true, "metrics": {{...}}, "children": [{{"id": "...", "title": "..."}}], "spike": {{...}}}}
+{{"atomic": true, "metrics": {{...}}, "children": [{{"id": "...", "title": "..."}}], "depends_on": ["..."], "spike": {{...}}}}
 """
+
+# Root-only shaping: applies to the FIRST decomposition (depth 0). Stated
+# per-call before, the model dutifully re-created research/NFR children at
+# EVERY branch — a major source of duplicate specs across levels.
+ROOT_RULE = """
+ROOT-ONLY RULE (this is depth 0): the FIRST child must be upfront research
+(analogs, build-vs-reuse, differentiation), the second an architecture/NFR
+baseline. Deeper nodes must NOT re-introduce research/NFR children — that
+work exists once, at the top."""
 
 LEAF_RULE = """
 HARD CONSTRAINT for this node: depth {depth} >= {leaf_depth}, so it MUST be
@@ -92,11 +106,19 @@ def _extract_json(text: str) -> dict:
 
 def decompose(ctx: dict) -> dict:
     p = ctx["project"]
+    ancestors = ctx.get("ancestors") or []
+    existing = ctx.get("existing_nodes") or []
+    existing_lines = "; ".join(
+        f"{n['id']} ({n['title']})" for n in existing) or "—"
     prompt = PROMPT.format(
         goal=p.get("goal", ""), target=p.get("target", ""),
         constitution="; ".join(p.get("constitution", [])),
         title=ctx["node"]["title"], id=ctx["node"]["id"],
-        depth=ctx["depth"], parent=ctx.get("parent") or "—")
+        depth=ctx["depth"], parent=ctx.get("parent") or "—",
+        ancestors=" → ".join(ancestors) or "—",
+        existing=existing_lines)
+    if ctx["depth"] == 0:
+        prompt += ROOT_RULE
     if ctx["depth"] >= LEAF_DEPTH:
         prompt += LEAF_RULE.format(depth=ctx["depth"], leaf_depth=LEAF_DEPTH)
     nid = ctx["node"]["id"]

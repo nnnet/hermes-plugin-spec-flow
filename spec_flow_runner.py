@@ -30,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass, field
@@ -125,6 +126,41 @@ def _depth_int(d: Any) -> int:
     if d in DEPTHS:
         return DEPTHS[d]
     raise ValueError(f"unknown depth {d!r}; expected one of {sorted(DEPTHS)} or 1..5")
+
+
+# ── dedup gate: title/id similarity ─────────────────────────────────────
+# The decomposer agent is stateless per call — without a guard, deep
+# branches re-propose work that already exists elsewhere in the tree
+# (observed live: "research analog marketplaces" created at L1 and again
+# at L6 under the architecture branch). The gate is deterministic engine
+# logic, like leaf_check: language-agnostic token-stem Jaccard over
+# id+title. Refinement of the node's own ancestor line is NOT a dup —
+# ancestors are excluded by the caller.
+
+_DEDUP_TOKEN_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
+_DEDUP_STEM_LEN = 6          # crude stemming: inflection-tolerant prefix
+_DEDUP_MIN_TOKEN_LEN = 3     # shorter tokens are connective noise
+_DEDUP_THRESHOLD = 0.6       # Jaccard at/above this ⇒ duplicate
+# Connective noise that dilutes the token sets — not a domain phrase list.
+_DEDUP_STOPWORDS = frozenset(
+    {"and", "the", "for", "with", "from", "into", "onto", "via"})
+
+
+def _dedup_tokens(node_id: str, title: str) -> set:
+    toks = set()
+    for part in ((node_id or "").replace("_", " "), title or ""):
+        for t in _DEDUP_TOKEN_RE.findall(part.lower()):
+            if len(t) >= _DEDUP_MIN_TOKEN_LEN and t not in _DEDUP_STOPWORDS:
+                toks.add(t[:_DEDUP_STEM_LEN])
+    return toks
+
+
+def node_similarity(a_id: str, a_title: str, b_id: str, b_title: str) -> float:
+    """0..1 similarity between two nodes by id+title token stems."""
+    a, b = _dedup_tokens(a_id, a_title), _dedup_tokens(b_id, b_title)
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
 
 
 def _default_implementer(ctx: dict) -> None:
@@ -783,6 +819,9 @@ class Engine:
         self._target = project.get("target", "")
         self._constitution = project.get("constitution", [])
         self._decompose_calls = 0
+        # id → title of every node visited so far — context for the
+        # decomposer agent and the comparison base for the dedup gate.
+        self._node_registry: dict[str, str] = {}
         # Two revision methods (from the design discussion):
         #   * 'internal'     — continuous lane firing DURING the run (by
         #                      accumulated tasks/errors), may reopen a branch
@@ -863,11 +902,18 @@ class Engine:
                          getattr(self.workspace, "root", None))
 
     # -- recursion ---------------------------------------------------------
-    def _expand_node(self, node: dict, depth: int, parent: Optional[str]) -> dict:
+    def _expand_node(self, node: dict, depth: int, parent: Optional[str],
+                     ancestors: tuple = ()) -> dict:
         """A node arrived without metrics — the DECOMPOSER AGENT builds this
         level itself from the goal: estimates the node's size metrics and, if
         it is too big, proposes children one level down. The engine's own
-        gates (leaf_check) still make the leaf/branch decision."""
+        gates (leaf_check) still make the leaf/branch decision.
+
+        The agent gets the ancestor chain and the registry of nodes already
+        created ANYWHERE in the tree — without them every call is blind and
+        deep branches re-invent work that already exists (the L1/L6
+        duplicate-spec bug). The dedup gate downstream is the deterministic
+        backstop; this context is the first line of defence."""
         self._decompose_calls += 1
         if self._decompose_calls > self.max_decompose_calls:
             raise RuntimeError(
@@ -878,6 +924,11 @@ class Engine:
                         "constitution": self._constitution},
             "node": {"id": node["id"], "title": node.get("title", node["id"])},
             "parent": parent, "depth": depth,
+            "ancestors": [t for _, t in ancestors],
+            "existing_nodes": [
+                {"id": i, "title": t}
+                for i, t in list(self._node_registry.items())[:150]
+            ],
         })
         # mutate the node IN PLACE so the realized metrics/children attach to the
         # live tree — this is how project["tree"] ends up holding the full tree
@@ -888,12 +939,62 @@ class Engine:
                   f"{len(node.get('children', []))} children proposed", level=L_MILESTONE)
         return node
 
+    def _dedup_children(self, node: dict, nid: str, title: str,
+                        ancestors: tuple) -> None:
+        """Dedup gate: prune proposed children that duplicate an existing
+        node (any branch) or an already-accepted sibling in this batch.
+
+        Refining the node's OWN lineage is legitimate decomposition, so the
+        ancestor chain (and the node itself) is excluded from the comparison
+        base. A pruned child becomes a ``depends_on`` link on this node —
+        the result is referenced, not re-created/re-implemented."""
+        children = node.get("children") or []
+        if not children:
+            return
+        own_line = {a_id for a_id, _ in ancestors} | {nid}
+        kept: list[dict] = []
+        accepted: list[tuple[str, str]] = []
+        for child in children:
+            cid = child.get("id", "")
+            ctitle = child.get("title", cid)
+            dup_of = None
+            for rid, rtitle in self._node_registry.items():
+                if rid in own_line or rid == cid:
+                    continue
+                if node_similarity(cid, ctitle, rid, rtitle) >= _DEDUP_THRESHOLD:
+                    dup_of = rid
+                    break
+            if dup_of is None:
+                for kid, ktitle in accepted:
+                    if node_similarity(cid, ctitle, kid, ktitle) >= _DEDUP_THRESHOLD:
+                        dup_of = kid
+                        break
+            if dup_of is None:
+                kept.append(child)
+                accepted.append((cid, ctitle))
+                continue
+            node.setdefault("depends_on", []).append(dup_of)
+            self.loops.append({"type": "dedup-gate", "task": nid,
+                               "detail": f"child {cid} duplicates {dup_of}"})
+            self.emit("decompose", "spec-decomposer", "spec-flow-decompose", nid,
+                      "dedup gate: proposed child duplicates an existing node "
+                      "— pruned, linked as depends_on",
+                      f"{cid} ≈ {dup_of}", "dedup_gate", "PRUNED",
+                      level=L_MILESTONE)
+        if len(kept) != len(children):
+            if kept:
+                node["children"] = kept
+            else:
+                node.pop("children", None)
+
     def _visit(self, node: dict, depth: int, contract_ctx: Optional[dict], phase: str,
-               parent: Optional[str] = None):
+               parent: Optional[str] = None, ancestors: tuple = ()):
         if "metrics" not in node:
-            node = self._expand_node(node, depth, parent)
+            node = self._expand_node(node, depth, parent, ancestors)
         nid = node["id"]
         title = node.get("title", nid)
+        self._node_registry[nid] = title
+        self._dedup_children(node, nid, title, ancestors)
         self.task(nid, title, "decompose", "spec-decomposer", "spec-flow-decompose")
         self.emit("decompose", "spec-decomposer", "spec-flow-decompose", nid,
                   "read parent handoff, write level spec (Traces-to)", title)
@@ -978,7 +1079,8 @@ class Engine:
                                 node=node, target=self._target)
             child_ids = []
             for child in node.get("children", []):
-                self._visit(child, depth + 1, child_contract_ctx, phase, parent=title)
+                self._visit(child, depth + 1, child_contract_ctx, phase,
+                            parent=title, ancestors=ancestors + ((nid, title),))
                 child_ids.append(child["id"])
 
             # a branch delegates impl to its children, then integrates them
