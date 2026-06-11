@@ -920,6 +920,26 @@ class Engine:
                          getattr(self.workspace, "root", None))
 
     # -- recursion ---------------------------------------------------------
+    def _decomposer_ctx(self, node: dict, depth: int, parent: Optional[str],
+                        ancestors: tuple) -> dict:
+        """The decomposer worker's task context (shared by the initial
+        expansion and the spec-rework rounds)."""
+        return {
+            "project": {"goal": self._goal, "target": self._target,
+                        "constitution": self._constitution},
+            "node": {"id": node["id"], "title": node.get("title", node["id"])},
+            "parent": parent, "depth": depth,
+            "ancestors": [t for _, t in ancestors],
+            # the parent's NODE ID — the worker reads specs/<parent_id>.md
+            # (the approved parent spec) to trace child requirements to its
+            # REQ ids, exactly as the skill prescribes
+            "parent_id": ancestors[-1][0] if ancestors else None,
+            "existing_nodes": [
+                {"id": i, "title": t}
+                for i, t in list(self._node_registry.items())[:150]
+            ],
+        }
+
     def _expand_node(self, node: dict, depth: int, parent: Optional[str],
                      ancestors: tuple = ()) -> dict:
         """A node arrived without metrics — the DECOMPOSER AGENT builds this
@@ -937,25 +957,8 @@ class Engine:
             raise RuntimeError(
                 f"decomposer agent exceeded {self.max_decompose_calls} calls — "
                 "the tree does not converge to leaves")
-        ctx_extra = {}
-        if node.get("_review_feedback"):
-            ctx_extra["review_feedback"] = node["_review_feedback"]
-        out = self.agents["decomposer"]({
-            **ctx_extra,
-            "project": {"goal": self._goal, "target": self._target,
-                        "constitution": self._constitution},
-            "node": {"id": node["id"], "title": node.get("title", node["id"])},
-            "parent": parent, "depth": depth,
-            "ancestors": [t for _, t in ancestors],
-            # the parent's NODE ID — the worker reads specs/<parent_id>.md
-            # (the approved parent spec) to trace child requirements to its
-            # REQ ids, exactly as the skill prescribes
-            "parent_id": ancestors[-1][0] if ancestors else None,
-            "existing_nodes": [
-                {"id": i, "title": t}
-                for i, t in list(self._node_registry.items())[:150]
-            ],
-        })
+        out = self.agents["decomposer"](
+            self._decomposer_ctx(node, depth, parent, ancestors))
         # mutate the node IN PLACE so the realized metrics/children attach to the
         # live tree — this is how project["tree"] ends up holding the full tree
         # the decomposer built (needed for the reports in llm mode).
@@ -1022,12 +1025,24 @@ class Engine:
                 self.emit("review", "spec-decomposer", "spec-flow-decompose", nid,
                           f"rework after review REJECT (attempt {attempt}/{budget})",
                           reasons[:200], level=L_MILESTONE)
-                node["_review_feedback"] = reasons
+                # SPEC-ONLY re-authoring: the leaf/branch decision, metrics
+                # and children are already gated and FINAL — a rework that
+                # re-ran the full decomposition once collapsed the whole
+                # tree into a root leaf (the model dropped its children).
+                self._decompose_calls += 1
+                ctx = self._decomposer_ctx(node, depth, parent, ancestors)
+                ctx["review_feedback"] = reasons
+                ctx["rework"] = True
                 try:
-                    self._expand_node(node, depth, parent, ancestors)
-                finally:
-                    node.pop("_review_feedback", None)
-                self._dedup_children(node, nid, title, ancestors)
+                    out = self.agents["decomposer"](ctx) or {}
+                except Exception as exc:  # noqa: BLE001
+                    self.emit("review", "spec-decomposer", "spec-flow-decompose",
+                              nid, "rework worker failed — keeping the spec",
+                              str(exc)[:200], level=L_MILESTONE)
+                    break
+                new_md = str(out.get("spec_markdown") or "").strip()
+                if new_md:
+                    node["spec_markdown"] = new_md
                 spec_rel = self.workspace.spec(
                     nid, title, depth, spec_args["verdict"], spec_args["reasons"],
                     parent, spec_args["plan"], node=node, target=self._target)
