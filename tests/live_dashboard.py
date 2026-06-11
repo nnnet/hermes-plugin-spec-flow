@@ -171,13 +171,21 @@ def _md_to_html(md: str) -> str:
     while i < n:
         ln = lines[i]
         if ln.startswith("```"):
+            lang = ln[3:].strip().lower()
             i += 1
             buf = []
             while i < n and not lines[i].startswith("```"):
-                buf.append(html.escape(lines[i]))
+                buf.append(lines[i])
                 i += 1
-            out.append("<pre class=code>" + "\n".join(buf) + "</pre>")
             i += 1
+            raw = "\n".join(buf)
+            if lang == "mermaid":
+                # client renders this with mermaid.js; un-double-escape & first so
+                # labels show "&" not "&amp;", keep <br/> as a real label break
+                out.append('<pre class="mermaid">'
+                           + html.escape(raw.replace("&amp;", "&")) + "</pre>")
+            else:
+                out.append("<pre class=code>" + html.escape(raw) + "</pre>")
             continue
         if re.match(r"^\|.*\|\s*$", ln):
             tbl = []
@@ -309,6 +317,33 @@ def _inputs_md(run_dir: pathlib.Path) -> str:
     return "\n\n".join(out) if out else "_исходные данные не записаны_"
 
 
+def _flow_mermaid(events: list[dict]) -> str | None:
+    """Execution-flow graph (mermaid): the milestones the plugin hit, in order,
+    with episode edges. Episode phases are coloured so the loops stand out."""
+    miles = [e for e in events if int(e.get("level") or 2) <= 1]
+    if not miles:
+        return None
+
+    def clean(s: str) -> str:
+        return re.sub(r'["\[\]|{}<>]', " ", str(s))[:46]
+
+    ep_phase = {"research", "drift", "respec", "hitl"}
+    lines = ["flowchart TD"]
+    prev = None
+    for idx, e in enumerate(miles):
+        nid = f"s{idx}"
+        node = clean(e.get("task") or e.get("phase") or "")
+        act = clean(e.get("action") or "")
+        lines.append(f'  {nid}["{e.get("phase")} · {node}<br/>{act}"]')
+        if str(e.get("phase")) in ep_phase or e.get("gate") in ("clarify", "drift", "hitl"):
+            lines.append(f"  style {nid} fill:#3a2a12,stroke:#e3b341")
+        if prev is not None:
+            edge = clean(e.get("verdict") or e.get("gate") or "")
+            lines.append(f"  {prev} -->|{edge}| {nid}" if edge else f"  {prev} --> {nid}")
+        prev = nid
+    return "```mermaid\n" + "\n".join(lines) + "\n```"
+
+
 # ── state ────────────────────────────────────────────────────────────────────
 def _build_state(run_dir: pathlib.Path) -> dict:
     events = _read_jsonl(run_dir / "trace.jsonl")
@@ -363,7 +398,7 @@ def _build_state(run_dir: pathlib.Path) -> dict:
         elif events:
             le = events[-1]
             current = f"🟢 {le.get('phase')}: {le.get('action')}"
-    timeline = [{"tick": e.get("tick"), "phase": e.get("phase"),
+    timeline = [{"tick": e.get("tick"), "t": e.get("t"), "phase": e.get("phase"),
                  "text": str(e.get("action")), "verdict": e.get("verdict")}
                 for e in events if int(e.get("level") or 2) <= 2]
 
@@ -395,6 +430,7 @@ def _build_state(run_dir: pathlib.Path) -> dict:
         "timeline": timeline[-250:],
         "reports": {
             "inputs": _md_to_html(_inputs_md(run_dir)),
+            "flow": _md_to_html(_flow_mermaid(events)) if events else None,
             "report": report_html,
             "oracle": read_md("oracle-report.md"),
             "summary": read_md("SUMMARY.md"),
@@ -451,6 +487,7 @@ _PAGE = r"""<!doctype html><html lang=ru><head><meta charset=utf-8>
 body{margin:0;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;background:#0d1117;color:#c9d1d9}
 .bar{position:sticky;top:0;z-index:5;background:#161b22;border-bottom:1px solid #30363d;padding:8px 14px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
 .st{font-weight:700}.dim{color:#8b949e}.pill{background:#21262d;border-radius:10px;padding:1px 8px}
+.home{cursor:pointer;background:#1f6feb;color:#fff;border-radius:6px;padding:2px 10px;font-weight:700}.home:hover{background:#388bfd}
 .live{color:#3fb950}.donec{color:#8b949e}
 .bar2{position:sticky;top:38px;z-index:4;background:#0f141a;border-bottom:1px solid #21262d;padding:5px 14px;display:flex;gap:18px;align-items:center;flex-wrap:wrap;font-size:12px}
 .goal{color:#e3b341}.cur{color:#3fb950;font-weight:700}
@@ -483,6 +520,7 @@ pre.code{background:#161b22;padding:10px;border-radius:6px;overflow:auto;white-s
 .gtabs{margin-top:8px}
 </style></head><body>
 <div class=bar>
+ <span class=home id=home>⌂ к обзору</span>
  <span class=st id=status>…</span>
  <b id=name></b>
  <span class=dim id=counts></span>
@@ -496,9 +534,12 @@ pre.code{background:#161b22;padding:10px;border-radius:6px;overflow:auto;white-s
  <div class="col tree" id=tree></div>
  <div class="col detail" id=detail></div>
 </div>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 <script>
+if(window.mermaid)mermaid.initialize({startOnLoad:false,theme:'dark',securityLevel:'loose',flowchart:{useMaxWidth:false}});
 let STATE=null, SEL=null, EXPANDED={}, NTAB='spec', GTAB='inputs', FILECACHE={};
 const $=s=>document.querySelector(s);
+function mray(){if(window.mermaid){try{mermaid.run({querySelector:'#detail .mermaid'});}catch(e){}}}
 
 async function poll(){
  try{const r=await fetch('/api/state');STATE=await r.json();render();}catch(e){}
@@ -532,16 +573,42 @@ function render(){
 function timelineHTML(){
  const t=STATE.timeline||[];
  if(!t.length)return '<p class=dim>событий ещё нет…</p>';
- return '<ol class=tl>'+t.map(e=>`<li><span class=tk>${e.tick??''}</span> <span class=ph>${esc(e.phase)}</span> ${esc(e.text)} ${e.verdict?('→ <b>'+esc(e.verdict)+'</b>'):''}</li>`).join('')+'</ol>';
+ const ts=t.map(e=>e.t).filter(x=>x!=null);const t0=ts.length?Math.min(...ts):0;
+ const rows=t.slice().reverse().map(e=>{
+  const rel=e.t!=null?('+'+(e.t-t0).toFixed(1)+'с'):'—';
+  return `<tr><td>${rel}</td><td>${e.tick??''}</td><td><span class=ph>${esc(e.phase)}</span></td><td>${esc(e.text)}</td><td>${e.verdict?('<b>'+esc(e.verdict)+'</b>'):''}</td></tr>`;
+ }).join('');
+ return '<p class=muted>сверху — последние по времени; «время» = от старта прогона</p>'+
+  '<table><thead><tr><th>время</th><th>#</th><th>фаза</th><th>действие</th><th>вердикт</th></tr></thead><tbody>'+rows+'</tbody></table>';
 }
 
 function renderGlobal(){
  const R=STATE.reports;
- const tabs=[['inputs','▶ Старт (цель+вход)'],['timeline','⏱ Таймлайн'],['report','Отчёт+аудит'],['workflow','Воркфлоу'],['oracle','Оракул'],['commits','Версии/коммиты'],['summary','Итог']];
- let h='<div class=tabs>'+tabs.map(([k,t])=>(k==='timeline'||R[k])?`<span class="tab${GTAB===k?' on':''}" data-g="${k}">${t}</span>`:'').join('')+'</div>';
+ const tabs=[['inputs','▶ Старт (цель+вход)'],['graph','🕸 Граф спеков'],['flow','🔀 Поток выполнения'],['timeline','⏱ Таймлайн'],['report','Отчёт+аудит'],['workflow','Воркфлоу'],['oracle','Оракул'],['commits','Версии/коммиты'],['summary','Итог']];
+ let h='<div class=tabs>'+tabs.map(([k,t])=>(k==='timeline'||k==='graph'||R[k])?`<span class="tab${GTAB===k?' on':''}" data-g="${k}">${t}</span>`:'').join('')+'</div>';
  h+='<h3 class=muted>Что делают агенты сейчас</h3><ol class=feed>'+(STATE.feed||[]).map(f=>`<li>${esc(f)}</li>`).join('')+'</ol>';
- h+='<div id=gbody>'+(GTAB==='timeline'?timelineHTML():(R[GTAB]||'<p class=dim>нет данных</p>'))+'</div>';
+ let body;
+ if(GTAB==='timeline')body=timelineHTML();
+ else if(GTAB==='graph')body='<p class=muted>граф задач, что построил плагин — клик по узлу = провалиться в его спеку/код/версии. 🌿 ветка · 🍃 лист · бейджи = эпизоды</p>'+graphSVG();
+ else body=R[GTAB]||'<p class=dim>нет данных</p>';
+ h+='<div id=gbody>'+body+'</div>';
  $('#detail').innerHTML=h;
+ mray();
+}
+
+function graphSVG(){
+ const root=STATE.tree;if(!root)return '';let row=0;
+ (function assign(n,d){n._d=d;const ch=n.children||[];if(!ch.length){n._y=row++;}else{ch.forEach(c=>assign(c,d+1));n._y=(ch[0]._y+ch[ch.length-1]._y)/2;}})(root,0);
+ const COLW=200,ROWH=30,PX=14,PY=14,BW=164,BH=22;let maxD=0,maxY=0;const nodes=[],edges=[];
+ (function walk(n){maxD=Math.max(maxD,n._d);maxY=Math.max(maxY,n._y);nodes.push(n);(n.children||[]).forEach(c=>{edges.push([n,c]);walk(c);});})(root);
+ const X=n=>PX+n._d*COLW,Y=n=>PY+n._y*ROWH;const W=PX*2+(maxD+1)*COLW,H=PY*2+(maxY+1)*ROWH;
+ let s=`<svg width="${W}" height="${H}" style="min-width:${W}px">`;
+ edges.forEach(([a,b])=>{const x1=X(a)+BW,y1=Y(a)+BH/2,x2=X(b),y2=Y(b)+BH/2;s+=`<path d="M${x1} ${y1} C${x1+24} ${y1}, ${x2-24} ${y2}, ${x2} ${y2}" stroke="#30363d" fill="none"/>`;});
+ nodes.forEach(n=>{const leaf=!(n.children&&n.children.length);const sel=SEL===n.id;
+  s+=`<g class=gnode data-id="${n.id}" transform="translate(${X(n)},${Y(n)})" style="cursor:pointer">`+
+     `<rect width="${BW}" height="${BH}" rx="5" fill="${sel?'#1f6feb55':(leaf?'#161b22':'#13251a')}" stroke="${sel?'#1f6feb':(leaf?'#30363d':'#3fb950')}"/>`+
+     `<text x="7" y="15" fill="#c9d1d9" font-size="11">${(leaf?'🍃':'🌿')} ${esc(n.id).slice(0,17)} ${badgeStr(n.episodes)}</text></g>`;});
+ s+='</svg>';return '<div style="overflow:auto;border:1px solid #21262d;border-radius:6px;padding:6px">'+s+'</div>';
 }
 
 function renderNode(){
@@ -599,9 +666,10 @@ function lineDiff(a,b){
 function esc(s){return (s==null?'':String(s)).replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]));}
 
 document.addEventListener('click',e=>{
+ if(e.target.closest('#home')){SEL=null;render();return;}
  const tw=e.target.closest('.tw[data-tw]');
  if(tw){const id=tw.dataset.tw;EXPANDED[id]=EXPANDED[id]===false?true:false;render();return;}
- const nodeEl=e.target.closest('.node[data-id]');
+ const nodeEl=e.target.closest('.node[data-id], .gnode[data-id]');
  if(nodeEl){SEL=nodeEl.dataset.id;NTAB='spec';render();return;}
  const g=e.target.closest('[data-g]');if(g){GTAB=g.dataset.g;renderGlobal();return;}
  const nt=e.target.closest('[data-n]');if(nt){if(nt.dataset.n==='__back'){SEL=null;render();}else{NTAB=nt.dataset.n;renderNode();}return;}

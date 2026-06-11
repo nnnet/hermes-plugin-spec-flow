@@ -273,7 +273,13 @@ class LogSink:
         if self._fh is None:
             return
         if self.fmt == "jsonl":
-            self._fh.write(json.dumps(asdict(e), ensure_ascii=False) + "\n")
+            # stamp a wall-clock time on the DISK trace only (not the in-memory
+            # events used by reports) so a live reader can show a real timeline;
+            # report determinism is unaffected
+            import time as _time
+            d = asdict(e)
+            d["t"] = round(_time.time(), 3)
+            self._fh.write(json.dumps(d, ensure_ascii=False) + "\n")
         else:
             self._fh.write(event_line(e) + "\n")
 
