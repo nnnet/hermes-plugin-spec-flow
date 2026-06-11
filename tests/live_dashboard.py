@@ -331,14 +331,19 @@ def _flow_mermaid(events: list[dict]) -> str | None:
         return re.sub(r'["\[\]|{}<>]', " ", str(s))[:46]
 
     ep_phase = {"research", "drift", "respec", "hitl"}
-    lines = ["flowchart TD"]
+    # BT (bottom-to-top): the run STARTS at the bottom, the newest milestone
+    # is on top — matches reading order while the run is live. Arrows still
+    # point old -> new.
+    lines = ["flowchart BT"]
     prev = None
     for idx, e in enumerate(miles):
         nid = f"s{idx}"
         node = clean(e.get("task") or e.get("phase") or "")
         act = clean(e.get("action") or "")
         lines.append(f'  {nid}["{e.get("phase")} · {node}<br/>{act}"]')
-        if str(e.get("phase")) in ep_phase or e.get("gate") in ("clarify", "drift", "hitl"):
+        if str(e.get("verdict")) in {"REJECT", "FAIL", "ERROR"}:
+            lines.append(f"  style {nid} fill:#3a1620,stroke:#f85149")
+        elif str(e.get("phase")) in ep_phase or e.get("gate") in ("clarify", "drift", "hitl"):
             lines.append(f"  style {nid} fill:#3a2a12,stroke:#e3b341")
         if prev is not None:
             edge = clean(e.get("verdict") or e.get("gate") or "")
@@ -360,6 +365,18 @@ def _build_state(run_dir: pathlib.Path) -> dict:
     files = {nid: _node_files(ws, nid) for nid in meta} if ws.exists() else {}
     ev_idx = _events_by_node(events)
 
+    # error badges: any REJECT/FAIL/ERROR verdict on the node's events marks
+    # it on the tree + spec graph; PRUNED (dedup gate) gets its own badge
+    bad = {"REJECT", "FAIL", "ERROR"}
+    for nid, evs in ev_idx.items():
+        if nid not in meta:
+            continue
+        eps = meta[nid]["episodes"]
+        if any(str(e.get("verdict")) in bad for e in evs) and "error" not in eps:
+            eps.append("error")
+        if any(str(e.get("verdict")) == "PRUNED" for e in evs) and "pruned" not in eps:
+            eps.append("pruned")
+
     feed = []
     for e in llm:
         if e.get("event") != "outcome":
@@ -378,6 +395,15 @@ def _build_state(run_dir: pathlib.Path) -> dict:
     try:
         report_html = _md_to_html(T.build_run_report(events, level=2, title=run_dir.name)) \
             if events else "<p class=dim>событий ещё нет…</p>"
+        if events and not done:
+            # the audit checks COMPLETED-run invariants; on a live run the
+            # completion rules (integrate per branch, L0 complete) have not
+            # happened YET — flag that so red rows are read as "pending"
+            report_html = (
+                "<p class=muted>⏳ прогон ещё идёт: правила завершённости "
+                "(R5 integrate-у-ветки, R8 L0-complete) ожидаемо красные, "
+                "пока ветки не закрыты — это «ещё не наступило», не "
+                "нарушение. Судить по ним — после финала.</p>" + report_html)
     except Exception as exc:                                       # noqa: BLE001
         report_html = f"<p>report error: {html.escape(str(exc))}</p>"
 
@@ -521,7 +547,7 @@ th,td{border:1px solid #30363d;padding:4px 7px;text-align:left;vertical-align:to
 th{background:#161b22}tr:nth-child(even) td{background:#0f141a}
 code{background:#161b22;padding:1px 5px;border-radius:4px;color:#ffa657}
 pre.code{background:#161b22;padding:10px;border-radius:6px;overflow:auto;white-space:pre-wrap}
-.feed{padding-left:20px;max-height:150px;overflow:auto}.feed li{margin:1px 0}
+.feed{padding-left:38px;max-height:150px;overflow:auto}.feed li{margin:1px 0}
 .diff .add{background:#12361f;color:#3fb950}.diff .del{background:#3a1620;color:#f85149}
 .muted{color:#6e7681}.kv{color:#8b949e}
 .gtabs{margin-top:8px}
@@ -551,7 +577,7 @@ async function poll(){
  if(!AUTO)return;
  try{const r=await fetch('/api/state');STATE=await r.json();render();}catch(e){}
 }
-function badgeStr(eps){return (eps||[]).map(e=>({spike:'🔬',clarify:'❓',contract:'📐',drift:'🌀',hitl:'✋',review_fails:'⚖️'}[e]||'')).join('');}
+function badgeStr(eps){return (eps||[]).map(e=>({spike:'🔬',clarify:'❓',contract:'📐',drift:'🌀',hitl:'✋',review_fails:'⚖️',error:'❌',pruned:'✂️'}[e]||'')).join('');}
 
 function treeHTML(n){
  const has=n.children&&n.children.length;
@@ -585,8 +611,9 @@ function timelineHTML(){
   const rel=e.t!=null?('+'+(e.t-t0).toFixed(1)+'с'):'—';
   return `<tr><td>${rel}</td><td>${e.tick??''}</td><td><span class=ph>${esc(e.phase)}</span></td><td>${esc(e.text)}</td><td>${e.verdict?('<b>'+esc(e.verdict)+'</b>'):''}</td></tr>`;
  }).join('');
- return '<p class=muted>сверху — последние по времени; «время» = от старта прогона</p>'+
-  '<table><thead><tr><th>время</th><th>#</th><th>фаза</th><th>действие</th><th>вердикт</th></tr></thead><tbody>'+rows+'</tbody></table>';
+ return '<p class=muted>сверху — последние по времени; «время» = от старта прогона; '+
+  '«соб.№» — номер события в полном журнале (тут только вехи, поэтому номера с пропусками)</p>'+
+  '<table><thead><tr><th>время</th><th title="номер события в полном журнале прогона">соб.№</th><th>фаза</th><th>действие</th><th>вердикт</th></tr></thead><tbody>'+rows+'</tbody></table>';
 }
 
 function renderGlobal(){
