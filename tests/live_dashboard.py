@@ -372,8 +372,18 @@ def _build_state(run_dir: pathlib.Path) -> dict:
         if nid not in meta:
             continue
         eps = meta[nid]["episodes"]
-        if any(str(e.get("verdict")) in bad for e in evs) and "error" not in eps:
+        # spec_review: only the LATEST verdict counts — a reworked spec that
+        # passed re-review clears the red badge (the episode stays in events)
+        reviews = [e for e in evs if e.get("gate") == "spec_review"]
+        review_bad = bool(reviews) and str(reviews[-1].get("verdict")) in bad
+        other_bad = any(str(e.get("verdict")) in bad
+                        for e in evs if e.get("gate") != "spec_review")
+        if (review_bad or other_bad) and "error" not in eps:
             eps.append("error")
+        if reviews and not review_bad and "error" not in eps and not other_bad:
+            # reworked-to-green node gets a visible 'fixed' mark
+            if "reworked" not in eps and len(reviews) > 1:
+                eps.append("reworked")
         if any(str(e.get("verdict")) == "PRUNED" for e in evs) and "pruned" not in eps:
             eps.append("pruned")
 
@@ -599,7 +609,7 @@ async function poll(){
  if(!AUTO)return;
  try{const r=await fetch('/api/state');STATE=await r.json();render();}catch(e){}
 }
-function badgeStr(eps){return (eps||[]).map(e=>({spike:'🔬',clarify:'❓',contract:'📐',drift:'🌀',hitl:'✋',review_fails:'⚖️',error:'❌',pruned:'✂️'}[e]||'')).join('');}
+function badgeStr(eps){return (eps||[]).map(e=>({spike:'🔬',clarify:'❓',contract:'📐',drift:'🌀',hitl:'✋',review_fails:'⚖️',error:'❌',pruned:'✂️',reworked:'🔧'}[e]||'')).join('');}
 
 function treeHTML(n){
  const has=n.children&&n.children.length;
