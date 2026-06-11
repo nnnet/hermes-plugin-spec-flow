@@ -128,7 +128,9 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
         # the live LLM builds its own ids → the blueprint and the id-bound
         # revisions are dropped; the oracle still checks the realized run
         exec_case = {k: v for k, v in case.items() if k not in ("blueprint", "revisions", "revision")}
-        max_calls = 80      # a live LLM is thorough; convergence is enforced at depth 3
+        # live budget: env-overridable so a "flexible atomicity" run can widen
+        # the bounds (the engine still dies loudly on non-convergence)
+        max_calls = int(os.environ.get("SPEC_FLOW_MAX_DECOMPOSE_CALLS", "80"))
     else:
         from harness import blueprint_decomposer
         agents["decomposer"] = blueprint_decomposer.make(case["blueprint"])
