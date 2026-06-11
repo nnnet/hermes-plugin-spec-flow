@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 
 from . import llm_log
 
@@ -39,11 +38,9 @@ MODEL = os.environ.get("SPEC_FLOW_JUDGE_MODEL") or os.environ.get("SPEC_FLOW_LLM
 
 
 def _ask(prompt: str) -> str:
-    proc = subprocess.run(["claude", "-p", "--model", MODEL, prompt],
-                          capture_output=True, text=True, timeout=300)
-    if proc.returncode != 0:
-        raise RuntimeError(f"claude CLI failed: {proc.stderr[-500:]}")
-    return proc.stdout
+    """Delegate to the unified backend (provider/model = config)."""
+    from . import llm_backend
+    return llm_backend.ask(prompt, model=MODEL)
 
 
 def _parse(text: str) -> dict:

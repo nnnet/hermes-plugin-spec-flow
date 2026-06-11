@@ -1,0 +1,69 @@
+"""The unified live-model backend: provider/model are CONFIG, not code.
+
+Verifies (offline, no quota): the openai-compatible path parses a completion,
+retries through a 429 throttle (free OpenRouter pools throttle hard), surfaces
+a loud error when the budget is exhausted, and the agents' _ask delegates here
+so no harness file shells out to a hard-coded ``claude -p`` anymore.
+"""
+from __future__ import annotations
+
+import json
+import pathlib
+import sys
+
+import pytest
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from harness import llm_backend as lb  # noqa: E402
+
+
+def _ok_body(text="hello"):
+    return json.dumps({"choices": [{"message": {"content": text}}]})
+
+
+def test_openai_path_parses_completion(monkeypatch):
+    monkeypatch.setattr(lb, "_http_post", lambda u, p, h: (200, _ok_body("ok!")))
+    assert lb._ask_openai("hi", "any/model") == "ok!"
+
+
+def test_openai_retries_through_429(monkeypatch):
+    """Why: free-pool models throttle; one 429 must not kill a 50-node run."""
+    calls = {"n": 0}
+
+    def flaky(u, p, h):
+        calls["n"] += 1
+        return (429, "rate limited") if calls["n"] == 1 else (200, _ok_body("after-retry"))
+
+    monkeypatch.setattr(lb, "_http_post", flaky)
+    monkeypatch.setattr(lb.time, "sleep", lambda s: None)
+    assert lb._ask_openai("hi", "m") == "after-retry"
+    assert calls["n"] == 2
+
+
+def test_openai_exhausted_budget_is_loud(monkeypatch):
+    monkeypatch.setattr(lb, "_http_post", lambda u, p, h: (500, "boom"))
+    monkeypatch.setattr(lb.time, "sleep", lambda s: None)
+    with pytest.raises(RuntimeError, match="HTTP 500"):
+        lb._ask_openai("hi", "m")
+
+
+def test_model_goes_into_payload(monkeypatch):
+    seen = {}
+
+    def capture(u, p, h):
+        seen.update(payload=p, url=u)
+        return 200, _ok_body()
+
+    monkeypatch.setattr(lb, "_http_post", capture)
+    lb._ask_openai("question", "openrouter/qwen/qwen3-coder:free")
+    assert seen["payload"]["model"] == "openrouter/qwen/qwen3-coder:free"
+    assert seen["url"].endswith("/chat/completions")
+
+
+def test_agents_delegate_to_backend(monkeypatch):
+    """Why: the whole point — agents must have NO direct claude -p anymore."""
+    from harness import llm_decomposer, llm_implementer, llm_judge
+    for mod in (llm_decomposer, llm_implementer, llm_judge):
+        src = pathlib.Path(mod.__file__).read_text(encoding="utf-8")
+        assert "llm_backend" in src
+        assert '"claude", "-p"' not in src and "claude_cmd" not in src

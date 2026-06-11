@@ -17,7 +17,7 @@ import os
 import re
 import subprocess
 
-from . import claude_cli, llm_log
+from . import llm_backend, llm_log
 
 PROMPT = """You are the spec-decomposer of a Spec-Driven Development run.
 
@@ -79,21 +79,8 @@ MAX_CHILDREN = int(os.environ.get("SPEC_FLOW_LLM_MAX_CHILDREN", "4"))
 
 
 def _ask(prompt: str) -> str:
-    # live agents talk to the API over the network; a single flaky call must not
-    # abort a 40+ node run, so retry a few times before giving up
-    attempts = int(os.environ.get("SPEC_FLOW_LLM_RETRIES", "3"))
-    last = ""
-    # the prompt goes through STDIN, not a positional arg: claude's --mcp-config
-    # is variadic and would otherwise swallow a trailing prompt as a config path
-    for i in range(attempts):
-        proc = subprocess.run([*claude_cli.claude_cmd(), "-p", "--model", MODEL,
-                               *claude_cli.mcp_args_no_serena()],
-                              input=prompt, capture_output=True, text=True, timeout=300,
-                              cwd=claude_cli.agent_cwd())
-        if proc.returncode == 0 and proc.stdout.strip():
-            return claude_cli.strip_headroom_banner(proc.stdout)
-        last = (proc.stderr or proc.stdout)[-300:]
-    raise RuntimeError(f"claude CLI failed after {attempts} tries: {last}")
+    """Delegate to the unified backend (provider/model = config)."""
+    return llm_backend.ask(prompt, model=MODEL)
 
 
 def _extract_json(text: str) -> dict:

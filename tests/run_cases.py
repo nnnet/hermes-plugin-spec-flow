@@ -327,6 +327,7 @@ def main() -> int:
             "implementer": args.implementer, "model": args.model, "stamp": stamp,
             "node_engine": case.get("node_engine", "inline"),
             "gateway": args.gateway,
+            "backend": os.environ.get("SPEC_FLOW_LLM_BACKEND", "claude"),
             "workspace": "workspace", "run_dir": str(case_dir),
         }, ensure_ascii=False, indent=2), encoding="utf-8")
         # fresh state per case so gate cooldowns never leak between cases

@@ -310,6 +310,7 @@ def _inputs_md(run_dir: pathlib.Path) -> str:
         "модель": meta.get("model", "—"),
         "движок узла (FSM/inline)": meta.get("node_engine", "—"),
         "шлюз LLM": meta.get("gateway", "—"),
+        "бэкенд LLM": meta.get("backend", "claude"),
         "воркспейс": f"{run_dir.name}/workspace",
         "git-репозиторий": "да (.git)" if git else ("журнал COMMITS.md" if commits.exists() else "—"),
         "коммитов/версий": n_commits,

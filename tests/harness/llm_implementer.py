@@ -19,7 +19,7 @@ import os
 import re
 import subprocess
 
-from . import claude_cli, llm_log
+from . import llm_backend, llm_log
 
 PROMPT = """You are the implementer of a Spec-Driven Development run.
 
@@ -65,21 +65,8 @@ def _snake(s: str) -> str:
 
 
 def _ask(prompt: str) -> str:
-    """Default backend — the local claude CLI. Swap for a Hermes worker / SDK.
-    Retries a few times so one flaky network call cannot abort a long run."""
-    attempts = int(os.environ.get("SPEC_FLOW_LLM_RETRIES", "3"))
-    last = ""
-    # prompt via STDIN: claude's variadic --mcp-config would swallow a trailing
-    # positional prompt as a config-file path
-    for _ in range(attempts):
-        proc = subprocess.run([*claude_cli.claude_cmd(), "-p", "--model", MODEL,
-                               *claude_cli.mcp_args_no_serena()],
-                              input=prompt, capture_output=True, text=True, timeout=300,
-                              cwd=claude_cli.agent_cwd())
-        if proc.returncode == 0 and proc.stdout.strip():
-            return claude_cli.strip_headroom_banner(proc.stdout)
-        last = (proc.stderr or proc.stdout)[-300:]
-    raise RuntimeError(f"claude CLI failed after {attempts} tries: {last}")
+    """Delegate to the unified backend (provider/model = config)."""
+    return llm_backend.ask(prompt, model=MODEL)
 
 
 def _parse(text: str) -> dict:
