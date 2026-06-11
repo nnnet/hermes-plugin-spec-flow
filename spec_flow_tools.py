@@ -1773,13 +1773,53 @@ def _plain_outcome(e: dict) -> tuple[str, str]:
     return "·", _md(_ev(e, "action"))
 
 
+def _artifact(e: dict) -> str:
+    """Concrete deliverable a reviewer can open — the workspace-relative path of
+    what this step produced or worked over: which level's spec, which code file /
+    test, which frozen contract. Paths are relative to the run workspace (the
+    report is written inside it), so a reviewer can walk straight to the file."""
+    task = str(_ev(e, "task") or "")
+    node = task.split(":")[0] if task else ""
+    phase = str(_ev(e, "phase") or "")
+    a = str(_ev(e, "action")).lower()
+    sk = _ev(e, "skill")
+
+    def _contract_file() -> str:
+        return node if node.endswith((".yaml", ".yml")) else f"{node}.openapi.yaml"
+
+    if phase == "requirements":
+        if "policy_gate" in a or "constitution" in a:
+            return "📜 `constitution.md`"
+        return f"📋 `specs/{node}.md` — требования (EARS)"
+    if phase == "hitl":
+        return f"🧑‍⚖️ решение человека → запись в `specs/{node}.md`"
+    if phase == "decompose":
+        if "leaf_check" in a:
+            return f"🧩 вердикт ветвления → `specs/{node}.md`"
+        if "clarify" in a or "open decision" in a:
+            return f"🟡 вопрос/ответ → `specs/{node}.md`"
+        return f"📝 план уровня узла `{node}` → `specs/{node}.md`"
+    if phase == "research" or sk == "spec-research":
+        return f"🔬 вывод ресёрча/ревизии → `specs/{node}.md`"
+    if phase == "contract" or sk == "spec-contract":
+        return f"📐 контракт API → `contracts/{_contract_file()}`"
+    if phase in ("drift", "respec") or sk in ("drift-gate", "respec-gate"):
+        return f"📐 `contracts/{_contract_file()}` ↔ 💻 `src/{node}/`"
+    if phase in ("implement", "review"):
+        return f"💻 код `src/{node}/` · 🧪 тест `tests/test_{node}.py`"
+    if phase == "integrate":
+        return f"🧩 сборка поддерева `{node}` → `src/` + e2e `tests/`"
+    return f"`specs/{node}.md`" if node else "—"
+
+
 def render_footprints(events: list[dict], level: int = 2) -> str:
-    """Readable markdown table of the run — one row per step. The 'Простыми
-    словами' column says, in the plainest terms, what was produced and what it
-    means, so a non-technical reviewer (or a bot) follows the consequences."""
+    """Readable markdown table of the run — one row per step. 'Простыми словами'
+    says in the plainest terms what was produced; 'Артефакты' points to the exact
+    workspace file a reviewer can open to see it."""
     rows = [
-        "| # | Кто | Что делал (технически) | 👶 Простыми словами: что вышло | Тип |",
-        "|--:|---|---|---|---|",
+        "| # | Кто | Что делал (технически) | 👶 Простыми словами: что вышло "
+        "| 📦 Артефакты (что получили / над чем работали) | Тип |",
+        "|--:|---|---|---|---|---|",
     ]
     for e in events:
         if int(_ev(e, "level") or 2) > level:
@@ -1789,7 +1829,7 @@ def render_footprints(events: list[dict], level: int = 2) -> str:
         kind, plain = _plain_outcome(e)
         rows.append(
             f"| {int(_ev(e,'tick') or 0)} | {who} | {_md(_ev(e,'action'))} "
-            f"| {plain} | {kind} |"
+            f"| {plain} | {_artifact(e)} | {kind} |"
         )
     return "\n".join(rows)
 
