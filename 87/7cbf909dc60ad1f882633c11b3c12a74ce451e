@@ -1,0 +1,33 @@
+spec_flow_runner.py
+  s_a7f45290e91181::t_a576284dbae553 197-206,667-668,671,940-942,944,977,987,998-1048,1204-1206,1251,1281-1282,1286-1292,1682-1683,1697
+tests/test_role_workers.py
+  s_a7f45290e91181::t_6eb06c42924718 280-340
+tests/run_cases.py
+  s_a7f45290e91181::t_a576284dbae553 199-200,204-205
+tests/scenarios/p2_sponsor_credits.yaml
+  s_a7f45290e91181::t_3d6a7887b5ec27 86-95
+tests/scenarios/p3_polymarket_platform.yaml
+  s_a7f45290e91181::t_3d6a7887b5ec27 100-109
+tests/scenarios/p4_b2b_marketplace.yaml
+  s_a7f45290e91181::t_3d6a7887b5ec27 203-212
+tests/scenarios/p1_earn_for_living.yaml
+  s_a7f45290e91181::t_3d6a7887b5ec27 99-108
+tests/harness/role_worker.py
+  s_a7f45290e91181::t_a576284dbae553 253-261
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "877cbf909dc60ad1f882633c11b3c12a74ce451e",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-fable-5"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
