@@ -931,6 +931,10 @@ class Engine:
             "node": {"id": node["id"], "title": node.get("title", node["id"])},
             "parent": parent, "depth": depth,
             "ancestors": [t for _, t in ancestors],
+            # the parent's NODE ID — the worker reads specs/<parent_id>.md
+            # (the approved parent spec) to trace child requirements to its
+            # REQ ids, exactly as the skill prescribes
+            "parent_id": ancestors[-1][0] if ancestors else None,
             "existing_nodes": [
                 {"id": i, "title": t}
                 for i, t in list(self._node_registry.items())[:150]

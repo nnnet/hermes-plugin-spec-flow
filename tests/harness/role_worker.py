@@ -242,6 +242,13 @@ def make_decomposer(workspace_dir: Optional[str] = None,
             depth=ctx["depth"], parent=ctx.get("parent") or "—",
             ancestors=" → ".join(ctx.get("ancestors") or []) or "—",
             existing=existing) + _ASK_RULE
+        parent_id = ctx.get("parent_id")
+        if parent_id:
+            prompt += (f"\n\nParent approved spec: specs/{parent_id}.md — READ"
+                       " it first (Read tool, relative to the current"
+                       " directory). Every requirement you author MUST carry"
+                       f" 'Traces-to: REQ-{parent_id}-n' pointing at the"
+                       " parent requirement it refines.")
         if ctx["depth"] >= LEAF_DEPTH:
             prompt += (f"\n\nHARD CONSTRAINT: depth {ctx['depth']} >= "
                        f"{LEAF_DEPTH} — this node MUST be atomic (no children).")
@@ -328,9 +335,11 @@ Constitution (non-negotiable): {constitution}
 
 What you are judging: the worker-authored sections (Requirements / Scope /
 Open decisions / Acceptance criteria). The header block (Node, Traces-to,
-leaf_check, Size estimate) is ENGINE-GENERATED metadata — do not reject
-for its format; for the ROOT node a Traces-to of the project goal is
-valid by definition.
+leaf_check, Size estimate) is ENGINE-GENERATED metadata — prose in the
+HEADER Traces-to line is fine, never a reject reason. Traceability is
+judged INSIDE ## Requirements: each requirement carries its own
+'Traces-to: REQ-<parent>-n'. For the ROOT node there is no parent —
+requirements trace to the project goal and that is valid by definition.
 
 Apply the skill's gate to the authored sections: REQ-id traceability,
 EARS form, testable acceptance, explicit scope boundary, constitution
