@@ -90,7 +90,10 @@ def _tree_from_llm(llm: list[dict]) -> dict:
         if e.get("event") == "outcome" and e.get("role") == "decomposer":
             nid = e.get("node")
             ch = e.get("children") or []
-            kids[nid] = ch
+            # spec-rework rounds log a second outcome with NO children —
+            # an empty list must never erase the node's known children
+            if ch or nid not in kids:
+                kids[nid] = ch
             for c in ch:
                 seen_child.add(c)
     roots = [n for n in kids if n not in seen_child] or (["L0"] if kids else [])
