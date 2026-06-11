@@ -23,14 +23,15 @@
 Цель: первая реальная оценка ценности. До сих пор живьём прогнан один лист
 (kvstore). Теперь — все кейсы, живые decomposer + implementer.
 
-- [ ] 1.1 Скрипт `tests/live_e2e_run.py`: один кейс за вызов; живой decomposer
+- [x] 1.1 Скрипт `tests/live_e2e_run.py`: один кейс за вызов; живой decomposer
       (дерево строит плагин сам, `tree` кейса — только оракул) + живой
-      implementer; флаги `--case`, `--depth`, `--model`; артефакты и отчёты —
-      в воркспейс прогона (run-report, oracle-report, workflow, mermaid,
-      PRODUCT-RESULTS на глубине product).
-- [ ] 1.2 Учёт стоимости: фиксировать число вызовов LLM и токены (если CLI
-      отдаёт) в `COST.md` воркспейса; лимит вызовов на прогон
-      (`max_decompose_calls` + предохранитель на implementer).
+      implementer (`--implementer llm`); флаги `--case`, `--depth`, `--model`;
+      артефакты и отчёты — в воркспейс прогона. `run_cases._run_full`
+      параметризован (implementer auto/llm, счётчик, model). Плумбинг проверен
+      офлайн `tests/test_live_e2e_harness.py` (5).
+- [x] 1.2 Учёт стоимости: `tests/harness/cost.py` (`Meter`, `write_cost_md`) —
+      число вызовов LLM по ролям + токены (если бэкенд отдаёт) в `COST.md`/`.json`
+      воркспейса; лимит вызовов на прогон (`max_decompose_calls`).
 - [ ] 1.3 Прогон p1 (самый простой) на глубине execute. Анализ: глубина и форма
       дерева против оракула, качество кода листьев, зелёность тестов.
 - [ ] 1.4 Прогон p2 и p3 на глубине execute. Анализ отклонений: где decomposer

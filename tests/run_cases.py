@@ -84,29 +84,49 @@ def _load_tools():
 
 
 def _run_full(case: dict, case_dir: Path, depth: str, tools,
-              decomposer: str = "case") -> dict:
+              decomposer: str = "case", implementer: str = "auto",
+              meter=None, model: str = "") -> dict:
     """The real production run: mandatory workspace inside the case folder,
-    disk sink at full detail, the plugin's own report built from the trace."""
+    disk sink at full detail, the plugin's own report built from the trace.
+
+    ``decomposer`` 'case' replays the tree, 'llm' drops it and the plugin builds
+    it from the goal (live). ``implementer`` 'auto' uses the deterministic
+    stand-in, 'llm' uses the live model implementer. A ``meter`` (cost.Meter)
+    wraps the LLM agents to record call/token cost into COST.md."""
     tools.CONTRACT_VALIDATORS["openapi"] = [
         "python3", str(eng.OPENAPI_DIFF), "{contract}", "{code}"]
     trace = case_dir / "trace.jsonl"
     sink = eng.LogSink(path=str(trace), level=eng.L_DETAIL, fmt="jsonl", enabled=True)
     # agents are injectable: at depth=execute a real implementer is required
-    # (bundled autonomous one by default); with --decomposer llm the case's
-    # predefined tree is DROPPED and the plugin builds it from the goal
+    # (bundled autonomous one by default; 'llm' = live model); with
+    # --decomposer llm the case's predefined tree is DROPPED, the plugin builds it
     agents = {}
     if depth in ("execute", "product"):
-        agents["implementer"] = auto_implementer.implement
+        if implementer == "llm":
+            from harness import llm_implementer
+            impl_fn = llm_implementer.implement
+            if meter is not None:
+                impl_fn = meter.wrap("implementer", impl_fn)
+            agents["implementer"] = impl_fn
+        else:
+            agents["implementer"] = auto_implementer.implement
     max_calls = eng.MAX_DECOMPOSE_CALLS
     if decomposer == "llm":
         from harness import llm_decomposer
-        agents["decomposer"] = llm_decomposer.decompose
+        dec_fn = llm_decomposer.decompose
+        if meter is not None:
+            dec_fn = meter.wrap("decomposer", dec_fn)
+        agents["decomposer"] = dec_fn
         case = {k: v for k, v in case.items() if k not in ("tree", "revision")}
         max_calls = 80      # a live LLM is thorough; convergence is enforced at depth 3
     res = eng.run_project(case, workspace=str(case_dir / "workspace"), depth=depth,
                           tools=tools, agents=agents or None,
                           contracts_dir=str(eng.CONTRACTS), sink=sink,
                           max_decompose_calls=max_calls)
+    if meter is not None:
+        from harness import cost as _cost
+        _cost.write_cost_md(meter, str(case_dir / "COST.md"),
+                            model=model, case=case.get("name", ""))
 
     widths = eng._column_widths(res.events)
     (case_dir / "log.txt").write_text(
@@ -212,7 +232,13 @@ def main() -> int:
                     help="'case' replays the predefined tree; 'llm' DROPS it and "
                          "the plugin builds the tree itself from the goal "
                          "(local `claude` CLI, haiku model)")
+    ap.add_argument("--implementer", default="auto", choices=["auto", "llm"],
+                    help="'auto' deterministic stand-in; 'llm' live model "
+                         "implementer (depth execute/product only)")
+    ap.add_argument("--model", default=os.environ.get("SPEC_FLOW_LLM_MODEL", "haiku"),
+                    help="LLM model for live agents (default haiku)")
     args = ap.parse_args()
+    os.environ["SPEC_FLOW_LLM_MODEL"] = args.model
     if args.decomposer == "llm" and not args.case:
         # live LLM runs cost real quota: one call per tree node — keep the
         # default to the single smallest case; widen explicitly via --case
@@ -234,7 +260,13 @@ def main() -> int:
 
         policy = _run_policy(path, case_dir, tools) if "imprecise" in case else None
         runnable = "tree" in case or args.decomposer == "llm"
-        full = (_run_full(case, case_dir, args.depth, tools, args.decomposer)
+        live = args.decomposer == "llm" or args.implementer == "llm"
+        meter = None
+        if live:
+            from harness import cost as _cost
+            meter = _cost.Meter()
+        full = (_run_full(case, case_dir, args.depth, tools, args.decomposer,
+                          implementer=args.implementer, meter=meter, model=args.model)
                 if runnable else None)
 
         (case_dir / "SUMMARY.md").write_text(
