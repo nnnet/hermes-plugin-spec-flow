@@ -268,3 +268,38 @@ spec-flow — это **движок дисциплины и durable-оркест
         пользователя): модель написала рабочий `kvstore` (get/set/delete/clear)
         + реальные тесты, раннер их прогнал — 8/8 зелёных, лист `done`. Артефакты
         в `tests/runs-out/<метка>__live-haiku-impl/` (gitignore).
+
+## Фаза 6 — адаптеры стандартов, рантайм-инварианты, самовосстановление
+
+Всё без Hermes; внешние либы подключаются опционально с деградацией.
+
+- [x] E1 расширить сигналы `research_trigger_check`: ошибки приёмки
+      (`k_acceptance_errors`), деградация метрик (`j_metric_regressions`), смена
+      правила среды (`on_env_rule_change`). `tests/test_research_signals.py` (7).
+- [x] E4 главный тест ценности: зелёный продукт → слом среды → возврат в зелёное
+      за ≤N итераций (бюджет анти-зацикливания), оракул видит `self_improve` +
+      `revision_level_return`. `tests/test_self_improvement_e2e.py` (5).
+- [x] C3 инварианты R1–R9 как рантайм-гейт: `assert_invariants` бросает
+      `InvariantViolation` на error-находке; движок гоняет его при
+      `runtime_guard=True`. `tests/test_runtime_invariants.py` (6).
+- [x] B2 импорт артефактов Kiro (`parse_kiro_requirements/tasks/design`,
+      `load_kiro_spec`, тул `kiro_import`): EARS-критерии, нумерованный план с
+      `_Requirements:_`, секции дизайна. `tests/test_kiro_import.py` (8).
+- [x] B3 дельты OpenSpec → respec-узлы (`parse_openspec_delta`,
+      `map_deltas_to_respec`, тул `openspec_import`): ADDED→create,
+      MODIFIED/RENAMED→respec, REMOVED→retire. `tests/test_openspec_import.py` (8).
+- [x] D4 contract_test против работающего API (specmatic, `SPECMATIC_CMD`,
+      тул `contract_test`): pass/fail/skipped, strict-режим; деградация без либы,
+      проверено стабом. `tests/test_contract_test.py` (6).
+- [x] B5 генератор MCP из OpenAPI (`openapi_to_mcp_tools`, тул `openapi_mcp`):
+      один тул на операцию, input-схема из параметров + тела запроса; свой
+      генератор без внешней либы. `tests/test_openapi_mcp.py` (8).
+
+Итого Фаза 6: 247 → 277 тестов. Новые тулы: `kiro_import`, `openspec_import`,
+`contract_test`, `openapi_mcp` (+ `speckit_import` из Фазы 5).
+
+## Остаётся (требует интеграции в Hermes)
+- F1–F4 — нативное исполнение на Kanban (дерево=карточки, диспетчер-воркеры,
+  block→unblock, HITL через шлюз).
+- C4 / E5 — durable-состояние узла и провенанс (`superseded_by`, история версий)
+  через Kanban runs + git.
