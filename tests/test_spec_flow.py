@@ -26,6 +26,7 @@ EXPECTED_TOOLS = {
     "kiro_import",
     "openspec_import",
     "contract_test",
+    "openapi_mcp",
 }
 
 

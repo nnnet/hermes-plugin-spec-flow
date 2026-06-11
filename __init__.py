@@ -34,6 +34,7 @@ _TOOL_NAMES = (
     "kiro_import",
     "openspec_import",
     "contract_test",
+    "openapi_mcp",
 )
 
 

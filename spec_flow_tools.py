@@ -1113,6 +1113,122 @@ def _handle_contract_test(args: dict[str, Any], **_: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
+# openapi_mcp — generate an MCP tool server from an OpenAPI contract (B5)
+# ---------------------------------------------------------------------------
+# A node that consumes an API should not hand-roll HTTP calls: B5 turns the
+# frozen OpenAPI contract into an MCP tool manifest (one tool per operation,
+# with a JSON-Schema input derived from the operation's parameters + request
+# body). A Hermes-side MCP server then exposes these tools to the worker. The
+# generator is self-contained (no external openapi-mcp lib required).
+
+def _openapi_param_schema(params: list) -> dict:
+    """Build a JSON-Schema 'properties'+'required' object from OpenAPI params."""
+    props: dict[str, Any] = {}
+    required: list[str] = []
+    for p in params or []:
+        if not isinstance(p, dict) or "name" not in p:
+            continue
+        name = p["name"]
+        schema = p.get("schema") or {"type": "string"}
+        props[name] = {"type": schema.get("type", "string"),
+                       "description": p.get("description", f"{p.get('in', 'query')} parameter")}
+        if p.get("required"):
+            required.append(name)
+    return {"properties": props, "required": required}
+
+
+def openapi_to_mcp_tools(spec: dict) -> list[dict]:
+    """Turn an OpenAPI dict into a list of MCP tool definitions.
+
+    One tool per (path, method): name from operationId (or method_path slug),
+    description from summary/description, input schema merged from path/query
+    parameters and a JSON request body.
+    """
+    tools: list[dict] = []
+    methods = {"get", "put", "post", "delete", "patch", "head", "options"}
+    for path, item in (spec.get("paths") or {}).items():
+        if not isinstance(item, dict):
+            continue
+        shared = item.get("parameters", [])
+        for method, op in item.items():
+            if method.lower() not in methods or not isinstance(op, dict):
+                continue
+            name = op.get("operationId") or _slug(f"{method}_{path}")
+            merged = _openapi_param_schema(list(shared) + list(op.get("parameters", [])))
+            props, required = merged["properties"], merged["required"]
+            body = (((op.get("requestBody") or {}).get("content") or {})
+                    .get("application/json") or {}).get("schema")
+            if isinstance(body, dict):
+                props["body"] = {"type": body.get("type", "object"),
+                                 "description": "JSON request body"}
+                required.append("body")
+            tools.append({
+                "name": name,
+                "method": method.upper(),
+                "path": path,
+                "description": op.get("summary") or op.get("description") or f"{method.upper()} {path}",
+                "input_schema": {"type": "object", "properties": props,
+                                 "required": sorted(set(required))},
+            })
+    return tools
+
+
+def _load_openapi(path: str) -> dict:
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    try:
+        import yaml  # guarded — PyYAML ships with the runner
+        return yaml.safe_load(text)
+    except Exception:  # noqa: BLE001 — fall back to JSON
+        return json.loads(text)
+
+
+OPENAPI_MCP_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "openapi_mcp",
+        "description": (
+            "Generate an MCP tool manifest from an OpenAPI contract — one tool "
+            "per operation, with a JSON-Schema input from its parameters + "
+            "request body. Lets a node consume the API as MCP tools instead of "
+            "hand-rolled HTTP. Returns the tool manifest."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "contract": {"type": "string", "description": "Path to the OpenAPI contract (yaml/json)."},
+                "spec": {"type": "object", "description": "Parsed OpenAPI object (alternative to contract)."},
+                "server_name": {"type": "string", "description": "Name for the generated MCP server (default from info.title)."},
+            },
+        },
+    },
+}
+
+
+def _handle_openapi_mcp(args: dict[str, Any], **_: Any) -> str:
+    spec = args.get("spec")
+    if not spec:
+        path = args.get("contract")
+        if not path:
+            return tool_error("openapi_mcp requires 'contract' path or 'spec' object")
+        try:
+            spec = _load_openapi(path)
+        except Exception as exc:  # noqa: BLE001
+            return tool_error(f"openapi_mcp cannot read contract: {exc}")
+    if not isinstance(spec, dict) or not spec.get("paths"):
+        return tool_error("openapi_mcp: not an OpenAPI document (no 'paths')")
+    tools = openapi_to_mcp_tools(spec)
+    if not tools:
+        return tool_error("openapi_mcp generated no tools from the contract")
+    server = args.get("server_name") or _slug((spec.get("info") or {}).get("title", "api")) + "_mcp"
+    return json.dumps({
+        "server": server,
+        "tool_count": len(tools),
+        "tools": tools,
+    }, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
 # policy_gate — deterministic constitution check
 # ---------------------------------------------------------------------------
 
@@ -1771,6 +1887,15 @@ registry.register(
     handler=_handle_contract_test,
     check_fn=_check_specflow,
     emoji="🔌",
+)
+
+registry.register(
+    name="openapi_mcp",
+    toolset="kanban",
+    schema=OPENAPI_MCP_SCHEMA,
+    handler=_handle_openapi_mcp,
+    check_fn=_check_specflow,
+    emoji="🧩",
 )
 
 
