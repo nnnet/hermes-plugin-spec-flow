@@ -45,6 +45,55 @@ try:
 except Exception:  # noqa: BLE001
     import spec_flow_tools as _gates  # type: ignore
 
+# Optional per-node lifecycle FSM (the roadmap's node_engine='fsm' option).
+# Imported guardedly: if the FSM module/deps are absent the runner still works
+# with node_engine='inline'. The mandatory-gate constants are SHARED, so the
+# inline guard enforces the exact same gates the FSM does — both engines catch
+# a skipped gate identically.
+try:
+    from . import spec_flow_node_fsm as _nodefsm
+except Exception:  # noqa: BLE001
+    try:
+        import spec_flow_node_fsm as _nodefsm  # type: ignore
+    except Exception:  # noqa: BLE001
+        _nodefsm = None  # type: ignore
+
+if _nodefsm is not None:
+    _NodeLifecycle = _nodefsm.NodeLifecycle
+    GateViolation = _nodefsm.GateViolation
+    GATES_LEAF = _nodefsm.GATES_LEAF
+    GATES_BRANCH = _nodefsm.GATES_BRANCH
+    EV_DECOMPOSE = _nodefsm.EV_DECOMPOSE
+    EV_CLARIFY = _nodefsm.EV_CLARIFY
+    EV_CONTRACT = _nodefsm.EV_CONTRACT
+    EV_IMPLEMENT = _nodefsm.EV_IMPLEMENT
+    EV_DRIFT = _nodefsm.EV_DRIFT
+    EV_REVIEW = _nodefsm.EV_REVIEW
+    EV_CRITIQUE = _nodefsm.EV_CRITIQUE
+    EV_REVIEW_PASS = _nodefsm.EV_REVIEW_PASS
+    EV_BRANCH_INTEGRATE = _nodefsm.EV_BRANCH_INTEGRATE
+    EV_DONE = _nodefsm.EV_DONE
+    _NODE_FSM_OK = True
+else:  # pragma: no cover — only when the FSM module is unavailable
+    class GateViolation(Exception):
+        pass
+    GATES_LEAF = ("contract_check", "review_pass", "verification")
+    GATES_BRANCH = ("integrate",)
+    _NodeLifecycle = None  # type: ignore
+    EV_DECOMPOSE = EV_CLARIFY = EV_CONTRACT = EV_IMPLEMENT = EV_DRIFT = None
+    EV_REVIEW = EV_CRITIQUE = EV_REVIEW_PASS = EV_BRANCH_INTEGRATE = EV_DONE = None
+    _NODE_FSM_OK = False
+
+# Which mandatory gate(s) each lifecycle event satisfies (the inline ledger maps
+# events through this; the FSM records the same internally).
+_EVENT_GATE = {
+    EV_CONTRACT: ("contract_check",),
+    EV_REVIEW_PASS: ("review_pass", "verification"),
+    EV_BRANCH_INTEGRATE: ("integrate",),
+}
+
+NODE_ENGINES = ("inline", "fsm")
+
 # Event verbosity levels — what each emit() is worth. Lower = more important.
 L_MILESTONE = 1   # gate verdicts, loops (clarify/critique/drift/respec), phase signals
 L_STEP = 2        # routine worker steps (read handoff, design, integrate)
@@ -386,12 +435,73 @@ class Workspace:
             json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+class _NodeDriver:
+    """One node's lifecycle guard — the same gate contract under two engines.
+
+    * ``node_engine='fsm'``    — a ``NodeLifecycle`` (pytransitions or the
+      dependency-free fallback) drives the phases; its guard refuses DONE
+      until every mandatory gate for the node kind fired.
+    * ``node_engine='inline'`` — the imperative pipeline runs as before; this
+      object records the SAME gates via ``_EVENT_GATE`` and runs the SAME
+      guard at ``done()``. So a skipped gate is caught in BOTH engines.
+
+    A node may declare a test-only ``_skip_gate`` to drop one mandatory gate,
+    proving the omission is caught regardless of the engine. When the FSM
+    module is unavailable the driver is inert (no guard), preserving the
+    pre-FSM behaviour.
+    """
+
+    def __init__(self, kind: str, *, fsm_mode: bool, skip_gate: Optional[str] = None):
+        self.kind = kind
+        self.active = _NODE_FSM_OK
+        self._skip = skip_gate
+        self._fired: set[str] = set()
+        self._lc = None
+        if fsm_mode and _NODE_FSM_OK:
+            self._lc = _NodeLifecycle().start(kind)
+
+    def go(self, event) -> None:
+        """Advance the lifecycle by one event, recording any gate it satisfies."""
+        if not self.active:
+            return
+        if self._lc is not None:
+            self._lc.advance(event)
+        for gate in _EVENT_GATE.get(event, ()):
+            self._fired.add(gate)
+
+    def clarify(self) -> None:
+        """Replay the clarify self-loop (open decision → resolve) on the FSM."""
+        if self._lc is not None:
+            self._lc.open_decision()
+            self._lc.advance(EV_CLARIFY)
+            self._lc.resolve_decision()
+
+    def done(self) -> None:
+        """Close the node — runs the gate-completeness guard for both engines."""
+        if not self.active:
+            return
+        if self._skip:  # test-only: drop one gate to prove the guard bites
+            self._fired.discard(self._skip)
+            if self._lc is not None:
+                self._lc._gates.fired.discard(self._skip)
+        if self._lc is not None:
+            self._lc.advance(EV_DONE)  # FSM guard raises GateViolation on a gap
+            return
+        required = GATES_BRANCH if self.kind == "branch" else GATES_LEAF
+        missing = [g for g in required if g not in self._fired]
+        if missing:
+            raise GateViolation(
+                f"cannot reach DONE: mandatory gate(s) skipped for "
+                f"{self.kind}: {', '.join(missing)}")
+
+
 class Engine:
     def __init__(self, tools: Any = None, *, workspace: Any,
                  depth: Any = DEPTH_SPEC, agents: Optional[dict] = None,
                  contracts_dir: Optional[str] = None,
                  sink: Optional[Any] = None, verbosity: int = DEFAULT_VERBOSITY,
-                 max_decompose_calls: int = MAX_DECOMPOSE_CALLS):
+                 max_decompose_calls: int = MAX_DECOMPOSE_CALLS,
+                 node_engine: str = "inline"):
         if not workspace:
             raise ValueError("Workspace is mandatory — pass a path or a Workspace")
         # tools (gate provider) is injectable; default to the bundled gates so
@@ -399,6 +509,13 @@ class Engine:
         self.tools = tools if tools is not None else _gates
         self.depth = _depth_int(depth)
         self.max_decompose_calls = max_decompose_calls
+        # node lifecycle engine: 'inline' (imperative, default) or 'fsm'
+        # (the standalone NodeLifecycle drives + guards each node).
+        if node_engine not in NODE_ENGINES:
+            raise ValueError(f"node_engine must be one of {NODE_ENGINES}, got {node_engine!r}")
+        if node_engine == "fsm" and not _NODE_FSM_OK:
+            raise RuntimeError("node_engine='fsm' requested but spec_flow_node_fsm is unavailable")
+        self.node_engine = node_engine
         self.agents = {**DEFAULT_AGENTS, **(agents or {})}
         self.contracts_dir = Path(contracts_dir) if contracts_dir else None
         self.events: list[Event] = []
@@ -484,6 +601,11 @@ class Engine:
             self.loops.append({"type": "hitl-reject", "kind": kind,
                                "task": task, "detail": reason or detail})
         return approved
+
+    def _node_driver(self, node: dict, kind: str) -> _NodeDriver:
+        """Build the lifecycle guard for one node under the active engine."""
+        return _NodeDriver(kind, fsm_mode=(self.node_engine == "fsm"),
+                           skip_gate=node.get("_skip_gate"))
 
     # -- run ---------------------------------------------------------------
     def run(self, project: dict) -> RunResult:
@@ -636,6 +758,14 @@ class Engine:
                   "leaf_check", "; ".join(reasons) or "within all thresholds",
                   "leaf_check", verdict, level=L_MILESTONE)
 
+        # lifecycle guard for this node (inline or fsm engine). REQUIREMENTS →
+        # DECOMPOSE always; the clarify self-loop replays here when an open
+        # decision was raised above.
+        drv = self._node_driver(node, "leaf" if verdict == "leaf" else "branch")
+        drv.go(EV_DECOMPOSE)
+        if clar:
+            drv.clarify()
+
         if verdict == "branch":
             contract_here = node.get("contract")
             child_contract_ctx = contract_ctx
@@ -664,6 +794,8 @@ class Engine:
                 self._visit(child, depth + 1, child_contract_ctx, phase, parent=title)
                 child_ids.append(child["id"])
 
+            # a branch delegates impl to its children, then integrates them
+            drv.go(EV_BRANCH_INTEGRATE)
             integ = f"{nid}:integrate"
             iparents = child_ids + ([f"{nid}:contract"] if contract_here else [])
             self.task(integ, f"Integrate & verify {title}", "integrate", "verifier", "spec-integrate", parents=iparents)
@@ -681,7 +813,11 @@ class Engine:
             self.tasks[integ].status = "done"
             self._completed += 1
         else:
-            self._leaf_pipeline(node, contract_ctx, depth, parent)
+            self._leaf_pipeline(node, contract_ctx, depth, parent, drv)
+
+        # close the node lifecycle — the guard refuses DONE if a mandatory gate
+        # for this node kind was skipped (raises GateViolation in both engines).
+        drv.done()
 
         # node-level HITL — a node may declare a human checkpoint (e.g. payouts
         # above the unattended cap, outreach without prior consent). A rejection
@@ -702,7 +838,8 @@ class Engine:
         self._research_tick(node, depth)
 
     def _leaf_pipeline(self, node: dict, contract_ctx: Optional[dict],
-                       depth: int = 0, parent: Optional[str] = None):
+                       depth: int = 0, parent: Optional[str] = None,
+                       drv: Optional["_NodeDriver"] = None):
         nid = node["id"]
         title = node.get("title", nid)
         # spec/plan is written at every depth (>= spec)
@@ -728,6 +865,10 @@ class Engine:
                   "design → bottom-up plan (DB→logic→API→tests)", title)
         self.emit("implement", "implementer", "spec-implement", impl,
                   "TDD: write test (RED) → minimal impl → test (GREEN)", "", level=L_DETAIL)
+        # lifecycle: every leaf is checked against its contract before impl
+        if drv is not None:
+            drv.go(EV_CONTRACT)
+            drv.go(EV_IMPLEMENT)
 
         # contract drift episode
         if node.get("drift") and contract_ctx:
@@ -762,9 +903,15 @@ class Engine:
                           "contract_check after code fix", "matches frozen contract",
                           "contract_check", res2["status"], level=L_MILESTONE)
 
+        # contract drift stayed in IMPLEMENT (respec/codefix self-loop)
+        if drv is not None and node.get("drift") and contract_ctx:
+            drv.go(EV_DRIFT)
+
         # review critique loop
         review = f"{nid}:review"
         self.task(review, f"Review {title}", "review", "spec-reviewer", "spec-reviewer", parents=[impl])
+        if drv is not None:
+            drv.go(EV_REVIEW)
         fails = int(node.get("review_fails", 0))
         for i in range(fails):
             self.emit("review", "spec-reviewer", "spec-reviewer", review,
@@ -774,8 +921,14 @@ class Engine:
                       "fix per critique → unblock → re-run", "")
             self.tasks[impl].runs += 1
             self.loops.append({"type": "review-fail", "task": review, "detail": "spec-conformance critique"})
+            # failing review sends the node back to IMPLEMENT, then re-review
+            if drv is not None:
+                drv.go(EV_CRITIQUE)
+                drv.go(EV_REVIEW)
         self.emit("review", "spec-reviewer", "spec-reviewer", review,
                   "impl-review → quality gate", "", "", "PASS", level=L_MILESTONE)
+        if drv is not None:
+            drv.go(EV_REVIEW_PASS)
         if self.depth >= DEPTH_SCAFFOLD:
             self.emit("implement", "implementer", "spec-implement", impl,
                       "git commit + verification-before-completion", title)
@@ -1037,7 +1190,8 @@ def run_project(project: dict, *, workspace, depth: Any = DEPTH_SPEC,
                 tools: Any = None, agents: Optional[dict] = None,
                 contracts_dir: Optional[str] = None, sink: Optional[Any] = None,
                 verbosity: int = DEFAULT_VERBOSITY,
-                max_decompose_calls: int = MAX_DECOMPOSE_CALLS) -> RunResult:
+                max_decompose_calls: int = MAX_DECOMPOSE_CALLS,
+                node_engine: str = "inline") -> RunResult:
     """Public entry: run a project to completion. ``workspace`` is mandatory.
 
     ``depth`` is one of spec|scaffold|verify|execute|product (or 1..5).
@@ -1050,7 +1204,8 @@ def run_project(project: dict, *, workspace, depth: Any = DEPTH_SPEC,
         raise ValueError("Workspace is mandatory")
     return Engine(tools=tools, workspace=workspace, depth=depth, agents=agents,
                   contracts_dir=contracts_dir, sink=sink, verbosity=verbosity,
-                  max_decompose_calls=max_decompose_calls).run(project)
+                  max_decompose_calls=max_decompose_calls,
+                  node_engine=node_engine).run(project)
 
 
 def render_log(res: RunResult, level: int = None) -> str:
