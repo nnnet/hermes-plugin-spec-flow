@@ -390,6 +390,14 @@ def _build_state(run_dir: pathlib.Path) -> dict:
         if any(str(e.get("verdict")) == "PRUNED" for e in evs) and "pruned" not in eps:
             eps.append("pruned")
 
+    # research spikes live in events as '<node>:spike' tasks — surface them
+    # as a 🔬 badge on the owning node (the live tree has no spike field)
+    for task in ev_idx:
+        if task.endswith(":spike"):
+            owner = task[:-6]
+            if owner in meta and "spike" not in meta[owner]["episodes"]:
+                meta[owner]["episodes"].insert(0, "spike")
+
     feed = []
     for e in llm:
         if e.get("event") != "outcome":
