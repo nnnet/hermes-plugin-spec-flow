@@ -1,0 +1,19 @@
+tests/live-run.env.sh
+  s_1b99a7ec9e9aa9::t_1e2a0c5205d5c0 1-38
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "695715a0e02088b6d8a58dabea26900d2b6bd1e5",
+  "prompts": {},
+  "sessions": {
+    "s_1b99a7ec9e9aa9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5025e0d8-1d1b-4f97-8c52-eec971a58fbd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <zkowkmdx@sharklasers.com>"
+    }
+  }
+}
