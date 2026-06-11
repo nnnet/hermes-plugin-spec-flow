@@ -25,6 +25,7 @@ EXPECTED_TOOLS = {
     "speckit_import",
     "kiro_import",
     "openspec_import",
+    "contract_test",
 }
 
 

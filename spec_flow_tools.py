@@ -87,6 +87,12 @@ CONTRACT_VALIDATORS: dict[str, list[str]] = {
     # Protobuf via buf.
     "protobuf": ["buf", "lint", "{contract}"],
 }
+
+# D4: contract test against a RUNNING API (not just the static manifest).
+# specmatic runs the OpenAPI contract as live tests against a base URL. The
+# command is configurable so tests can point it at a stub; the wrapper degrades
+# gracefully (status='skipped') when specmatic is not installed.
+SPECMATIC_CMD: list[str] = ["specmatic", "test", "{contract}", "--testBaseURL={base_url}"]
 DEFAULT_CONTRACT_TYPES = ["openapi"]
 
 # Research lane — the "continuous revision" trigger configuration. Any subset
@@ -1044,6 +1050,69 @@ def _handle_openspec_import(args: dict[str, Any], **_: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
+# contract_test — specmatic contract test against a RUNNING API (D4)
+# ---------------------------------------------------------------------------
+# contract_check (above) compares a contract to the CODE statically. D4 adds the
+# missing half: run the contract as live tests against a started service via
+# specmatic, so the working API — not just the manifest — is verified. The
+# wrapper is offline-safe: without specmatic it reports status='skipped'.
+
+def _run_specmatic(contract: str, base_url: str, cmd: Optional[list] = None) -> dict[str, Any]:
+    template = list(cmd or SPECMATIC_CMD)
+    binary = template[0]
+    # absolute paths / configured stubs are used as-is; a bare name must resolve
+    if os.sep not in binary and shutil.which(binary) is None:
+        return {"status": "skipped", "available": False,
+                "reason": f"{binary} not installed — install specmatic to contract-test the running API"}
+    argv = [p.replace("{contract}", contract).replace("{base_url}", base_url) for p in template]
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=120)
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "error", "available": True, "reason": str(exc)}
+    out = (proc.stdout or "") + (proc.stderr or "")
+    return {
+        "status": "pass" if proc.returncode == 0 else "fail",
+        "available": True,
+        "exit_code": proc.returncode,
+        "report": out[-2000:],
+    }
+
+
+CONTRACT_TEST_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "contract_test",
+        "description": (
+            "Run an OpenAPI contract as LIVE tests against a running service "
+            "(specmatic) — verifies the working API, not just the manifest. "
+            "Reports pass/fail, or skipped when specmatic is not installed."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "contract": {"type": "string", "description": "Path to the OpenAPI contract."},
+                "base_url": {"type": "string", "description": "Base URL of the running service to test (e.g. http://localhost:8080)."},
+                "strict": {"type": "boolean", "description": "Treat 'skipped' (no specmatic) as a failure. Default false."},
+            },
+            "required": ["contract", "base_url"],
+        },
+    },
+}
+
+
+def _handle_contract_test(args: dict[str, Any], **_: Any) -> str:
+    contract = args.get("contract")
+    base_url = args.get("base_url")
+    if not contract or not base_url:
+        return tool_error("contract_test requires 'contract' and 'base_url'")
+    result = _run_specmatic(str(contract), str(base_url))
+    if args.get("strict") and result["status"] == "skipped":
+        result["status"] = "fail"
+        result["reason"] = "strict mode: " + result.get("reason", "specmatic unavailable")
+    return json.dumps(result, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
 # policy_gate — deterministic constitution check
 # ---------------------------------------------------------------------------
 
@@ -1693,6 +1762,15 @@ registry.register(
     handler=_handle_openspec_import,
     check_fn=_check_specflow,
     emoji="♻️",
+)
+
+registry.register(
+    name="contract_test",
+    toolset="kanban",
+    schema=CONTRACT_TEST_SCHEMA,
+    handler=_handle_contract_test,
+    check_fn=_check_specflow,
+    emoji="🔌",
 )
 
 

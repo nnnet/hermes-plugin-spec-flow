@@ -33,6 +33,7 @@ _TOOL_NAMES = (
     "speckit_import",
     "kiro_import",
     "openspec_import",
+    "contract_test",
 )
 
 
