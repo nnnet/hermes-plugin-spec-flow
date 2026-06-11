@@ -1,0 +1,21 @@
+tests/live_dashboard.py
+  s_1b99a7ec9e9aa9::t_70581d58afbc8e 633,637
+  s_1b99a7ec9e9aa9::t_321cd456fdc1a1 648,650,658
+  s_1b99a7ec9e9aa9::t_942fb2512c7ff3 469-474
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "b1dede638424a0a9b135bcbf1bb3e5e5081ec41a",
+  "prompts": {},
+  "sessions": {
+    "s_1b99a7ec9e9aa9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5025e0d8-1d1b-4f97-8c52-eec971a58fbd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <zkowkmdx@sharklasers.com>"
+    }
+  }
+}
