@@ -382,3 +382,120 @@ def test_rework_closes_open_decisions_updates_header(plugin, tmp_path):
     assert "resolve before leafing" not in spec
     assert "| open_decisions | 0 |" in spec
     assert "None — sqlite and pdf chosen" in spec
+
+
+# ── free-pool backend: chat-only mode ────────────────────────────────────
+
+
+def test_paid_model_is_forbidden_on_openai_backend(monkeypatch):
+    from harness import llm_backend as lb
+    monkeypatch.setattr(lb, "BACKEND", "openai")
+    monkeypatch.setattr(lb, "ALLOW_PAID", False)
+    with pytest.raises(ValueError, match="forbidden"):
+        lb.ask("hi", model="openrouter/qwen/qwen3-coder")  # no :free
+
+
+def test_quota_exhaustion_falls_back_to_haiku(monkeypatch):
+    from harness import llm_backend as lb
+    monkeypatch.setattr(lb, "BACKEND", "openai")
+    monkeypatch.setattr(lb, "_free_down_until", 0.0)
+    monkeypatch.setattr(lb, "FALLBACK_MODEL", "haiku")
+    calls = []
+
+    def boom(prompt, model, system=None):
+        raise lb.QuotaExhausted("429 x3")
+
+    def claude(prompt, model, system=None):
+        calls.append(model)
+        return "fallback reply"
+
+    monkeypatch.setattr(lb, "_ask_openai", boom)
+    monkeypatch.setattr(lb, "_ask_claude", claude)
+    out = lb.ask("hi", model="openrouter/qwen/qwen3-coder:free")
+    assert out == "fallback reply" and calls == ["haiku"]
+    assert lb.last_call["fallback"] is True
+    # the pool is now in cooldown: the next call skips straight to haiku
+    monkeypatch.setattr(lb, "_ask_openai",
+                        lambda *a, **k: pytest.fail("free pool must be skipped"))
+    assert lb.ask("hi", model="openrouter/x:free") == "fallback reply"
+    monkeypatch.setattr(lb, "_free_down_until", 0.0)
+
+
+class _ChatWS:
+    def __init__(self, root):
+        self.root = str(root)
+
+    def _write(self, rel, body, kind):
+        p = pathlib.Path(self.root) / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body, encoding="utf-8")
+
+
+GOOD_IMPL = ("def add(a, b):\n    return a + b\n")
+GOOD_TEST = ("import sys\nfrom pathlib import Path\n"
+             "sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'src'))\n"
+             "from adder import add\n\n\n"
+             "def test_add():\n    assert add(2, 3) == 5\n")
+BAD_IMPL = ("def add(a, b):\n    return a - b\n")
+
+
+def _chat_ctx(tmp_path):
+    ws = _ChatWS(tmp_path)
+    (tmp_path / "specs").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "specs" / "adder.md").write_text(
+        "## Requirements\n- REQ-adder-1 add two ints\n", encoding="utf-8")
+    return {"node": "adder", "title": "Adder", "workspace": ws,
+            "spec": "specs/adder.md"}
+
+
+def test_chat_implementer_writes_files_and_runs_pytest(monkeypatch, tmp_path):
+    import json as _json
+    from harness import llm_backend as lb
+    monkeypatch.setattr(lb, "BACKEND", "openai")
+    monkeypatch.setattr(lb, "ask", lambda prompt, model, system=None: _json.dumps(
+        {"files": {"src/adder.py": GOOD_IMPL, "tests/test_adder.py": GOOD_TEST}}))
+    impl = rw.make_implementer()
+    impl(_chat_ctx(tmp_path))
+    assert (tmp_path / "src" / "adder.py").exists()
+    assert (tmp_path / "tests" / "test_adder.py").exists()
+
+
+def test_chat_implementer_repairs_after_red_tests(monkeypatch, tmp_path):
+    import json as _json
+    from harness import llm_backend as lb
+    monkeypatch.setattr(lb, "BACKEND", "openai")
+    n = {"calls": 0}
+
+    def fake_ask(prompt, model, system=None):
+        n["calls"] += 1
+        impl_body = BAD_IMPL if n["calls"] == 1 else GOOD_IMPL
+        return _json.dumps({"files": {"src/adder.py": impl_body,
+                                      "tests/test_adder.py": GOOD_TEST}})
+
+    monkeypatch.setattr(lb, "ask", fake_ask)
+    impl = rw.make_implementer()
+    impl(_chat_ctx(tmp_path))
+    assert n["calls"] == 2, "red tests must trigger exactly one repair round"
+    assert "a + b" in (tmp_path / "src" / "adder.py").read_text(encoding="utf-8")
+
+
+def test_chat_reviewer_inlines_spec_text(monkeypatch, tmp_path):
+    import json as _json
+    from harness import llm_backend as lb
+    monkeypatch.setattr(lb, "BACKEND", "openai")
+    (tmp_path / "specs").mkdir(parents=True)
+    (tmp_path / "specs" / "n1.md").write_text("UNIQUE-SPEC-MARKER-42",
+                                              encoding="utf-8")
+    seen = {}
+
+    def fake_ask(prompt, model, system=None):
+        seen["prompt"] = prompt
+        return _json.dumps({"verdict": "PASS", "reasons": []})
+
+    monkeypatch.setattr(lb, "ask", fake_ask)
+    rev = rw.make_reviewer()
+    out = rev({"node": "n1", "spec": "specs/n1.md",
+               "workspace_root": str(tmp_path), "goal": "g"})
+    assert out["verdict"] == "PASS"
+    assert "UNIQUE-SPEC-MARKER-42" in seen["prompt"], \
+        "chat-only reviewer must receive the spec text inline"

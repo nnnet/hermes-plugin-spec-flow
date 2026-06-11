@@ -40,20 +40,59 @@ RETRIES = int(os.environ.get("SPEC_FLOW_LLM_RETRIES", "3"))
 BACKOFF = float(os.environ.get("SPEC_FLOW_LLM_BACKOFF", "5"))
 TIMEOUT = int(os.environ.get("SPEC_FLOW_LLM_TIMEOUT", "300"))
 
+# the OpenRouter free pool is the ONLY allowed primary for test runs
+# (~1000 requests/day); paid models are forbidden unless explicitly
+# unlocked. When the free pool is exhausted the ONE sanctioned fallback
+# is the claude CLI on haiku.
+DEFAULT_FREE_MODEL = os.environ.get(
+    "SPEC_FLOW_LLM_MODEL", "openrouter/qwen/qwen3-coder:free")
+ALLOW_PAID = os.environ.get("SPEC_FLOW_ALLOW_PAID", "") == "1"
+FALLBACK_MODEL = os.environ.get("SPEC_FLOW_FALLBACK_MODEL", "haiku")
+FALLBACK_COOLDOWN = float(os.environ.get("SPEC_FLOW_FALLBACK_COOLDOWN", "600"))
 
-def ask(prompt: str, *, model: str) -> str:
-    """Send one prompt to the configured backend, return the reply text."""
-    if BACKEND == "openai":
-        return _ask_openai(prompt, model)
-    return _ask_claude(prompt, model)
+# once the free pool proves exhausted, skip it for a cooldown window
+# instead of burning the full retry ladder on every call
+_free_down_until = 0.0
+last_call: dict = {}    # {"backend":…, "model":…, "fallback":bool} — for logs
 
 
-# ── claude CLI (default; gateway via ANTHROPIC_BASE_URL env) ─────────────────
-def _ask_claude(prompt: str, model: str) -> str:
+class QuotaExhausted(RuntimeError):
+    """The free pool kept returning 429 through every retry."""
+
+
+def ask(prompt: str, *, model: str, system: str | None = None) -> str:
+    """Send one prompt to the configured backend, return the reply text.
+
+    openai backend: free-pool-only guard + automatic one-step fallback to
+    the claude CLI (FALLBACK_MODEL) when the pool is exhausted."""
+    global _free_down_until
+    if BACKEND != "openai":
+        last_call.update(backend="claude", model=model, fallback=False)
+        return _ask_claude(prompt, model, system=system)
+    if ":free" not in model and not ALLOW_PAID:
+        raise ValueError(
+            f"paid model '{model}' is forbidden for test runs — only the"
+            " OpenRouter ':free' pool is allowed (SPEC_FLOW_ALLOW_PAID=1"
+            " to override deliberately)")
+    if time.time() >= _free_down_until:
+        try:
+            last_call.update(backend="openai", model=model, fallback=False)
+            return _ask_openai(prompt, model, system=system)
+        except QuotaExhausted:
+            _free_down_until = time.time() + FALLBACK_COOLDOWN
+    if not FALLBACK_MODEL:
+        raise QuotaExhausted("free pool exhausted and no fallback configured")
+    last_call.update(backend="claude", model=FALLBACK_MODEL, fallback=True)
+    return _ask_claude(prompt, FALLBACK_MODEL, system=system)
+
+
+# ── claude CLI (fallback; gateway via ANTHROPIC_BASE_URL env) ────────────────
+def _ask_claude(prompt: str, model: str, system: str | None = None) -> str:
     last = ""
+    extra = ["--append-system-prompt", system] if system else []
     for _ in range(RETRIES):
         proc = subprocess.run([*claude_cli.claude_cmd(), "-p", "--model", model,
-                               *claude_cli.mcp_args_no_serena()],
+                               *extra, *claude_cli.mcp_args_no_serena()],
                               input=prompt, capture_output=True, text=True,
                               timeout=TIMEOUT, cwd=claude_cli.agent_cwd())
         if proc.returncode == 0 and proc.stdout.strip():
@@ -75,12 +114,14 @@ def _http_post(url: str, payload: dict, headers: dict) -> tuple[int, str]:
         return e.code, e.read().decode("utf-8", "replace")
 
 
-def _ask_openai(prompt: str, model: str) -> str:
+def _ask_openai(prompt: str, model: str, system: str | None = None) -> str:
     url = BASE_URL.rstrip("/") + "/chat/completions"
     headers = {"Authorization": f"Bearer {API_KEY}"} if API_KEY else {}
-    payload = {"model": model,
-               "messages": [{"role": "user", "content": prompt}]}
+    messages = ([{"role": "system", "content": system}] if system else []) \
+        + [{"role": "user", "content": prompt}]
+    payload = {"model": model, "messages": messages}
     last = ""
+    throttled = 0
     for attempt in range(1, RETRIES + 1):
         status, body = _http_post(url, payload, headers)
         if status == 200:
@@ -97,8 +138,12 @@ def _ask_openai(prompt: str, model: str) -> str:
         # free-pool throttling (429): honour the server-suggested pause when
         # present (OpenRouter sends retry_after_seconds), else back off harder
         if status == 429:
+            throttled += 1
             m = re.search(r'"retry_after_seconds"\s*:\s*([0-9.]+)', body)
             time.sleep(min(90.0, float(m.group(1)) + 2) if m else BACKOFF * attempt)
         else:
             time.sleep(BACKOFF)
+    if throttled == RETRIES:
+        raise QuotaExhausted(
+            f"free pool throttled through {RETRIES} tries: {last}")
     raise RuntimeError(f"openai backend failed after {RETRIES} tries: {last}")

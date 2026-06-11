@@ -32,7 +32,7 @@ from typing import Any, Callable, Optional
 
 import yaml
 
-from . import claude_cli, llm_log
+from . import claude_cli, llm_backend, llm_log
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 SKILLS_DIR = PLUGIN_ROOT / "skills"
@@ -40,6 +40,9 @@ PROFILES_DIR = PLUGIN_ROOT / "profiles"
 
 TIMEOUT = int(os.environ.get("SPEC_FLOW_WORKER_TIMEOUT", "600"))
 RETRIES = int(os.environ.get("SPEC_FLOW_WORKER_RETRIES", "2"))
+# how much of a referenced file is inlined into a chat-only prompt
+INLINE_FILE_LIMIT = int(os.environ.get("SPEC_FLOW_INLINE_FILE_LIMIT", "8000"))
+PYTEST_TIMEOUT = int(os.environ.get("SPEC_FLOW_PYTEST_TIMEOUT", "120"))
 
 # Hermes toolset name → Claude Code tool names. ``kanban`` and ``memory``
 # have no standalone counterpart (they ARE the Hermes adapter) — empty.
@@ -75,8 +78,39 @@ def load_skill_md(skill: str) -> str:
 
 
 def _model_for(role: str) -> str:
+    # the shared default is the free OpenRouter pool — paid models are
+    # forbidden for test runs (llm_backend enforces it); 'haiku' exists
+    # only as llm_backend's exhaustion fallback
     return (os.environ.get(f"SPEC_FLOW_{role.upper().replace('-', '_')}_MODEL")
-            or os.environ.get("SPEC_FLOW_LLM_MODEL", "haiku"))
+            or llm_backend.DEFAULT_FREE_MODEL)
+
+
+def _chat_only() -> bool:
+    """True when the backend is a plain chat API: no file/shell tools, so
+    referenced files are inlined into prompts and the harness itself does
+    the file writes and test runs."""
+    return llm_backend.BACKEND == "openai"
+
+
+def _call_model(prompt: str, *, system: str, allowed: list[str],
+                disallowed: list[str], cwd: Optional[str], model: str) -> str:
+    """ONE door to the model for every role worker (free-pool rule lives in
+    llm_backend). The claude-CLI path keeps the real tool-policy flags."""
+    if _chat_only():
+        return llm_backend.ask(prompt, model=model, system=system)
+    return _run_claude(prompt, system=system, allowed=allowed,
+                       disallowed=disallowed, cwd=cwd, model=model)
+
+
+def _inline_file(root: Optional[str], rel: str) -> str:
+    """The file's text for prompt embedding (chat-only mode), truncated."""
+    try:
+        text = (Path(root or ".") / rel).read_text(encoding="utf-8")
+    except OSError:
+        return "(file not found)"
+    if len(text) > INLINE_FILE_LIMIT:
+        text = text[:INLINE_FILE_LIMIT] + "\n…(truncated)"
+    return text
 
 
 def _log_call_start(role: str, node: str, depth: int, model: str) -> None:
@@ -148,7 +182,7 @@ def _dialog_round(prompt: str, *, role: str, node: str, system: str,
     through the channel and re-runs the session with the answer appended.
     No channel / no answer → the worker is told to proceed on its own
     judgement and state its assumption."""
-    raw = _run_claude(prompt, system=system, allowed=allowed,
+    raw = _call_model(prompt, system=system, allowed=allowed,
                       disallowed=disallowed, cwd=cwd, model=model)
     try:
         probe = _extract_json(raw)
@@ -168,7 +202,7 @@ def _dialog_round(prompt: str, *, role: str, node: str, system: str,
                     "No human answer arrived. Proceed on your own best "
                     "judgement, STATE the assumption you made, and produce "
                     "the normal output now (no more questions).")
-    return _run_claude(followup, system=system, allowed=allowed,
+    return _call_model(followup, system=system, allowed=allowed,
                        disallowed=disallowed, cwd=cwd, model=model)
 
 
@@ -277,11 +311,18 @@ def make_decomposer(workspace_dir: Optional[str] = None,
                        "\nReply with ONLY: {\"spec_markdown\": \"...\"}")
         parent_id = ctx.get("parent_id")
         if parent_id:
-            prompt += (f"\n\nParent approved spec: specs/{parent_id}.md — READ"
-                       " it first (Read tool, relative to the current"
-                       " directory). Every requirement you author MUST carry"
-                       f" 'Traces-to: REQ-{parent_id}-n' pointing at the"
-                       " parent requirement it refines.")
+            trace_rule = (" Every requirement you author MUST carry"
+                          f" 'Traces-to: REQ-{parent_id}-n' pointing at the"
+                          " parent requirement it refines.")
+            if _chat_only():
+                prompt += (f"\n\nParent approved spec (specs/{parent_id}.md):"
+                           "\n---\n"
+                           + _inline_file(workspace_dir, f"specs/{parent_id}.md")
+                           + "\n---\n" + trace_rule)
+            else:
+                prompt += (f"\n\nParent approved spec: specs/{parent_id}.md —"
+                           " READ it first (Read tool, relative to the"
+                           " current directory)." + trace_rule)
         if ctx["depth"] >= LEAF_DEPTH:
             prompt += (f"\n\nHARD CONSTRAINT: depth {ctx['depth']} >= "
                        f"{LEAF_DEPTH} — this node MUST be atomic (no children).")
@@ -326,6 +367,63 @@ When done reply with ONLY: {{"done": true, "files": ["src/{fn}.py",
 "tests/test_{fn}.py"], "tests_passed": true|false}}"""
 
 
+_IMPLEMENT_CHAT_TASK = """You are running the skill above as the implementer
+worker for ONE leaf of a Spec-Driven Development run.
+
+Leaf: "{title}" (id: {id})
+Its approved spec ({spec}):
+---
+{spec_body}
+---
+
+Write the implementation and its tests. Conventions (already used by the
+project): code at src/{fn}.py, tests at tests/test_{fn}.py; the test file
+inserts ../src into sys.path and imports the module by name:
+    import sys; from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+    from {fn} import ...
+TDD discipline: the tests must cover every acceptance criterion of the spec;
+the implementation must be the MINIMUM that makes them pass. Standard library
+only — no third-party imports. Keep to the spec's scope; no extra features.
+
+Reply with ONLY a JSON object (no prose, no fence):
+{{"files": {{"src/{fn}.py": "<full file text>",
+            "tests/test_{fn}.py": "<full file text>"}}}}
+Escape newlines as \\n inside the JSON strings."""
+
+_REPAIR_TASK = """The test run FAILED. Output (tail):
+---
+{output}
+---
+Fix the code and/or the tests (same files, same conventions, standard library
+only) and reply again with ONLY the same JSON shape:
+{{"files": {{"src/{fn}.py": "...", "tests/test_{fn}.py": "..."}}}}"""
+
+
+def _run_pytest(ws_root: str, test_rel: str) -> tuple[bool, str]:
+    """Run the leaf's tests for REAL. Returns (passed, output tail)."""
+    import sys as _sys
+    proc = subprocess.run(
+        [_sys.executable, "-m", "pytest", test_rel, "-q", "--no-header", "-p",
+         "no:cacheprovider"],
+        capture_output=True, text=True, timeout=PYTEST_TIMEOUT, cwd=ws_root)
+    out = (proc.stdout or "") + (proc.stderr or "")
+    return proc.returncode == 0, out[-1500:]
+
+
+def _write_reply_files(ws: Any, files: dict, fn: str) -> bool:
+    """Write the worker's files into the workspace (harness does the I/O in
+    chat-only mode). Only the leaf's own src/tests paths are accepted."""
+    wrote = False
+    safe = {f"src/{fn}.py": "code", f"tests/test_{fn}.py": "test"}
+    for rel, kind in safe.items():
+        body = files.get(rel)
+        if isinstance(body, str) and body.strip():
+            ws._write(rel, body if body.endswith("\n") else body + "\n", kind)
+            wrote = True
+    return wrote
+
+
 def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
     system = load_skill_md("spec-implement")
     allowed, disallowed = load_profile_policy("implementer")
@@ -335,6 +433,8 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         ws_root = _ws_root(ctx.get("workspace"))
         nid = ctx["node"]
         fn = re.sub(r"\W+", "_", nid).strip("_").lower()
+        if _chat_only():
+            return _implement_chat(ctx, ws_root, nid, fn)
         prompt = _IMPLEMENT_TASK.format(title=ctx["title"], id=nid,
                                         spec=ctx["spec"], fn=fn) + _ASK_RULE
         note = channel.poll_note() if channel is not None else None
@@ -357,13 +457,49 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
                             model=model, prompt=prompt, reply=raw, ok=True)
         return None     # the engine judges by the artifacts, not the reply
 
+    def _implement_chat(ctx: dict, ws_root: str, nid: str, fn: str) -> Any:
+        """Chat-only implementer: the model returns the files, the harness
+        writes them and runs pytest for REAL; one repair round on failure."""
+        ws = ctx["workspace"]
+        spec_body = _inline_file(ws_root, ctx["spec"])
+        prompt = _IMPLEMENT_CHAT_TASK.format(
+            title=ctx["title"], id=nid, spec=ctx["spec"],
+            spec_body=spec_body, fn=fn) + _ASK_RULE
+        note = channel.poll_note() if channel is not None else None
+        if note:
+            prompt += _NOTE_RULE.format(note=note)
+        _log_call_start("implementer", nid, -1, model)
+        raw = _dialog_round(prompt, role="implementer", node=nid, system=system,
+                            allowed=allowed, disallowed=disallowed,
+                            cwd=ws_root, model=model, channel=channel)
+        out = _handle_operator_reply(_extract_json(raw), role="implementer",
+                                     node=nid, note=note, channel=channel)
+        passed, test_out = False, "(no files written)"
+        if _write_reply_files(ws, out.get("files") or {}, fn):
+            passed, test_out = _run_pytest(ws_root, f"tests/test_{fn}.py")
+            if not passed:
+                repair = (prompt + "\n\n"
+                          + _REPAIR_TASK.format(output=test_out, fn=fn))
+                raw2 = _call_model(repair, system=system, allowed=allowed,
+                                   disallowed=disallowed, cwd=ws_root,
+                                   model=model)
+                out2 = _extract_json(raw2)
+                if _write_reply_files(ws, out2.get("files") or {}, fn):
+                    passed, test_out = _run_pytest(ws_root, f"tests/test_{fn}.py")
+                raw = raw2
+        llm_log.log_outcome(role="implementer", worker=True, node=nid, depth=-1,
+                            model=model, prompt=prompt, reply=raw, ok=True,
+                            tests_passed=passed,
+                            test_output=test_out[-300:])
+        return None     # the engine judges by the artifacts, not the reply
+
     return implement
 
 
 # ── reviewer (skill: spec-reviewer, profile: spec-reviewer) ──────────────
 
 _REVIEW_TASK = """You are running the skill above as the spec-reviewer
-worker. Review ONE spec file: {spec} (read it).
+worker. Review ONE spec file: {spec}{spec_body}
 
 Project goal: {goal}
 Constitution (non-negotiable): {constitution}
@@ -388,11 +524,17 @@ def make_reviewer() -> Callable[[dict], dict]:
     model = _model_for("reviewer")
 
     def review(ctx: dict) -> dict:
+        if _chat_only():
+            spec_body = ("\nIts full text:\n---\n"
+                         + _inline_file(ctx.get("workspace_root"), ctx["spec"])
+                         + "\n---")
+        else:
+            spec_body = " (read it)."
         prompt = _REVIEW_TASK.format(
-            spec=ctx["spec"], goal=ctx.get("goal", ""),
+            spec=ctx["spec"], spec_body=spec_body, goal=ctx.get("goal", ""),
             constitution="; ".join(ctx.get("constitution") or []))
         _log_call_start("reviewer", str(ctx.get("node", "?")), -1, model)
-        raw = _run_claude(prompt, system=system, allowed=allowed,
+        raw = _call_model(prompt, system=system, allowed=allowed,
                           disallowed=disallowed, cwd=ctx.get("workspace_root"),
                           model=model)
         out = _extract_json(raw)
@@ -430,7 +572,7 @@ def make_researcher() -> Callable[[dict], dict]:
                                        node=ctx.get("node", "?"),
                                        question=ctx["question"])
         _log_call_start("researcher", str(ctx.get("node", "?")), -1, model)
-        raw = _run_claude(prompt, system=system, allowed=allowed,
+        raw = _call_model(prompt, system=system, allowed=allowed,
                           disallowed=disallowed, cwd=ctx.get("workspace_root"),
                           model=model)
         out = _extract_json(raw)

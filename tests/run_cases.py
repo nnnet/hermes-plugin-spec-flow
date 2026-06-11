@@ -342,8 +342,14 @@ def main() -> int:
                     help="'console' puts a real human at every HITL "
                          "checkpoint (terminal prompt; timeout auto-approves "
                          "with an honest note); 'auto' keeps the default")
-    ap.add_argument("--model", default=os.environ.get("SPEC_FLOW_LLM_MODEL", "haiku"),
-                    help="LLM model for live agents (default haiku)")
+    ap.add_argument("--model",
+                    default=os.environ.get(
+                        "SPEC_FLOW_LLM_MODEL",
+                        "openrouter/qwen/qwen3-coder:free"),
+                    help="LLM model for live agents — the OpenRouter free"
+                         " pool is the only allowed primary (default"
+                         " qwen3-coder:free via Bifrost); haiku is the"
+                         " quota-exhaustion fallback inside llm_backend")
     ap.add_argument("--dashboard", action="store_true",
                     help="serve a live auto-refreshing web dashboard over this run "
                          "(interactive tree, per-node spec/versions/code/events, the "
@@ -363,6 +369,10 @@ def main() -> int:
     elif args.gateway == "direct":
         os.environ.pop("ANTHROPIC_BASE_URL", None)
     os.environ["SPEC_FLOW_LLM_MODEL"] = args.model
+    # HARD RULE: test runs go to the OpenRouter free pool (openai backend);
+    # llm_backend guards ':free' and falls back to haiku ONLY on exhaustion.
+    # Must be set before harness.role_worker / llm_backend import.
+    os.environ.setdefault("SPEC_FLOW_LLM_BACKEND", "openai")
     if (args.decomposer == "llm" or args.workers == "real") and not args.case:
         # live LLM runs cost real quota: one call per tree node — keep the
         # default to the single smallest case; widen explicitly via --case
