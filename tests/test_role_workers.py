@@ -277,3 +277,64 @@ def test_human_channel_files(tmp_path):
                       "ship EU first")
     out = chan.outbox.read_text(encoding="utf-8")
     assert "DEFEND" in out and "EU-only cuts GMV target" in out
+
+
+# ── review policy: rework loop ───────────────────────────────────────────
+
+
+def test_reject_triggers_rework_until_pass(plugin, tmp_path):
+    # reviewer rejects the first version of 'editor', passes the reworked
+    # one; the decomposer must receive the reviewer's reasons via ctx
+    seen_feedback = []
+
+    def decomposer(ctx):
+        if ctx.get("review_feedback"):
+            seen_feedback.append((ctx["node"]["id"], ctx["review_feedback"]))
+        return simple_decomposer(ctx)
+
+    state = {"editor_rejects": 0}
+
+    def reviewer(ctx):
+        if ctx["node"] == "editor" and state["editor_rejects"] == 0:
+            state["editor_rejects"] += 1
+            return {"verdict": "REJECT", "reasons": ["REQ-editor-1 untestable"]}
+        return {"verdict": "PASS", "reasons": []}
+
+    res = eng.run_project(dict(GOAL), workspace=str(tmp_path / "wk"),
+                          tools=plugin.tools,
+                          agents={"decomposer": decomposer, "reviewer": reviewer})
+    # the rework round consulted the decomposer WITH the reasons
+    assert any(n == "editor" and "untestable" in fb for n, fb in seen_feedback)
+    # exactly one reject episode, then PASS — the error went away
+    assert sum(1 for l in res.loops if l["type"] == "spec-review-reject") == 1
+    rework = [e for e in res.events if "rework after review REJECT" in e.action]
+    assert rework and "attempt 1/2" in rework[0].action
+
+
+def test_reject_policy_halt_stops_the_run(plugin, tmp_path):
+    def reviewer(ctx):
+        return {"verdict": "REJECT", "reasons": ["broken"]}
+    with pytest.raises(RuntimeError, match="on_reject=halt"):
+        eng.run_project(dict(GOAL), workspace=str(tmp_path / "wk"),
+                        tools=plugin.tools,
+                        agents={"decomposer": simple_decomposer,
+                                "reviewer": reviewer},
+                        review_policy={"on_reject": "halt"})
+
+
+def test_reject_policy_record_keeps_old_behaviour(plugin, tmp_path):
+    calls = {"n": 0}
+
+    def decomposer(ctx):
+        calls["n"] += 1
+        assert not ctx.get("review_feedback")     # no rework rounds
+        return simple_decomposer(ctx)
+
+    def reviewer(ctx):
+        return {"verdict": "REJECT", "reasons": ["x"]}
+
+    res = eng.run_project(dict(GOAL), workspace=str(tmp_path / "wk"),
+                          tools=plugin.tools,
+                          agents={"decomposer": decomposer, "reviewer": reviewer},
+                          review_policy={"on_reject": "record"})
+    assert [l for l in res.loops if l["type"] == "spec-review-reject"]

@@ -194,6 +194,16 @@ DEFAULT_AGENTS = {"implementer": _default_implementer,
                   "decomposer": _default_decomposer,
                   "approver": _default_approver}
 
+# What to do when the spec reviewer REJECTS a node's spec:
+#   rework    — re-invoke the decomposer with the reviewer's reasons, rewrite
+#               the spec, re-review (bounded by max_rework); still rejected
+#               after the budget -> recorded episode, run continues. DEFAULT.
+#   record    — bookkeeping only (version bump + loop entry), no rework
+#   halt      — stop the run on the first REJECT (strict CI mode)
+#   ask_human — route to the approver (HITL): approved -> record & continue,
+#               not approved -> halt
+DEFAULT_REVIEW_POLICY = {"on_reject": "rework", "max_rework": 2}
+
 # Hard ceiling on decomposer-agent calls per run (runaway-recursion guard).
 MAX_DECOMPOSE_CALLS = 40
 
@@ -654,9 +664,11 @@ class Engine:
                  sink: Optional[Any] = None, verbosity: int = DEFAULT_VERBOSITY,
                  max_decompose_calls: int = MAX_DECOMPOSE_CALLS,
                  node_engine: str = "inline", runtime_guard: bool = False,
-                 resume: bool = False, git_provenance: bool = False):
+                 resume: bool = False, git_provenance: bool = False,
+                 review_policy: Optional[dict] = None):
         if not workspace:
             raise ValueError("Workspace is mandatory — pass a path or a Workspace")
+        self.review_policy = {**DEFAULT_REVIEW_POLICY, **(review_policy or {})}
         # tools (gate provider) is injectable; default to the bundled gates so
         # the runner works standalone without Hermes.
         self.tools = tools if tools is not None else _gates
@@ -925,7 +937,11 @@ class Engine:
             raise RuntimeError(
                 f"decomposer agent exceeded {self.max_decompose_calls} calls — "
                 "the tree does not converge to leaves")
+        ctx_extra = {}
+        if node.get("_review_feedback"):
+            ctx_extra["review_feedback"] = node["_review_feedback"]
         out = self.agents["decomposer"]({
+            **ctx_extra,
             "project": {"goal": self._goal, "target": self._target,
                         "constitution": self._constitution},
             "node": {"id": node["id"], "title": node.get("title", node["id"])},
@@ -958,7 +974,7 @@ class Engine:
         side) owns actual rework, the engine records the episode honestly."""
         reviewer = self.agents.get("reviewer")
         if reviewer is None or not spec_rel:
-            return
+            return None, ""
         self.gate_calls["spec_review"] = self.gate_calls.get("spec_review", 0) + 1
         try:
             out = reviewer({"node": nid, "title": title, "spec": spec_rel,
@@ -968,7 +984,7 @@ class Engine:
             self.emit("review", "spec-reviewer", "spec-reviewer", nid,
                       "spec review worker failed — no verdict", str(exc)[:200],
                       "spec_review", "ERROR", level=L_MILESTONE)
-            return
+            return None, ""
         verdict = "REJECT" if str(out.get("verdict", "PASS")).upper() == "REJECT" else "PASS"
         reasons = "; ".join(str(r) for r in out.get("reasons") or [])
         self.emit("review", "spec-reviewer", "spec-reviewer", nid,
@@ -979,6 +995,57 @@ class Engine:
             self.tasks[nid].runs += 1
             self.loops.append({"type": "spec-review-reject", "task": nid,
                                "detail": reasons})
+        return verdict, reasons
+
+    def _review_gate(self, node: dict, nid: str, title: str, depth: int,
+                     parent: Optional[str], spec_args: dict,
+                     ancestors: tuple) -> None:
+        """Write the spec, review it, and APPLY the review policy.
+
+        This is the answer to 'how do node errors go away': on REJECT the
+        default policy sends the reviewer's reasons back to the decomposer,
+        the spec is re-authored and re-reviewed (bounded). A node that still
+        fails after the budget keeps its honest episode record."""
+        spec_rel = self.workspace.spec(
+            nid, title, depth, spec_args["verdict"], spec_args["reasons"],
+            parent, spec_args["plan"], node=node, target=self._target)
+        verdict, reasons = self._consult_reviewer(nid, title, spec_rel)
+        if verdict != "REJECT":
+            return
+        pol = self.review_policy
+        mode = str(pol.get("on_reject", "rework"))
+        if mode == "rework" and "decomposer" in self.agents:
+            budget = int(pol.get("max_rework", 2))
+            attempt = 0
+            while verdict == "REJECT" and attempt < budget:
+                attempt += 1
+                self.emit("review", "spec-decomposer", "spec-flow-decompose", nid,
+                          f"rework after review REJECT (attempt {attempt}/{budget})",
+                          reasons[:200], level=L_MILESTONE)
+                node["_review_feedback"] = reasons
+                try:
+                    self._expand_node(node, depth, parent, ancestors)
+                finally:
+                    node.pop("_review_feedback", None)
+                self._dedup_children(node, nid, title, ancestors)
+                spec_rel = self.workspace.spec(
+                    nid, title, depth, spec_args["verdict"], spec_args["reasons"],
+                    parent, spec_args["plan"], node=node, target=self._target)
+                verdict, reasons = self._consult_reviewer(nid, title, spec_rel)
+            return
+        if mode == "halt":
+            raise RuntimeError(
+                f"spec review rejected for {nid} (policy on_reject=halt): {reasons}")
+        if mode == "ask_human":
+            out = self.agents["approver"]({
+                "kind": "spec-review", "task": nid,
+                "detail": f"reviewer rejected the spec: {reasons}",
+                "constitution": self._constitution, "policy": {}}) or {}
+            if not out.get("approved", True):
+                raise RuntimeError(
+                    f"spec review rejected for {nid} and the human declined: "
+                    f"{out.get('reason', '')}")
+        # mode == record (or ask_human approved): episode already recorded
 
     def _dedup_children(self, node: dict, nid: str, title: str,
                         ancestors: tuple) -> None:
@@ -1134,10 +1201,9 @@ class Engine:
                 self._completed += 1
                 child_contract_ctx = contract_here
 
-            spec_rel = self.workspace.spec(
-                nid, title, depth, verdict, "; ".join(reasons), parent, plan,
-                node=node, target=self._target)
-            self._consult_reviewer(nid, title, spec_rel)
+            self._review_gate(node, nid, title, depth, parent,
+                              {"verdict": verdict, "reasons": "; ".join(reasons),
+                               "plan": plan}, ancestors)
             child_ids = []
             for child in node.get("children", []):
                 self._visit(child, depth + 1, child_contract_ctx, phase,
@@ -1182,7 +1248,7 @@ class Engine:
             self.tasks[integ].status = "done"
             self._completed += 1
         else:
-            self._leaf_pipeline(node, contract_ctx, depth, parent, drv)
+            self._leaf_pipeline(node, contract_ctx, depth, parent, drv, ancestors)
 
         # close the node lifecycle — the guard refuses DONE if a mandatory gate
         # for this node kind was skipped (raises GateViolation in both engines).
@@ -1212,18 +1278,18 @@ class Engine:
 
     def _leaf_pipeline(self, node: dict, contract_ctx: Optional[dict],
                        depth: int = 0, parent: Optional[str] = None,
-                       drv: Optional["_NodeDriver"] = None):
+                       drv: Optional["_NodeDriver"] = None,
+                       ancestors: tuple = ()):
         nid = node["id"]
         title = node.get("title", nid)
         # spec/plan is written at every depth (>= spec)
-        spec_rel = self.workspace.spec(
-            nid, title, depth, "leaf", "within all thresholds", parent,
-            ["bottom-up plan: DB → logic → API → tests",
-             "TDD: test (RED) → impl → test (GREEN)",
-             "two-stage review (spec-conformance, then quality)",
-             "verification-before-completion + commit"],
-            node=node, target=self._target)
-        self._consult_reviewer(nid, title, spec_rel)
+        self._review_gate(node, nid, title, depth, parent,
+                          {"verdict": "leaf", "reasons": "within all thresholds",
+                           "plan": ["bottom-up plan: DB → logic → API → tests",
+                                    "TDD: test (RED) → impl → test (GREEN)",
+                                    "two-stage review (spec-conformance, then quality)",
+                                    "verification-before-completion + commit"]},
+                          ancestors)
         # code & test scaffolds only from depth 'scaffold' upward; at 'execute'
         # an injected implementer agent produces real code instead of a scaffold.
         code_rel = test_rel = None
@@ -1613,7 +1679,8 @@ def run_project(project: dict, *, workspace, depth: Any = DEPTH_SPEC,
                 max_decompose_calls: int = MAX_DECOMPOSE_CALLS,
                 node_engine: str = "inline",
                 runtime_guard: bool = False, resume: bool = False,
-                git_provenance: bool = False) -> RunResult:
+                git_provenance: bool = False,
+                review_policy: Optional[dict] = None) -> RunResult:
     """Public entry: run a project to completion. ``workspace`` is mandatory.
 
     ``depth`` is one of spec|scaffold|verify|execute|product (or 1..5).
@@ -1627,6 +1694,7 @@ def run_project(project: dict, *, workspace, depth: Any = DEPTH_SPEC,
     return Engine(tools=tools, workspace=workspace, depth=depth, agents=agents,
                   contracts_dir=contracts_dir, sink=sink, verbosity=verbosity,
                   max_decompose_calls=max_decompose_calls,
+                  review_policy=review_policy,
                   node_engine=node_engine, runtime_guard=runtime_guard,
                   resume=resume, git_provenance=git_provenance).run(project)
 

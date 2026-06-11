@@ -250,6 +250,15 @@ def make_decomposer(workspace_dir: Optional[str] = None,
             depth=ctx["depth"], parent=ctx.get("parent") or "—",
             ancestors=" → ".join(ctx.get("ancestors") or []) or "—",
             existing=existing) + _ASK_RULE
+        feedback = str(ctx.get("review_feedback") or "").strip()
+        if feedback:
+            prompt += ("\n\nREVIEWER REJECTED the previous version of this"
+                       " node's spec. The exact reasons:\n" + feedback +
+                       "\nRewrite spec_markdown fixing EVERY point above —"
+                       " split coupled requirements, cover each REQ with an"
+                       " acceptance criterion, keep ids stable. Keep metrics"
+                       " and children consistent with before unless a reason"
+                       " demands otherwise.")
         parent_id = ctx.get("parent_id")
         if parent_id:
             prompt += (f"\n\nParent approved spec: specs/{parent_id}.md — READ"

@@ -196,10 +196,13 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
     # run config from the CASE itself (as Hermes would pass it): lifecycle engine
     node_engine = case.get("node_engine", "inline")
     exec_case.pop("node_engine", None)
+    review_policy = case.get("review") or None
+    exec_case.pop("review", None)
     res = eng.run_project(exec_case, workspace=str(case_dir / "workspace"), depth=depth,
                           tools=tools, agents=agents or None,
                           contracts_dir=str(eng.CONTRACTS), sink=sink,
-                          max_decompose_calls=max_calls, node_engine=node_engine)
+                          max_decompose_calls=max_calls, node_engine=node_engine,
+                          review_policy=review_policy)
     # persist the REALIZED task tree the plugin built (parent->children), so the
     # dashboard / offline review can walk the exact structure node by node
     (case_dir / "tree.json").write_text(

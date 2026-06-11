@@ -96,3 +96,13 @@ hitl:
   approve_required: false
   worker_may_ask_human: true
   human_may_intervene: true
+
+# What to do when the spec reviewer REJECTS a node's spec:
+#   on_reject: rework (default) — decomposer re-authors the spec with the
+#              reviewer's reasons, re-reviewed, up to max_rework rounds;
+#              still rejected -> honest episode stays, run continues.
+#              record = bookkeeping only; halt = stop the run;
+#              ask_human = the approver (HITL) decides accept-or-halt.
+review:
+  on_reject: rework
+  max_rework: 2
