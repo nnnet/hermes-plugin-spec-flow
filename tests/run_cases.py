@@ -134,6 +134,11 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
                           tools=tools, agents=agents or None,
                           contracts_dir=str(eng.CONTRACTS), sink=sink,
                           max_decompose_calls=max_calls)
+    # persist the REALIZED task tree the plugin built (parent->children), so the
+    # dashboard / offline review can walk the exact structure node by node
+    (case_dir / "tree.json").write_text(
+        json.dumps(res.project.get("tree", {}), ensure_ascii=False, indent=2),
+        encoding="utf-8")
     if meter is not None:
         from harness import cost as _cost
         _cost.write_cost_md(meter, str(case_dir / "COST.md"),
@@ -260,6 +265,12 @@ def main() -> int:
                          "implementer (depth execute/product only)")
     ap.add_argument("--model", default=os.environ.get("SPEC_FLOW_LLM_MODEL", "haiku"),
                     help="LLM model for live agents (default haiku)")
+    ap.add_argument("--dashboard", action="store_true",
+                    help="serve a live auto-refreshing web dashboard over this run "
+                         "(interactive tree, per-node spec/versions/code/events, the "
+                         "plugin's own report) — stays up after the run for review")
+    ap.add_argument("--dashboard-port", type=int, default=8088,
+                    help="port for --dashboard (default 8088)")
     args = ap.parse_args()
     os.environ["SPEC_FLOW_LLM_MODEL"] = args.model
     if args.decomposer == "llm" and not args.case:
@@ -269,6 +280,12 @@ def main() -> int:
         print("[llm mode] no --case given -> restricted to the smallest case (p2)")
 
     tools = _load_tools()
+    dash = None
+    if args.dashboard:
+        import live_dashboard
+        dash = live_dashboard.start_in_thread(port=args.dashboard_port)
+        print(f"dashboard → http://localhost:{args.dashboard_port}  "
+              f"(live, refresh 2s)\n")
     stamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     rows = []
     for path in sorted(SCENARIOS_DIR.glob("*.yaml")):
@@ -278,6 +295,19 @@ def main() -> int:
         name = case.get("name", path.stem)
         case_dir = OUT_DIR / f"{stamp}__{name}"
         case_dir.mkdir(parents=True, exist_ok=True)
+        # persist the readable STARTING inputs (goal + givens) so the dashboard /
+        # offline review shows what the plugin was asked to build — no hints
+        inputs = {k: case[k] for k in
+                  ("goal", "target", "constitution", "policy", "acceptance",
+                   "imprecise", "resolved", "oracle") if k in case}
+        (case_dir / "inputs.json").write_text(
+            json.dumps(inputs, ensure_ascii=False, indent=2), encoding="utf-8")
+        # service metadata (how the run was launched) for the dashboard's info pane
+        (case_dir / "meta.json").write_text(json.dumps({
+            "case": name, "depth": args.depth, "decomposer": args.decomposer,
+            "implementer": args.implementer, "model": args.model, "stamp": stamp,
+            "workspace": "workspace", "run_dir": str(case_dir),
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
         # fresh state per case so gate cooldowns never leak between cases
         os.environ["HERMES_HOME"] = tempfile.mkdtemp(prefix=f"specflow-{name}-")
 
@@ -312,6 +342,16 @@ def main() -> int:
                 bits.append(f"product {full['product']}")
         print(f"  {name:24s} {' · '.join(bits)}")
         print(f"  {'':24s} → {case_dir.relative_to(PLUGIN_DIR)}/")
+
+    if dash is not None:
+        print(f"\ndashboard live → http://localhost:{args.dashboard_port}  "
+              f"(Ctrl+C to stop)")
+        try:
+            import time
+            while True:
+                time.sleep(3600)
+        except KeyboardInterrupt:
+            dash.shutdown()
     return 0
 
 

@@ -259,7 +259,9 @@ class LogSink:
 
     def open(self) -> "LogSink":
         if self.enabled and self.path and self.handler is None:
-            self._fh = open(self.path, "w", encoding="utf-8")
+            # line-buffered so each event hits disk immediately — lets a live
+            # reader (the dashboard) tail the trace while the run is in progress
+            self._fh = open(self.path, "w", encoding="utf-8", buffering=1)
         return self
 
     def handle(self, e: Event) -> None:
