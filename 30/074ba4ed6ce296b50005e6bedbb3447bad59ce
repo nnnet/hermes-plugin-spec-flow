@@ -1,0 +1,43 @@
+tests/harness/claude_cli.py
+  s_1b99a7ec9e9aa9::t_9c4d8d6ec84a78 6,8-27
+  s_1b99a7ec9e9aa9::t_37834f1d049b6f 30-46
+  s_ae21cfaec3f484::t_5617dcb3064ff5 1-5,7,28-29,47-73
+tests/harness/llm_decomposer.py
+  s_1b99a7ec9e9aa9::t_f24cb05087a3e4 82-85,88,92,94-95
+  s_ae21cfaec3f484::t_ef5d92c91420af 20
+  s_1b99a7ec9e9aa9::t_8793793336d902 89
+  s_1b99a7ec9e9aa9::t_b45ad7071069d9 86-87,90-91
+  s_1b99a7ec9e9aa9::t_88ae23987a706f 93
+tests/harness/llm_implementer.py
+  s_1b99a7ec9e9aa9::t_88ae23987a706f 79
+  s_ae21cfaec3f484::t_948a5887d3be0b 22
+  s_1b99a7ec9e9aa9::t_e383b7012f767a 72-73,76-77
+  s_1b99a7ec9e9aa9::t_e2415b37f0a6d4 68-71,74,78,80-81
+  s_1b99a7ec9e9aa9::t_291f48a1e306d4 75
+spec_flow_tools.py
+  s_1b99a7ec9e9aa9::t_dd4893f63113c0 1776-1814,1816-1818,1820-1822,1832
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "30074ba4ed6ce296b50005e6bedbb3447bad59ce",
+  "prompts": {},
+  "sessions": {
+    "s_1b99a7ec9e9aa9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5025e0d8-1d1b-4f97-8c52-eec971a58fbd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <zkowkmdx@sharklasers.com>"
+    },
+    "s_ae21cfaec3f484": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fc01bdea-d71d-4efc-af9c-122e1c2cafc0",
+        "model": "claude-fable-5"
+      },
+      "human_author": "nnnet <zkowkmdx@sharklasers.com>"
+    }
+  }
+}
