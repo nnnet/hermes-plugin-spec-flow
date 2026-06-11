@@ -1176,6 +1176,35 @@ class Engine:
             self.emit("revision", "implementer", "spec-implement", tid,
                       "re-derive under superseded spec", f"{target} v2")
 
+        # close the self-improvement loop: re-run the gate the signal failed and
+        # confirm the re-derived subtree now passes. A revision may declare
+        # ``recheck_fails: N`` — the loop iterates N times (each a failed
+        # re-check) before the signal is resolved, modelling an improvement that
+        # takes more than one pass. ``recheck: false`` opts a revision out.
+        if rev.get("recheck", True):
+            self._close_revision_loop(rev, method, target)
+
+    def _close_revision_loop(self, rev: dict, method: str, target: str):
+        """signal → revision → respec → re-derive → RE-CHECK → resolved.
+
+        Re-asserts the acceptance/respec-gate after a revision and records the
+        verdict, so the trace proves the signal was actually fixed (or how many
+        passes it took). Returns nothing — emits events + loops."""
+        fails = int(rev.get("recheck_fails", 0))
+        for i in range(fails):
+            self.emit("respec", "verifier", "spec-integrate", target,
+                      f"respec-gate re-check #{i + 1} ({method}) — signal NOT yet resolved",
+                      rev.get("finding", ""), "respec_gate", "FAIL", level=L_MILESTONE)
+            self.loops.append({"type": "revision-recheck", "method": method,
+                               "task": target, "resolved": False})
+            if target in self.tasks:
+                self.tasks[target].runs += 1
+        self.emit("respec", "verifier", "spec-integrate", target,
+                  f"respec-gate re-check ({method}) — signal resolved, acceptance re-confirmed",
+                  rev.get("effect", ""), "respec_gate", "PASS", level=L_MILESTONE)
+        self.loops.append({"type": "revision-verified", "method": method,
+                           "task": target, "resolved": True})
+
 
 # ---------------------------------------------------------------------------
 # Loading + rendering

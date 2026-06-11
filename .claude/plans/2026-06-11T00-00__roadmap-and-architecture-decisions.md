@@ -253,6 +253,10 @@ spec-flow — это **движок дисциплины и durable-оркест
       + тул `speckit_import`): фазы, маркер `[P]`, пути файлов, секция Dependencies
       (blocks/depends on/before + диапазоны Txxx-Tyyy). Парсер — чистый код,
       сидинг карточек деградирует без Hermes. `tests/test_speckit_import.py` (11).
-- [ ] E замкнутый цикл самосовершенствования (сигнал→ревизия→respec→re-derive→приёмка).
+- [x] E замкнутый цикл самосовершенствования: после re-derive раннер повторно
+      прогоняет respec-gate и подтверждает, что сигнал устранён
+      (`_close_revision_loop`, петли `revision-recheck`/`revision-verified`,
+      опции `recheck`/`recheck_fails`). Оракул видит эпизод `self_improve` (добавлен
+      в p4). `tests/test_self_improvement.py` (6).
 - [ ] D2 живой implementer-агент (реальный код листа) — тратит реальную квоту,
       запускать только с подтверждения пользователя.

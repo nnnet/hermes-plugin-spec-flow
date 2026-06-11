@@ -160,7 +160,7 @@ oracle:
   # contract node (orders), and the human-gated payouts node.
   anchor_nodes: [market_research, architecture, orders, payouts]
   # both drift classifications and the revision lane must all fire here.
-  expected_episodes: [spike, clarify, contract, drift_respec, drift_codefix, review_critique, revision, revision_internal, revision_level_return, hitl]
+  expected_episodes: [spike, clarify, contract, drift_respec, drift_codefix, review_critique, revision, revision_internal, revision_level_return, hitl, self_improve]
   expected_loops: {clarify: 2, review_fail: 2, drift_respec: 1, drift_codefix: 1, revision_respec: 2}
   # the full-surface case must exercise ALL skills and ALL profiles.
   coverage: {min_skills: 9, min_profiles: 7}
