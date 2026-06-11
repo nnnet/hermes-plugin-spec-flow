@@ -1,0 +1,38 @@
+tests/scenarios/p4_b2b_marketplace.yaml
+  s_a7f45290e91181::t_0b882066358a15 188-201
+tests/run_cases.py
+  s_a7f45290e91181::t_7b0e7ccf1029b2 125-126
+  s_a7f45290e91181::t_f4ea3da512e452 113-124,132-133,144,151-158,171-172
+tests/test_role_workers.py
+  s_a7f45290e91181::t_9017140f9945d6 181-279
+tests/harness/role_worker.py
+  s_a7f45290e91181::t_58f904f487eacf 109-173
+  s_a7f45290e91181::t_115473c9b38e3e 244-251
+  s_a7f45290e91181::t_82bf9dc1d27515 272,279-298
+  s_a7f45290e91181::t_b2236ac5e9bfc7 211-212,219,225,228,232-239
+  s_a7f45290e91181::t_621b3e69cc3da1 331,368
+tests/harness/hitl.py
+  s_a7f45290e91181::t_f965d967ca223a 1,3-20,25-27,38-40,44-109
+tests/scenarios/p1_earn_for_living.yaml
+  s_a7f45290e91181::t_7b0e7ccf1029b2 84-97
+tests/scenarios/p3_polymarket_platform.yaml
+  s_a7f45290e91181::t_7b0e7ccf1029b2 85-98
+tests/scenarios/p2_sponsor_credits.yaml
+  s_a7f45290e91181::t_7b0e7ccf1029b2 71-84
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "4ff6469aedb13adb433afb691cb960d16dc9fa0a",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-fable-5"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
