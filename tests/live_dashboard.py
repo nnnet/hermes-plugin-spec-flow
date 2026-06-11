@@ -391,8 +391,10 @@ def _build_state(run_dir: pathlib.Path) -> dict:
             eps.append("pruned")
 
     # research spikes live in events as '<node>:spike' tasks — surface them
-    # as a 🔬 badge on the owning node (the live tree has no spike field)
-    for task in ev_idx:
+    # as a 🔬 badge on the owning node (the live tree has no spike field;
+    # NB ev_idx groups by the BASE node id, so scan raw events here)
+    for e in events:
+        task = str(e.get("task") or "")
         if task.endswith(":spike"):
             owner = task[:-6]
             if owner in meta and "spike" not in meta[owner]["episodes"]:
@@ -593,6 +595,7 @@ pre.code{background:#161b22;padding:10px;border-radius:6px;overflow:auto;white-s
 .badge{font-size:9px;vertical-align:middle;letter-spacing:1px}
 .actv{color:#e3b341;font-weight:700}
 .errbox{background:#3a162040;border:1px solid #f8514966;border-radius:6px;padding:6px 10px;margin:8px 0;font-size:12px}.errbox li{margin:2px 0}
+.fixbox{background:#163a1c40;border:1px solid #3fb95066;border-radius:6px;padding:6px 10px;margin:8px 0;font-size:12px}.fixbox li{margin:2px 0}
 .gtabs{margin-top:8px}
 </style></head><body>
 <div class=bar>
@@ -629,7 +632,12 @@ async function poll(){
  if(!AUTO)return;
  try{const r=await fetch('/api/state');STATE=await r.json();render();}catch(e){}
 }
-function badgeStr(eps){return (eps||[]).map(e=>({spike:'🔬',clarify:'❓',contract:'📐',drift:'🌀',hitl:'✋',review_fails:'⚖️',error:'❌',pruned:'✂️',reworked:'🔧'}[e]||'')).join('');}
+const BADGE_ICON={spike:'🔬',clarify:'❓',contract:'📐',drift:'🌀',hitl:'✋',review_fails:'⚖️',error:'❌',pruned:'✂️',reworked:'🔧'};
+const BADGE_TIP={spike:'было исследование (spike) перед решением',clarify:'было уточнение',contract:'есть контракт',drift:'зафиксирован дрейф',hitl:'вмешивался человек',review_fails:'ревью не прошло',error:'НЕзакрытая ошибка — подробности на странице узла',pruned:'дубль отрезан dedup-гейтом',reworked:'был REJECT — доработан, повторное ревью PASS'};
+function badgeStr(eps){return (eps||[]).map(e=>BADGE_ICON[e]||'').join('');}
+function badgeTips(eps){return (eps||[]).map(e=>(BADGE_ICON[e]||'')+' '+(BADGE_TIP[e]||e)).join('\n');}
+function badgeHTML(eps){return (eps||[]).map(e=>BADGE_ICON[e]?`<span title="${BADGE_TIP[e]||e}">${BADGE_ICON[e]}</span>`:'').join('');}
+function legendHTML(){return '<p class=dim style="font-size:11px;margin:4px 0">значки: ❌ незакрытая ошибка · 🔧 доработан после REJECT (итог PASS) · ✂️ дубль отрезан · 🔬 исследование · ✋ человек вмешивался · наведите на значок — подсказка</p>';}
 
 function treeHTML(n){
  const has=n.children&&n.children.length;
@@ -638,7 +646,7 @@ function treeHTML(n){
  const sel=SEL===n.id?' sel':'';
  const act=ACTIVE.node===n.id;
  const ico=act?'⏳':(has?'🌿':'🍃');
- let h=`<li>${tw}<span class="node${sel}${act?' actv':''}" data-id="${n.id}">${ico} ${n.id} <span class=badge>${badgeStr(n.episodes)}</span></span>`;
+ let h=`<li>${tw}<span class="node${sel}${act?' actv':''}" data-id="${n.id}">${ico} ${n.id} <span class=badge>${badgeHTML(n.episodes)}</span></span>`;
  if(has&&open){h+='<ul>'+n.children.map(treeHTML).join('')+'</ul>';}
  h+='</li>';return h;
 }
@@ -698,25 +706,38 @@ function graphSVG(){
   const ico=act?'⏳':(coll?'▸🌿':(leaf?'🍃':'🌿'));
   const tail=coll?` +${countDesc(n)}`:'';
   const bdg=badgeStr(n.episodes);
+  const tip=badgeTips(n.episodes);
   s+=`<g class=gnode data-id="${n.id}" transform="translate(${X(n)},${Y(n)})" style="cursor:pointer">`+
+     (tip?`<title>${esc(tip)}</title>`:'')+
      `<rect width="${BW}" height="${BH}" rx="5" fill="${act?'#3a2a1255':(sel?'#1f6feb55':(leaf?'#161b22':'#13251a'))}" stroke="${act?'#e3b341':(sel?'#1f6feb':(leaf?'#30363d':'#3fb950'))}"${act?' stroke-dasharray="4 3"':''}/>`+
      `<text x="7" y="15" fill="#c9d1d9" font-size="11">${ico} ${esc(n.id).slice(0,14)}${tail}</text>`+
      (bdg?`<text x="${BW-5}" y="14" text-anchor="end" font-size="8">${bdg}</text>`:'')+`</g>`;});
- s+='</svg>';return '<div style="overflow:auto;border:1px solid #21262d;border-radius:6px;padding:6px">'+s+'</div>';
+ s+='</svg>';return '<div style="overflow:auto;border:1px solid #21262d;border-radius:6px;padding:6px">'+s+'</div>'+legendHTML();
 }
 
 function renderNode(){
  const nd=STATE.nodes[SEL];if(!nd){SEL=null;return renderGlobal();}
  const f=nd.files||{};
  const tabs=[['spec','Спека',f.spec],['versions',`Версии (${(f.versions||[]).length+ (f.spec?1:0)})`,f.spec||f.versions.length],['code','Код',f.code],['test','Тест',f.test],['contract','Контракт',f.contract],['events',`События (${nd.events.length})`,true]];
- let h=`<h2>${SEL} <span class=badge>${badgeStr(nd.episodes)}</span></h2>`;
+ let h=`<h2>${SEL} <span class=badge>${badgeHTML(nd.episodes)}</span></h2>`;
  h+=`<div class=kv>вердикт: <b>${nd.verdict}</b> · уровень: L${nd.depth} · родитель: ${nd.parent||'—'}`;
  const m=nd.metrics||{};if(Object.keys(m).length)h+=` · LOC≈${m.estimated_loc??'?'} · задач ${m.tasks??'?'} · решений ${m.open_decisions??'?'}`;
  h+=`</div>`;
- const errs=(nd.events||[]).filter(e=>['REJECT','FAIL','ERROR'].includes(String(e.verdict)));
- if(errs.length){
-  h+='<div class=errbox><b>❌ проблемы узла ('+errs.length+'):</b><ul>'+
-   errs.map(e=>`<li><b>${esc(e.gate||e.phase||'')}</b> → ${esc(e.verdict)}: ${esc(e.detail||e.action||'')}</li>`).join('')+
+ // a bad verdict followed by a later PASS on the SAME gate is fixed history,
+ // not a live problem — show the two groups apart so badges and boxes agree
+ const evs=nd.events||[];
+ const isBad=e=>['REJECT','FAIL','ERROR'].includes(String(e.verdict));
+ const fixedBy=i=>{const g=evs[i].gate;return g&&evs.some((x,j)=>j>i&&x.gate===g&&String(x.verdict)==='PASS');};
+ const open=[],fixed=[];
+ evs.forEach((e,i)=>{if(isBad(e))(fixedBy(i)?fixed:open).push(e);});
+ if(open.length){
+  h+='<div class=errbox><b>❌ незакрытые проблемы ('+open.length+'):</b><ul>'+
+   open.map(e=>`<li><b>${esc(e.gate||e.phase||'')}</b> → ${esc(e.verdict)}: ${esc(e.detail||e.action||'')}</li>`).join('')+
+   '</ul></div>';
+ }
+ if(fixed.length){
+  h+='<div class=fixbox><b>🔧 исправлено доработкой ('+fixed.length+') — повторная проверка PASS:</b><ul>'+
+   fixed.map(e=>`<li><b>${esc(e.gate||e.phase||'')}</b> было ${esc(e.verdict)}: ${esc(e.detail||e.action||'')}</li>`).join('')+
    '</ul></div>';
  }
  h+='<div class=tabs><span class="tab" data-n="__back">⬅ обзор</span>'+tabs.map(([k,t,on])=>on?`<span class="tab${NTAB===k?' on':''}" data-n="${k}">${t}</span>`:'').join('')+'</div>';
