@@ -464,6 +464,12 @@ class Workspace:
         if node.get("review_fails"):
             lines += ["", "## Review history",
                       f"- impl-review failed {node['review_fails']}× before PASS (critique loop)"]
+        worker_md = str(node.get("spec_markdown") or "").strip()
+        if worker_md:
+            # the level spec AUTHORED by the decomposer worker (per the
+            # spec-flow-decompose skill); the engine header above stays the
+            # deterministic, traceable core
+            lines += ["", worker_md]
         lines += ["", "## Plan"]
         lines += [f"- {p}" for p in plan_lines]
         children = node.get("children")

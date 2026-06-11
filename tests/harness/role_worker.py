@@ -204,10 +204,21 @@ Reply with ONLY a JSON object (no prose, no fence):
               "open_decisions": n, "single_concern": bool, "testable_criteria": bool}},
   "children": [{{"id": "snake_case", "title": "short"}}],
   "depends_on": ["existing-node-id"],
-  "spike": {{"question": "...", "recommendation": "..."}}}}
+  "spike": {{"question": "...", "recommendation": "..."}},
+  "spec_markdown": "<markdown, see below>"}}
 Omit "children"/"depends_on"/"spike" when not applicable; atomic=true means
 NO children and metrics within: modules<=1, tasks<=5, interfaces<=2,
-estimated_loc<=100, open_decisions==0."""
+estimated_loc<=100, open_decisions==0.
+
+"spec_markdown" is REQUIRED — you AUTHOR this level's specification (the
+engine only adds its deterministic header). It must contain exactly these
+sections:
+  ## Requirements — 2-6 EARS-style requirements, each with an id
+     REQ-{id}-1..n, each independently testable
+  ## Scope — 'In:' and 'Out:' bullet lists (explicit boundary)
+  ## Open decisions — numbered list, or 'none'
+  ## Acceptance criteria — measurable checks tied to the REQ ids
+Keep it under 60 lines. Escape newlines as \n inside the JSON string."""
 
 LEAF_DEPTH = int(os.environ.get("SPEC_FLOW_LLM_LEAF_DEPTH", "3"))
 MAX_CHILDREN = int(os.environ.get("SPEC_FLOW_LLM_MAX_CHILDREN", "4"))
@@ -315,8 +326,15 @@ worker. Review ONE spec file: {spec} (read it).
 Project goal: {goal}
 Constitution (non-negotiable): {constitution}
 
-Apply the skill's gate: traceability (Traces-to present and sensible),
-testable acceptance, constitution compliance, scope sanity. Binary verdict.
+What you are judging: the worker-authored sections (Requirements / Scope /
+Open decisions / Acceptance criteria). The header block (Node, Traces-to,
+leaf_check, Size estimate) is ENGINE-GENERATED metadata — do not reject
+for its format; for the ROOT node a Traces-to of the project goal is
+valid by definition.
+
+Apply the skill's gate to the authored sections: REQ-id traceability,
+EARS form, testable acceptance, explicit scope boundary, constitution
+compliance. Binary verdict.
 Reply with ONLY: {{"verdict": "PASS"|"REJECT", "reasons": ["..."]}}"""
 
 
