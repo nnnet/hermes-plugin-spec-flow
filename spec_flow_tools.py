@@ -782,6 +782,151 @@ def _handle_speckit_import(args: dict[str, Any], **_: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
+# kiro_import — load AWS Kiro spec artifacts as run context
+# ---------------------------------------------------------------------------
+# Kiro keeps a spec as three markdown files under .kiro/specs/<feature>/:
+#   requirements.md — EARS user stories + acceptance criteria,
+#   design.md       — architecture / sections,
+#   tasks.md        — a numbered implementation plan with _Requirements:_ refs.
+# spec-flow consumes them as CONTEXT (it does not re-author the spec): the
+# parsers below normalize each file. Pure plugin code, no Hermes needed.
+
+_KIRO_REQ_HEADER = re.compile(r"^\s*#+\s*Requirement\s+(?P<n>\d+)\b[:.\s]*(?P<t>.*)$", re.IGNORECASE)
+_KIRO_STORY = re.compile(r"\*\*User Story:\*\*\s*(?P<s>.+)", re.IGNORECASE)
+_KIRO_TASK = re.compile(r"^(?P<indent>\s*)-\s*\[(?P<done>[ xX])\]\s*(?P<num>\d+(?:\.\d+)*)\.?\s+(?P<title>.*)$")
+_KIRO_REQ_REF = re.compile(r"_Requirements?:\s*(?P<refs>[0-9.,\s]+)_", re.IGNORECASE)
+
+
+def parse_kiro_requirements(text: str) -> list[dict]:
+    """Parse Kiro requirements.md into [{id, title, story, criteria[]}].
+
+    ``criteria`` are the EARS 'SHALL' lines (the testable acceptance clauses).
+    """
+    reqs: list[dict] = []
+    cur: Optional[dict] = None
+    for ln in text.splitlines():
+        h = _KIRO_REQ_HEADER.match(ln)
+        if h:
+            cur = {"id": h.group("n"), "title": h.group("t").strip(),
+                   "story": "", "criteria": []}
+            reqs.append(cur)
+            continue
+        if cur is None:
+            continue
+        s = _KIRO_STORY.search(ln)
+        if s:
+            cur["story"] = s.group("s").strip()
+        if "shall" in ln.lower():
+            clause = ln.strip().lstrip("0123456789.").strip().lstrip("-*").strip()
+            if clause:
+                cur["criteria"].append(clause)
+    return reqs
+
+
+def parse_kiro_tasks(text: str) -> list[dict]:
+    """Parse Kiro tasks.md into [{id, title, done, level, requirements[]}].
+
+    Sub-tasks (1.1, 1.2) keep their dotted number; a trailing _Requirements:_
+    line on the previous task line attaches its refs.
+    """
+    tasks: list[dict] = []
+    for ln in text.splitlines():
+        m = _KIRO_TASK.match(ln)
+        if m:
+            num = m.group("num")
+            tasks.append({"id": num, "title": m.group("title").strip(),
+                          "done": m.group("done").lower() == "x",
+                          "level": num.count(".") , "requirements": []})
+            continue
+        ref = _KIRO_REQ_REF.search(ln)
+        if ref and tasks:
+            refs = [r.strip() for r in ref.group("refs").split(",") if r.strip()]
+            tasks[-1]["requirements"] = refs
+    return tasks
+
+
+def parse_kiro_design(text: str) -> dict:
+    """Parse design.md into an ordered {heading: body} section map."""
+    sections: dict[str, str] = {}
+    heading = "_preamble"
+    buf: list[str] = []
+    def _flush(h: str, lines: list[str]) -> None:
+        body = "\n".join(lines).strip()
+        if body:  # a heading with no body of its own is not a section
+            sections[h] = body
+
+    for ln in text.splitlines():
+        if _ANY_HEADER.match(ln):
+            _flush(heading, buf)
+            heading = re.sub(r"^\s*#+\s*", "", ln).strip()
+            buf = []
+        else:
+            buf.append(ln)
+    _flush(heading, buf)
+    sections.pop("_preamble", None)
+    return sections
+
+
+def load_kiro_spec(spec_dir: str) -> dict:
+    """Read requirements/design/tasks .md from a Kiro spec dir into one bundle."""
+    base = os.path.abspath(spec_dir)
+
+    def _read(name: str) -> str:
+        path = os.path.join(base, name)
+        if not os.path.isfile(path):
+            return ""
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+
+    return {
+        "feature": os.path.basename(base.rstrip("/")),
+        "requirements": parse_kiro_requirements(_read("requirements.md")),
+        "design": parse_kiro_design(_read("design.md")),
+        "tasks": parse_kiro_tasks(_read("tasks.md")),
+    }
+
+
+KIRO_IMPORT_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "kiro_import",
+        "description": (
+            "Load AWS Kiro spec artifacts (requirements.md / design.md / "
+            "tasks.md under .kiro/specs/<feature>/) as run CONTEXT — EARS "
+            "acceptance criteria, design sections and the numbered task plan "
+            "with their requirement refs. Use to ground a spec-flow run in an "
+            "existing Kiro spec instead of re-authoring it."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "dir": {"type": "string", "description": "Path to the Kiro spec dir (holds requirements/design/tasks .md)."},
+            },
+            "required": ["dir"],
+        },
+    },
+}
+
+
+def _handle_kiro_import(args: dict[str, Any], **_: Any) -> str:
+    spec_dir = args.get("dir")
+    if not spec_dir:
+        return tool_error("kiro_import requires 'dir' (a Kiro spec folder)")
+    if not os.path.isdir(spec_dir):
+        return tool_error(f"kiro_import: not a directory: {spec_dir}")
+    bundle = load_kiro_spec(spec_dir)
+    if not (bundle["requirements"] or bundle["tasks"] or bundle["design"]):
+        return tool_error("kiro_import found no Kiro artifacts in the directory")
+    bundle["summary"] = {
+        "requirements": len(bundle["requirements"]),
+        "criteria": sum(len(r["criteria"]) for r in bundle["requirements"]),
+        "tasks": len(bundle["tasks"]),
+        "design_sections": len(bundle["design"]),
+    }
+    return json.dumps(bundle, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
 # policy_gate — deterministic constitution check
 # ---------------------------------------------------------------------------
 
@@ -1413,6 +1558,15 @@ registry.register(
     handler=_handle_speckit_import,
     check_fn=_check_specflow,
     emoji="📥",
+)
+
+registry.register(
+    name="kiro_import",
+    toolset="kanban",
+    schema=KIRO_IMPORT_SCHEMA,
+    handler=_handle_kiro_import,
+    check_fn=_check_specflow,
+    emoji="📘",
 )
 
 
