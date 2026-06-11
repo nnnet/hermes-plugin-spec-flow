@@ -22,6 +22,7 @@ EXPECTED_TOOLS = {
     "specflow_init",
     "specflow_start",
     "specflow_status",
+    "speckit_import",
 }
 
 

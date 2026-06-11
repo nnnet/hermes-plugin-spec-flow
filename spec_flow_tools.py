@@ -40,6 +40,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -561,6 +562,200 @@ def _handle_specflow_status(args: dict[str, Any], **_: Any) -> str:
         return tool_error("specflow_status requires 'project'")
     result = _run_kanban(["show", "--board", str(project)])
     return json.dumps({"board": project, "result": result}, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# speckit_import — bridge a spec-kit tasks.md into kanban cards
+# ---------------------------------------------------------------------------
+# spec-kit (github/spec-kit) is the upstream SDD front-end: its
+# `specify → plan → tasks` flow emits a `tasks.md` — a phased markdown checklist
+# of atomic tasks (`- [ ] T001 [P] Description path/to/file`). Rather than
+# re-deriving a tree, spec-flow consumes that artifact directly: parse it into
+# normalized cards and seed them on the board. The parser is pure PLUGIN code,
+# verifiable without Hermes.
+
+_TASK_LINE = re.compile(r"^\s*-\s*\[(?P<done>[ xX])\]\s*(?P<id>T\d+)\s+(?P<rest>.*)$")
+_PHASE_LINE = re.compile(r"^\s*#+\s*(?P<title>Phase\b.*)$", re.IGNORECASE)
+_DEPS_HEADER = re.compile(r"^\s*#+\s*Dependencies\b", re.IGNORECASE)
+_ANY_HEADER = re.compile(r"^\s*#+\s+")
+_TID = re.compile(r"T\d+")
+_FILE_TOKEN = re.compile(r"[\w./-]*/[\w./-]+\.[A-Za-z0-9]+")
+
+
+def _expand_tid_range(token: str) -> list[str]:
+    """'T004-T007' -> [T004..T007]; a single 'T008' -> ['T008']."""
+    m = re.match(r"^T(\d+)-T(\d+)$", token)
+    if not m:
+        return [token] if _TID.fullmatch(token) else []
+    lo, hi = int(m.group(1)), int(m.group(2))
+    width = len(m.group(1))
+    if hi < lo or hi - lo > 999:  # guard against absurd ranges
+        return []
+    return [f"T{n:0{width}d}" for n in range(lo, hi + 1)]
+
+
+def _parse_deps_block(lines: list[str]) -> dict[str, set]:
+    """Parse a spec-kit '## Dependencies' section into {task -> {prereqs}}.
+
+    Understands three shapes, each possibly using Txxx-Tyyy ranges:
+      * 'T008 blocks T009, T015'        -> T009,T015 depend on T008
+      * 'T009 depends on T008'          -> T009 depends on T008
+      * '(T004-T007) before (T008-T015)'-> each later depends on each earlier
+    """
+    deps: dict[str, set] = {}
+
+    def _add(task: str, prereq: str) -> None:
+        if task != prereq:
+            deps.setdefault(task, set()).add(prereq)
+
+    for raw in lines:
+        line = raw.strip().lstrip("-*").strip()
+        if not line:
+            continue
+        groups = [tok for tok in re.findall(r"\(?T\d+(?:-T\d+)?\)?", line)]
+        groups = [g.strip("()") for g in groups]
+        low = line.lower()
+        if " blocks " in low and len(groups) >= 2:
+            for prereq in _expand_tid_range(groups[0]):
+                for tok in groups[1:]:
+                    for task in _expand_tid_range(tok):
+                        _add(task, prereq)
+        elif "depends on" in low and len(groups) >= 2:
+            for task in _expand_tid_range(groups[0]):
+                for tok in groups[1:]:
+                    for prereq in _expand_tid_range(tok):
+                        _add(task, prereq)
+        elif " before " in low and len(groups) >= 2:
+            earlier = _expand_tid_range(groups[0])
+            for tok in groups[1:]:
+                for task in _expand_tid_range(tok):
+                    for prereq in earlier:
+                        _add(task, prereq)
+    return deps
+
+
+def parse_speckit_tasks(text: str) -> list[dict]:
+    """Parse a spec-kit ``tasks.md`` into normalized cards.
+
+    Each card: ``{id, title, phase, parallel, done, files, deps}``. ``parallel``
+    is spec-kit's ``[P]`` marker (safe to run concurrently); ``deps`` is filled
+    from the optional ``## Dependencies`` section. Pure function — no I/O.
+    """
+    lines = text.splitlines()
+    # collect the Dependencies section first (everything until the next header)
+    dep_lines: list[str] = []
+    in_deps = False
+    for ln in lines:
+        if _DEPS_HEADER.match(ln):
+            in_deps = True
+            continue
+        if in_deps:
+            if _ANY_HEADER.match(ln):
+                in_deps = False
+            else:
+                dep_lines.append(ln)
+    deps = _parse_deps_block(dep_lines)
+
+    cards: list[dict] = []
+    phase = ""
+    for ln in lines:
+        ph = _PHASE_LINE.match(ln)
+        if ph:
+            phase = ph.group("title").strip()
+            continue
+        m = _TASK_LINE.match(ln)
+        if not m:
+            continue
+        rest = m.group("rest").strip()
+        parallel = False
+        if rest.startswith("[P]"):
+            parallel = True
+            rest = rest[3:].strip()
+        files = _FILE_TOKEN.findall(rest)
+        tid = m.group("id")
+        cards.append({
+            "id": tid,
+            "title": rest,
+            "phase": phase,
+            "parallel": parallel,
+            "done": m.group("done").lower() == "x",
+            "files": files,
+            "deps": sorted(deps.get(tid, set())),
+        })
+    return cards
+
+
+SPECKIT_IMPORT_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "speckit_import",
+        "description": (
+            "Import a spec-kit tasks.md (phased '- [ ] T001 [P] ...' checklist) "
+            "into kanban cards on a spec-flow board. Parses phases, the [P] "
+            "parallel marker, file paths and the Dependencies section, then "
+            "seeds one card per task. Use to start from an existing spec-kit "
+            "spec instead of decomposing from scratch."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string", "description": "Board name (created by specflow_init)."},
+                "tasks_md": {"type": "string", "description": "Path to the spec-kit tasks.md file."},
+                "tasks": {"type": "string", "description": "Raw tasks.md content (alternative to tasks_md)."},
+                "dir": {"type": "string", "description": "Project workspace directory (optional)."},
+                "seed": {"type": "boolean", "description": "Create the cards on the board (default true). False = parse only."},
+            },
+            "required": ["project"],
+        },
+    },
+}
+
+
+def _handle_speckit_import(args: dict[str, Any], **_: Any) -> str:
+    project = args.get("project")
+    if not project:
+        return tool_error("speckit_import requires 'project'")
+    text = args.get("tasks")
+    if not text:
+        path = args.get("tasks_md")
+        if not path:
+            return tool_error("speckit_import requires 'tasks_md' path or 'tasks' content")
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except Exception as exc:  # noqa: BLE001
+            return tool_error(f"speckit_import cannot read tasks.md: {exc}")
+
+    cards = parse_speckit_tasks(text)
+    if not cards:
+        return tool_error("speckit_import parsed no tasks — is this a spec-kit tasks.md?")
+
+    workdir = args.get("dir")
+    seed = args.get("seed", True)
+    seeded: list[dict] = []
+    if seed:
+        for card in cards:
+            kanban_args = [
+                "create", "--board", str(project),
+                "--title", f"{card['id']}: {card['title']}",
+                "--assignee", "implementer",
+                "--skill", "spec-implement",
+            ]
+            if workdir:
+                kanban_args += ["--workspace", f"dir:{workdir}"]
+            res = _run_kanban(kanban_args)
+            seeded.append({"id": card["id"], "result": res})
+
+    phases = sorted({c["phase"] for c in cards if c["phase"]})
+    return json.dumps({
+        "board": project,
+        "parsed": len(cards),
+        "parallel": sum(1 for c in cards if c["parallel"]),
+        "with_deps": sum(1 for c in cards if c["deps"]),
+        "phases": phases,
+        "cards": cards,
+        "seeded": seeded,
+    }, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
@@ -1160,6 +1355,15 @@ registry.register(
     handler=_handle_specflow_status,
     check_fn=_check_specflow,
     emoji="📊",
+)
+
+registry.register(
+    name="speckit_import",
+    toolset="kanban",
+    schema=SPECKIT_IMPORT_SCHEMA,
+    handler=_handle_speckit_import,
+    check_fn=_check_specflow,
+    emoji="📥",
 )
 
 

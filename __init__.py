@@ -30,6 +30,7 @@ _TOOL_NAMES = (
     "specflow_init",
     "specflow_start",
     "specflow_status",
+    "speckit_import",
 )
 
 

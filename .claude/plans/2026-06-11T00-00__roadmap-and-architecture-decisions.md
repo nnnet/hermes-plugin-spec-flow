@@ -249,7 +249,10 @@ spec-flow — это **движок дисциплины и durable-оркест
       прогон p1 и p4 с `node_engine="inline"` и `node_engine="fsm"` — исход, гейты,
       петли, покрытие и oracle совпадают; негативный тест (`_skip_gate`) — пропуск
       гейта ловится в обоих движках (GateViolation).
-- [ ] B1 импорт `tasks.md` от spec-kit → карточки Kanban.
+- [x] B1 импорт `tasks.md` от spec-kit → карточки Kanban (`parse_speckit_tasks`
+      + тул `speckit_import`): фазы, маркер `[P]`, пути файлов, секция Dependencies
+      (blocks/depends on/before + диапазоны Txxx-Tyyy). Парсер — чистый код,
+      сидинг карточек деградирует без Hermes. `tests/test_speckit_import.py` (11).
 - [ ] E замкнутый цикл самосовершенствования (сигнал→ревизия→respec→re-derive→приёмка).
 - [ ] D2 живой implementer-агент (реальный код листа) — тратит реальную квоту,
       запускать только с подтверждения пользователя.
