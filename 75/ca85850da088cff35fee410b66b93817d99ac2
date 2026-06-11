@@ -1,0 +1,25 @@
+tests/harness/role_worker.py
+  s_a7f45290e91181::t_5fabecf22da7ed 266-268,271-276
+spec_flow_runner.py
+  s_a7f45290e91181::t_02971c4376a33b 158-182
+  s_a7f45290e91181::t_79fe675e68eb70 1078-1087,1089-1090,1095-1098,1103-1108
+  s_a7f45290e91181::t_4097c8b0931706 1088,1091-1094
+tests/test_role_workers.py
+  s_a7f45290e91181::t_667d03308bdc85 341-384
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "75ca85850da088cff35fee410b66b93817d99ac2",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-fable-5"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
