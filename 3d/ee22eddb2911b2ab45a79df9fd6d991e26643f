@@ -1,0 +1,33 @@
+spec_flow_runner.py
+  s_1b99a7ec9e9aa9::t_9c1779bb86e7c8 276-282
+tests/live_dashboard.py
+  s_1b99a7ec9e9aa9::t_2b662fca736f8d 401
+  s_1b99a7ec9e9aa9::t_eda1e7376836cb 174,178,181-188
+  s_1b99a7ec9e9aa9::t_0824d0f555d62d 433
+  s_1b99a7ec9e9aa9::t_15d4ea99b4028a 587
+  s_1b99a7ec9e9aa9::t_70ba22c2abc88f 672
+  s_1b99a7ec9e9aa9::t_cedbde463e0dbf 576-582
+  s_1b99a7ec9e9aa9::t_261f349a4c82c7 588,590-594,597-611
+  s_1b99a7ec9e9aa9::t_b290d458ac573c 490
+  s_1b99a7ec9e9aa9::t_cf7c6c1aaf7494 523
+  s_1b99a7ec9e9aa9::t_ebfc11bbf98fd7 537,539,542
+  s_1b99a7ec9e9aa9::t_ad4a6bac803933 596
+  s_1b99a7ec9e9aa9::t_81d6455e5573fa 320-346
+  s_1b99a7ec9e9aa9::t_43de84a634193d 669
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "3dee22eddb2911b2ab45a79df9fd6d991e26643f",
+  "prompts": {},
+  "sessions": {
+    "s_1b99a7ec9e9aa9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5025e0d8-1d1b-4f97-8c52-eec971a58fbd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <zkowkmdx@sharklasers.com>"
+    }
+  }
+}
