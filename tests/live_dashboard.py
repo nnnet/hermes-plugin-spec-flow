@@ -486,7 +486,7 @@ _PAGE = r"""<!doctype html><html lang=ru><head><meta charset=utf-8>
 *{box-sizing:border-box}
 body{margin:0;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;background:#0d1117;color:#c9d1d9}
 .bar{position:sticky;top:0;z-index:5;background:#161b22;border-bottom:1px solid #30363d;padding:8px 14px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
-.st{font-weight:700}.dim{color:#8b949e}.pill{background:#21262d;border-radius:10px;padding:1px 8px}
+.st{font-weight:700}.dim{color:#8b949e}.pill{background:#21262d;border-radius:10px;padding:1px 8px;cursor:pointer}
 .home{cursor:pointer;background:#1f6feb;color:#fff;border-radius:6px;padding:2px 10px;font-weight:700}.home:hover{background:#388bfd}
 .live{color:#3fb950}.donec{color:#8b949e}
 .bar2{position:sticky;top:38px;z-index:4;background:#0f141a;border-bottom:1px solid #21262d;padding:5px 14px;display:flex;gap:18px;align-items:center;flex-wrap:wrap;font-size:12px}
@@ -520,11 +520,10 @@ pre.code{background:#161b22;padding:10px;border-radius:6px;overflow:auto;white-s
 .gtabs{margin-top:8px}
 </style></head><body>
 <div class=bar>
- <span class=home id=home>⌂ к обзору</span>
- <span class=st id=status>…</span>
- <b id=name></b>
+ <b id=name class=home title="клик — вернуться к обзору">…</b>
+ <span class=st id=status></span>
  <span class=dim id=counts></span>
- <span class=pill id=mode></span>
+ <span class=pill id=mode title="клик — вкл/выкл авторефреш"></span>
 </div>
 <div class=bar2>
  <span id=goal class=goal></span>
@@ -537,11 +536,12 @@ pre.code{background:#161b22;padding:10px;border-radius:6px;overflow:auto;white-s
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 <script>
 if(window.mermaid)mermaid.initialize({startOnLoad:false,theme:'dark',securityLevel:'loose',flowchart:{useMaxWidth:false}});
-let STATE=null, SEL=null, EXPANDED={}, NTAB='spec', GTAB='inputs', FILECACHE={};
+let STATE=null, SEL=null, EXPANDED={}, NTAB='spec', GTAB='inputs', FILECACHE={}, AUTO=true;
 const $=s=>document.querySelector(s);
 function mray(){if(window.mermaid){try{mermaid.run({querySelector:'#detail .mermaid'});}catch(e){}}}
 
 async function poll(){
+ if(!AUTO)return;
  try{const r=await fetch('/api/state');STATE=await r.json();render();}catch(e){}
 }
 function badgeStr(eps){return (eps||[]).map(e=>({spike:'🔬',clarify:'❓',contract:'📐',drift:'🌀',hitl:'✋',review_fails:'⚖️'}[e]||'')).join('');}
@@ -563,9 +563,9 @@ function render(){
  $('#status').innerHTML=live?'<span class=live>🟢 идёт…</span>':'<span class=donec>✅ завершён</span>';
  $('#name').textContent=STATE.name;
  const c=STATE.counts;$('#counts').textContent=`узлов ${c.nodes} · листьев ${c.leaves} · реализовано ${c.impl} · событий ${c.events}`;
- $('#mode').textContent='авторефреш '+(live?'вкл':'выкл');
+ $('#mode').textContent='⟳ авто: '+(AUTO?'вкл':'выкл');
  $('#goal').textContent=STATE.goal?('🎯 '+STATE.goal):'';
- $('#current').innerHTML='сейчас: '+esc(STATE.current||'');
+ $('#current').innerHTML=live?('сейчас: '+esc(STATE.current||'')):'';
  $('#tree').innerHTML='<ul>'+treeHTML(STATE.tree)+'</ul>';
  if(!SEL) renderGlobal(); else renderNode();
 }
@@ -666,7 +666,8 @@ function lineDiff(a,b){
 function esc(s){return (s==null?'':String(s)).replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]));}
 
 document.addEventListener('click',e=>{
- if(e.target.closest('#home')){SEL=null;render();return;}
+ if(e.target.closest('#name')){SEL=null;render();return;}
+ if(e.target.closest('#mode')){AUTO=!AUTO;if(AUTO)poll();else render();return;}
  const tw=e.target.closest('.tw[data-tw]');
  if(tw){const id=tw.dataset.tw;EXPANDED[id]=EXPANDED[id]===false?true:false;render();return;}
  const nodeEl=e.target.closest('.node[data-id], .gnode[data-id]');
