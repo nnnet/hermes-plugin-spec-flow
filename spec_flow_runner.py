@@ -939,6 +939,37 @@ class Engine:
                   f"{len(node.get('children', []))} children proposed", level=L_MILESTONE)
         return node
 
+    def _consult_reviewer(self, nid: str, title: str, spec_rel: Optional[str]) -> None:
+        """Real spec-reviewer worker, when attached. Without one the engine
+        keeps its historical simulated PASS events untouched.
+
+        REJECT follows the same semantics as a HITL rejection: version bump +
+        runs increment + a recorded loop — the kanban respec lane (Hermes
+        side) owns actual rework, the engine records the episode honestly."""
+        reviewer = self.agents.get("reviewer")
+        if reviewer is None or not spec_rel:
+            return
+        self.gate_calls["spec_review"] = self.gate_calls.get("spec_review", 0) + 1
+        try:
+            out = reviewer({"node": nid, "title": title, "spec": spec_rel,
+                            "goal": self._goal, "constitution": self._constitution,
+                            "workspace_root": self.workspace.root}) or {}
+        except Exception as exc:  # noqa: BLE001 — worker must not kill the run
+            self.emit("review", "spec-reviewer", "spec-reviewer", nid,
+                      "spec review worker failed — no verdict", str(exc)[:200],
+                      "spec_review", "ERROR", level=L_MILESTONE)
+            return
+        verdict = "REJECT" if str(out.get("verdict", "PASS")).upper() == "REJECT" else "PASS"
+        reasons = "; ".join(str(r) for r in out.get("reasons") or [])
+        self.emit("review", "spec-reviewer", "spec-reviewer", nid,
+                  "spec review (real worker)", reasons, "spec_review", verdict,
+                  level=L_MILESTONE)
+        if verdict == "REJECT":
+            self.tasks[nid].version += 1
+            self.tasks[nid].runs += 1
+            self.loops.append({"type": "spec-review-reject", "task": nid,
+                               "detail": reasons})
+
     def _dedup_children(self, node: dict, nid: str, title: str,
                         ancestors: tuple) -> None:
         """Dedup gate: prune proposed children that duplicate an existing
@@ -1016,6 +1047,24 @@ class Engine:
             self.task(sid, spike["question"], "research", "researcher", "spec-research", parents=[nid])
             self.emit("research", "researcher", "spec-research", sid,
                       "SPIKE before freeze", spike["question"])
+            # Real researcher worker, when attached: the spike is researched
+            # for real instead of the decomposer answering its own question.
+            # Mutates the spike in place so the written spec carries the
+            # researched recommendation. Falls back to the decomposer's one.
+            researcher = self.agents.get("researcher")
+            if researcher is not None:
+                try:
+                    out = researcher({"question": spike["question"], "node": nid,
+                                      "goal": self._goal,
+                                      "workspace_root": self.workspace.root}) or {}
+                    if str(out.get("recommendation", "")).strip():
+                        spike["recommendation"] = out["recommendation"]
+                        if out.get("basis"):
+                            spike["basis"] = out["basis"]
+                except Exception as exc:  # noqa: BLE001 — worker must not kill the run
+                    self.emit("research", "researcher", "spec-research", sid,
+                              "researcher worker failed — keeping decomposer's recommendation",
+                              str(exc)[:200], level=L_DETAIL)
             self.emit("research", "researcher", "spec-research", sid,
                       "recommendation folded into spec (above the gate, no rework)",
                       spike["recommendation"])
@@ -1075,8 +1124,10 @@ class Engine:
                 self._completed += 1
                 child_contract_ctx = contract_here
 
-            self.workspace.spec(nid, title, depth, verdict, "; ".join(reasons), parent, plan,
-                                node=node, target=self._target)
+            spec_rel = self.workspace.spec(
+                nid, title, depth, verdict, "; ".join(reasons), parent, plan,
+                node=node, target=self._target)
+            self._consult_reviewer(nid, title, spec_rel)
             child_ids = []
             for child in node.get("children", []):
                 self._visit(child, depth + 1, child_contract_ctx, phase,
@@ -1096,9 +1147,28 @@ class Engine:
                 self.emit("integrate", "verifier", "spec-integrate", integ,
                           "parallel contract_check across subtree", contract_here["fixed"],
                           "contract_check", res["status"], level=L_MILESTONE)
-            self.emit("integrate", "verifier", "spec-integrate", integ,
-                      "end-to-end acceptance criteria", "verification-before-completion", "", "PASS",
-                      level=L_MILESTONE)
+            verifier = self.agents.get("verifier")
+            if verifier is not None:
+                # Real verifier worker: its verdict replaces the simulated
+                # PASS. FAIL is recorded like other rework episodes.
+                try:
+                    vout = verifier({"node": nid, "title": title,
+                                     "children": child_ids,
+                                     "workspace_root": self.workspace.root}) or {}
+                    vstatus = "FAIL" if str(vout.get("status", "PASS")).upper() == "FAIL" else "PASS"
+                    vdetail = str(vout.get("detail", ""))[:300]
+                except Exception as exc:  # noqa: BLE001
+                    vstatus, vdetail = "ERROR", str(exc)[:200]
+                self.emit("integrate", "verifier", "spec-integrate", integ,
+                          "end-to-end acceptance criteria (real worker)", vdetail,
+                          "integrate_verify", vstatus, level=L_MILESTONE)
+                if vstatus != "PASS":
+                    self.loops.append({"type": "integrate-fail", "task": nid,
+                                       "detail": vdetail})
+            else:
+                self.emit("integrate", "verifier", "spec-integrate", integ,
+                          "end-to-end acceptance criteria", "verification-before-completion", "", "PASS",
+                          level=L_MILESTONE)
             self.tasks[integ].status = "done"
             self._completed += 1
         else:
@@ -1136,12 +1206,14 @@ class Engine:
         nid = node["id"]
         title = node.get("title", nid)
         # spec/plan is written at every depth (>= spec)
-        self.workspace.spec(nid, title, depth, "leaf", "within all thresholds", parent,
-                            ["bottom-up plan: DB → logic → API → tests",
-                             "TDD: test (RED) → impl → test (GREEN)",
-                             "two-stage review (spec-conformance, then quality)",
-                             "verification-before-completion + commit"],
-                            node=node, target=self._target)
+        spec_rel = self.workspace.spec(
+            nid, title, depth, "leaf", "within all thresholds", parent,
+            ["bottom-up plan: DB → logic → API → tests",
+             "TDD: test (RED) → impl → test (GREEN)",
+             "two-stage review (spec-conformance, then quality)",
+             "verification-before-completion + commit"],
+            node=node, target=self._target)
+        self._consult_reviewer(nid, title, spec_rel)
         # code & test scaffolds only from depth 'scaffold' upward; at 'execute'
         # an injected implementer agent produces real code instead of a scaffold.
         code_rel = test_rel = None

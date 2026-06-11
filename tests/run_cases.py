@@ -85,7 +85,8 @@ def _load_tools():
 
 def _run_full(case: dict, case_dir: Path, depth: str, tools,
               decomposer: str = "blueprint", implementer: str = "auto",
-              meter=None, model: str = "") -> dict:
+              meter=None, model: str = "", workers: str = "sim",
+              hitl: str = "auto") -> dict:
     """The real production run: mandatory workspace inside the case folder,
     disk sink at full detail, the plugin's own report built from the trace.
 
@@ -96,7 +97,7 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
     tools.CONTRACT_VALIDATORS["openapi"] = [
         "python3", str(eng.OPENAPI_DIFF), "{contract}", "{code}"]
     # live agents log every model call here for post-hoc analysis (no guessing)
-    live = decomposer == "llm" or implementer == "llm"
+    live = decomposer == "llm" or implementer == "llm" or workers == "real"
     if live:
         os.environ["SPEC_FLOW_LLM_LOG"] = str(case_dir / "llm-log.jsonl")
         # claude -p is a full agent: its incidental file writes land here, not
@@ -109,7 +110,30 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
     # for the deterministic decomposer; the analysis reference is the `oracle`
     # block). 'blueprint' = deterministic, offline, no quota; 'llm' = live model.
     agents = {}
-    if depth in ("execute", "product"):
+    if workers == "real":
+        # Industrial mode without Hermes: real worker sessions from the
+        # plugin's own SKILL.md + profile tool policy, per role.
+        from harness import role_worker
+        ws_dir = str(case_dir / "workspace")
+        dec_fn = role_worker.make_decomposer(workspace_dir=ws_dir)
+        rev_fn = role_worker.make_reviewer()
+        res_fn = role_worker.make_researcher()
+        if meter is not None:
+            dec_fn = meter.wrap("decomposer", dec_fn)
+            rev_fn = meter.wrap("reviewer", rev_fn)
+            res_fn = meter.wrap("researcher", res_fn)
+        agents["decomposer"] = dec_fn
+        agents["reviewer"] = rev_fn
+        agents["researcher"] = res_fn
+        if depth in ("execute", "product"):
+            impl_fn = role_worker.make_implementer()
+            if meter is not None:
+                impl_fn = meter.wrap("implementer", impl_fn)
+            agents["implementer"] = impl_fn
+    if hitl == "console":
+        from harness import hitl as hitl_mod
+        agents["approver"] = hitl_mod.console_approver
+    if "implementer" not in agents and depth in ("execute", "product"):
         if implementer == "llm":
             from harness import llm_implementer
             impl_fn = llm_implementer.implement
@@ -119,7 +143,11 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
         else:
             agents["implementer"] = auto_implementer.implement
     max_calls = eng.MAX_DECOMPOSE_CALLS
-    if decomposer == "llm":
+    if workers == "real":
+        # live tree building: same blueprint/revision drop as llm mode
+        exec_case = {k: v for k, v in case.items() if k not in ("blueprint", "revisions", "revision")}
+        max_calls = int(os.environ.get("SPEC_FLOW_MAX_DECOMPOSE_CALLS", "80"))
+    elif decomposer == "llm":
         from harness import llm_decomposer
         dec_fn = llm_decomposer.decompose
         if meter is not None:
@@ -271,6 +299,16 @@ def main() -> int:
     ap.add_argument("--implementer", default="auto", choices=["auto", "llm"],
                     help="'auto' deterministic stand-in; 'llm' live model "
                          "implementer (depth execute/product only)")
+    ap.add_argument("--workers", default="sim", choices=["sim", "real"],
+                    help="'real' = industrial mode WITHOUT Hermes: every role "
+                         "(decomposer/implementer/reviewer/researcher) is a "
+                         "live worker session built from the plugin's OWN "
+                         "SKILL.md + profile tool policy; overrides "
+                         "--decomposer/--implementer")
+    ap.add_argument("--hitl", default="auto", choices=["auto", "console"],
+                    help="'console' puts a real human at every HITL "
+                         "checkpoint (terminal prompt; timeout auto-approves "
+                         "with an honest note); 'auto' keeps the default")
     ap.add_argument("--model", default=os.environ.get("SPEC_FLOW_LLM_MODEL", "haiku"),
                     help="LLM model for live agents (default haiku)")
     ap.add_argument("--dashboard", action="store_true",
@@ -292,7 +330,7 @@ def main() -> int:
     elif args.gateway == "direct":
         os.environ.pop("ANTHROPIC_BASE_URL", None)
     os.environ["SPEC_FLOW_LLM_MODEL"] = args.model
-    if args.decomposer == "llm" and not args.case:
+    if (args.decomposer == "llm" or args.workers == "real") and not args.case:
         # live LLM runs cost real quota: one call per tree node — keep the
         # default to the single smallest case; widen explicitly via --case
         args.case = "p2"
@@ -334,14 +372,15 @@ def main() -> int:
         os.environ["HERMES_HOME"] = tempfile.mkdtemp(prefix=f"specflow-{name}-")
 
         policy = _run_policy(path, case_dir, tools) if "imprecise" in case else None
-        runnable = "blueprint" in case or args.decomposer == "llm"
-        live = args.decomposer == "llm" or args.implementer == "llm"
+        runnable = "blueprint" in case or args.decomposer == "llm" or args.workers == "real"
+        live = args.decomposer == "llm" or args.implementer == "llm" or args.workers == "real"
         meter = None
         if live:
             from harness import cost as _cost
             meter = _cost.Meter()
         full = (_run_full(case, case_dir, args.depth, tools, args.decomposer,
-                          implementer=args.implementer, meter=meter, model=args.model)
+                          implementer=args.implementer, meter=meter, model=args.model,
+                          workers=args.workers, hitl=args.hitl)
                 if runnable else None)
 
         (case_dir / "SUMMARY.md").write_text(
