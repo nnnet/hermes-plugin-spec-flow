@@ -569,7 +569,7 @@ pre.code{background:#161b22;padding:10px;border-radius:6px;overflow:auto;white-s
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 <script>
 if(window.mermaid)mermaid.initialize({startOnLoad:false,theme:'dark',securityLevel:'loose',flowchart:{useMaxWidth:false}});
-let STATE=null, SEL=null, EXPANDED={}, NTAB='spec', GTAB='inputs', FILECACHE={}, AUTO=true;
+let STATE=null, SEL=null, EXPANDED={}, GCOLL={}, CLICKT=null, NTAB='spec', GTAB='inputs', FILECACHE={}, AUTO=true;
 const $=s=>document.querySelector(s);
 function mray(){if(window.mermaid){try{mermaid.run({querySelector:'#detail .mermaid'});}catch(e){}}}
 
@@ -596,7 +596,7 @@ function render(){
  $('#status').innerHTML=live?'<span class=live>🟢 идёт…</span>':'<span class=donec>✅ завершён</span>';
  $('#name').textContent=STATE.name;
  const c=STATE.counts;$('#counts').textContent=`узлов ${c.nodes} · листьев ${c.leaves} · реализовано ${c.impl} · событий ${c.events}`;
- $('#mode').textContent='⟳ авто: '+(AUTO?'вкл':'выкл');
+ $('#mode').innerHTML='⟳ авто: '+(AUTO?'<span class=live>вкл</span>':'<span class=dim>выкл</span>');
  $('#goal').textContent=STATE.goal?('🎯 '+STATE.goal):'';
  $('#current').innerHTML=live?('сейчас: '+esc(STATE.current||'')):'';
  $('#tree').innerHTML='<ul>'+treeHTML(STATE.tree)+'</ul>';
@@ -623,25 +623,29 @@ function renderGlobal(){
  h+='<h3 class=muted>Что делают агенты сейчас</h3><ol class=feed>'+(STATE.feed||[]).map(f=>`<li>${esc(f)}</li>`).join('')+'</ol>';
  let body;
  if(GTAB==='timeline')body=timelineHTML();
- else if(GTAB==='graph')body='<p class=muted>граф задач, что построил плагин — клик по узлу = провалиться в его спеку/код/версии. 🌿 ветка · 🍃 лист · бейджи = эпизоды</p>'+graphSVG();
+ else if(GTAB==='graph')body='<p class=muted>граф задач, что построил плагин — <b>дабл-клик</b> = провалиться в спеку/код/версии · <b>клик</b> = свернуть поддерево / развернуть следующий уровень. 🌿 ветка · 🍃 лист · бейджи = эпизоды</p>'+graphSVG();
  else body=R[GTAB]||'<p class=dim>нет данных</p>';
  h+='<div id=gbody>'+body+'</div>';
  $('#detail').innerHTML=h;
  mray();
 }
 
+function effKids(n){return GCOLL[n.id]?[]:(n.children||[]);}
+function countDesc(n){return (n.children||[]).reduce((a,c)=>a+1+countDesc(c),0);}
 function graphSVG(){
  const root=STATE.tree;if(!root)return '';let row=0;
- (function assign(n,d){n._d=d;const ch=n.children||[];if(!ch.length){n._y=row++;}else{ch.forEach(c=>assign(c,d+1));n._y=(ch[0]._y+ch[ch.length-1]._y)/2;}})(root,0);
+ (function assign(n,d){n._d=d;const ch=effKids(n);if(!ch.length){n._y=row++;}else{ch.forEach(c=>assign(c,d+1));n._y=(ch[0]._y+ch[ch.length-1]._y)/2;}})(root,0);
  const COLW=200,ROWH=30,PX=14,PY=14,BW=164,BH=22;let maxD=0,maxY=0;const nodes=[],edges=[];
- (function walk(n){maxD=Math.max(maxD,n._d);maxY=Math.max(maxY,n._y);nodes.push(n);(n.children||[]).forEach(c=>{edges.push([n,c]);walk(c);});})(root);
+ (function walk(n){maxD=Math.max(maxD,n._d);maxY=Math.max(maxY,n._y);nodes.push(n);effKids(n).forEach(c=>{edges.push([n,c]);walk(c);});})(root);
  const X=n=>PX+n._d*COLW,Y=n=>PY+n._y*ROWH;const W=PX*2+(maxD+1)*COLW,H=PY*2+(maxY+1)*ROWH;
  let s=`<svg width="${W}" height="${H}" style="min-width:${W}px">`;
  edges.forEach(([a,b])=>{const x1=X(a)+BW,y1=Y(a)+BH/2,x2=X(b),y2=Y(b)+BH/2;s+=`<path d="M${x1} ${y1} C${x1+24} ${y1}, ${x2-24} ${y2}, ${x2} ${y2}" stroke="#30363d" fill="none"/>`;});
- nodes.forEach(n=>{const leaf=!(n.children&&n.children.length);const sel=SEL===n.id;
+ nodes.forEach(n=>{const leaf=!(n.children&&n.children.length);const sel=SEL===n.id;const coll=!leaf&&GCOLL[n.id];
+  const ico=coll?'▸🌿':(leaf?'🍃':'🌿');
+  const tail=coll?` +${countDesc(n)}`:'';
   s+=`<g class=gnode data-id="${n.id}" transform="translate(${X(n)},${Y(n)})" style="cursor:pointer">`+
      `<rect width="${BW}" height="${BH}" rx="5" fill="${sel?'#1f6feb55':(leaf?'#161b22':'#13251a')}" stroke="${sel?'#1f6feb':(leaf?'#30363d':'#3fb950')}"/>`+
-     `<text x="7" y="15" fill="#c9d1d9" font-size="11">${(leaf?'🍃':'🌿')} ${esc(n.id).slice(0,17)} ${badgeStr(n.episodes)}</text></g>`;});
+     `<text x="7" y="15" fill="#c9d1d9" font-size="11">${ico} ${esc(n.id).slice(0,15)}${tail} ${badgeStr(n.episodes)}</text></g>`;});
  s+='</svg>';return '<div style="overflow:auto;border:1px solid #21262d;border-radius:6px;padding:6px">'+s+'</div>';
 }
 
@@ -706,10 +710,30 @@ document.addEventListener('click',e=>{
  if(e.target.closest('#mode')){AUTO=!AUTO;if(AUTO)poll();else render();return;}
  const tw=e.target.closest('.tw[data-tw]');
  if(tw){const id=tw.dataset.tw;EXPANDED[id]=EXPANDED[id]===false?true:false;render();return;}
- const nodeEl=e.target.closest('.node[data-id], .gnode[data-id]');
+ const nodeEl=e.target.closest('.node[data-id]');
  if(nodeEl){SEL=nodeEl.dataset.id;NTAB='spec';render();return;}
+ const gn=e.target.closest('.gnode[data-id]');
+ if(gn){const id=gn.dataset.id;clearTimeout(CLICKT);CLICKT=setTimeout(()=>toggleGraph(id),260);return;}
  const g=e.target.closest('[data-g]');if(g){GTAB=g.dataset.g;renderGlobal();return;}
  const nt=e.target.closest('[data-n]');if(nt){if(nt.dataset.n==='__back'){SEL=null;render();}else{NTAB=nt.dataset.n;renderNode();}return;}
+});
+
+function findNode(n,id){if(n.id===id)return n;for(const c of n.children||[]){const r=findNode(c,id);if(r)return r;}return null;}
+function toggleGraph(id){
+ const n=STATE&&STATE.tree?findNode(STATE.tree,id):null;
+ if(!n||!(n.children&&n.children.length))return;     // leaves have nothing to fold
+ if(GCOLL[id]){
+   // collapsed -> expand ONE level: children appear, deeper levels stay folded
+   delete GCOLL[id];
+   (n.children||[]).forEach(c=>{if(c.children&&c.children.length)GCOLL[c.id]=true;});
+ }else{
+   GCOLL[id]=true;                                   // expanded -> fold whole subtree
+ }
+ renderGlobal();
+}
+document.addEventListener('dblclick',e=>{
+ const gn=e.target.closest('.gnode[data-id]');
+ if(gn){clearTimeout(CLICKT);SEL=gn.dataset.id;NTAB='spec';render();}
 });
 
 poll();setInterval(poll,REFRESH_MS_VAL);
