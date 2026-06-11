@@ -1040,6 +1040,32 @@ def audit_methodology(events: list[dict]) -> list[dict]:
     return f
 
 
+class InvariantViolation(Exception):
+    """Raised by the runtime invariant guard when a methodology rule (R1-R9) is
+    violated DURING a run — the enforcing counterpart of the post-hoc audit.
+
+    Carries the offending findings so a caller can see which rules fired."""
+
+    def __init__(self, findings: list[dict]):
+        self.findings = findings
+        names = ", ".join(sorted({f["rule"] for f in findings}))
+        super().__init__(f"methodology invariant(s) violated at runtime: {names}")
+
+
+def assert_invariants(events: list[dict],
+                      severities: tuple = ("error",)) -> list[dict]:
+    """Runtime guard over the R1-R9 invariants: run the audit and RAISE
+    ``InvariantViolation`` if any finding has one of ``severities`` (default:
+    only hard errors). Returns the full finding list when it does not raise, so
+    warnings/info are still inspectable. This is C3 — the invariants enforced
+    live, not merely reported by ``build_run_report``."""
+    findings = audit_methodology(events)
+    blocking = [f for f in findings if f.get("severity") in severities]
+    if blocking:
+        raise InvariantViolation(blocking)
+    return findings
+
+
 def summarize_trace(events: list[dict]) -> dict[str, Any]:
     tasks = {_ev(e, "task") for e in events if _ev(e, "task")}
     gates: dict[str, int] = {}

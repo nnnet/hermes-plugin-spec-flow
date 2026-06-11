@@ -501,7 +501,7 @@ class Engine:
                  contracts_dir: Optional[str] = None,
                  sink: Optional[Any] = None, verbosity: int = DEFAULT_VERBOSITY,
                  max_decompose_calls: int = MAX_DECOMPOSE_CALLS,
-                 node_engine: str = "inline"):
+                 node_engine: str = "inline", runtime_guard: bool = False):
         if not workspace:
             raise ValueError("Workspace is mandatory — pass a path or a Workspace")
         # tools (gate provider) is injectable; default to the bundled gates so
@@ -516,6 +516,10 @@ class Engine:
         if node_engine == "fsm" and not _NODE_FSM_OK:
             raise RuntimeError("node_engine='fsm' requested but spec_flow_node_fsm is unavailable")
         self.node_engine = node_engine
+        # runtime invariant guard (C3): enforce R1-R9 live at run end, raising
+        # InvariantViolation on a hard (error-severity) breach instead of only
+        # reporting it in build_run_report. Default off — back-compat.
+        self.runtime_guard = runtime_guard
         self.agents = {**DEFAULT_AGENTS, **(agents or {})}
         self.contracts_dir = Path(contracts_dir) if contracts_dir else None
         self.events: list[Event] = []
@@ -639,9 +643,12 @@ class Engine:
         # Phase 0-1: requirements (spec-decomposer + spec-requirements)
         self.task("L0:req", "Requirements & constitution", "requirements", "spec-decomposer", "spec-requirements")
         pol = self._policy(project.get("policy", {}))
-        self.emit("requirements", "spec-decomposer", "spec-requirements", "L0:req",
-                  "policy_gate on the goal", project.get("target", ""), "policy_gate", pol["verdict"],
-                  level=L_MILESTONE)
+        # test-only seam: skip emitting the policy verdict to provoke an R1
+        # breach the runtime guard (C3) must catch.
+        if not project.get("_suppress_policy"):
+            self.emit("requirements", "spec-decomposer", "spec-requirements", "L0:req",
+                      "policy_gate on the goal", project.get("target", ""), "policy_gate", pol["verdict"],
+                      level=L_MILESTONE)
         for rule in project.get("constitution", []):
             self.emit("requirements", "spec-decomposer", "spec-requirements", "L0:req",
                       "constitution rule", rule, level=L_DETAIL)
@@ -689,6 +696,11 @@ class Engine:
         # the acceptance spec.
         if self.depth >= DEPTH_PRODUCT:
             self._product_check(project.get("acceptance"))
+
+        # C3: enforce the R1-R9 invariants at runtime (opt-in). A hard breach
+        # raises InvariantViolation rather than passing silently to the report.
+        if self.runtime_guard and hasattr(self.tools, "assert_invariants"):
+            self.tools.assert_invariants([vars(e) for e in self.events])
 
         return RunResult(project, self.events, self.tasks, self.skills, self.profiles,
                          self.loops, self.gate_calls, self.verbosity, self.depth,
@@ -1220,7 +1232,8 @@ def run_project(project: dict, *, workspace, depth: Any = DEPTH_SPEC,
                 contracts_dir: Optional[str] = None, sink: Optional[Any] = None,
                 verbosity: int = DEFAULT_VERBOSITY,
                 max_decompose_calls: int = MAX_DECOMPOSE_CALLS,
-                node_engine: str = "inline") -> RunResult:
+                node_engine: str = "inline",
+                runtime_guard: bool = False) -> RunResult:
     """Public entry: run a project to completion. ``workspace`` is mandatory.
 
     ``depth`` is one of spec|scaffold|verify|execute|product (or 1..5).
@@ -1234,7 +1247,7 @@ def run_project(project: dict, *, workspace, depth: Any = DEPTH_SPEC,
     return Engine(tools=tools, workspace=workspace, depth=depth, agents=agents,
                   contracts_dir=contracts_dir, sink=sink, verbosity=verbosity,
                   max_decompose_calls=max_decompose_calls,
-                  node_engine=node_engine).run(project)
+                  node_engine=node_engine, runtime_guard=runtime_guard).run(project)
 
 
 def render_log(res: RunResult, level: int = None) -> str:
