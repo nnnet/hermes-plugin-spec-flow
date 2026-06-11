@@ -62,7 +62,14 @@ def load_scenario(path: Path) -> Scenario:
 
 
 def all_scenarios() -> list[Scenario]:
-    return [load_scenario(p) for p in sorted(SCENARIOS_DIR.glob("*.yaml"))]
+    """Policy-surface scenarios only — product cases (no imprecise/resolved
+    variants, e.g. p5) are exercised by the run pipeline, not the policy gate."""
+    out = []
+    for p in sorted(SCENARIOS_DIR.glob("*.yaml")):
+        d = yaml.safe_load(p.read_text(encoding="utf-8"))
+        if "imprecise" in d and "resolved" in d:
+            out.append(load_scenario(p))
+    return out
 
 
 def run_pipeline(tools: Any, variant: Variant) -> dict:
