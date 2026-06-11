@@ -1,0 +1,23 @@
+tests/harness/llm_decomposer.py
+  s_1b99a7ec9e9aa9::t_9207a75619db01 91-92
+tests/harness/llm_implementer.py
+  s_1b99a7ec9e9aa9::t_9207a75619db01 77-78
+tests/harness/claude_cli.py
+  s_1b99a7ec9e9aa9::t_9207a75619db01 74-87
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "32c59a5c3a2e8d569b33db60d00e4fc9bdc380be",
+  "prompts": {},
+  "sessions": {
+    "s_1b99a7ec9e9aa9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5025e0d8-1d1b-4f97-8c52-eec971a58fbd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <zkowkmdx@sharklasers.com>"
+    }
+  }
+}
