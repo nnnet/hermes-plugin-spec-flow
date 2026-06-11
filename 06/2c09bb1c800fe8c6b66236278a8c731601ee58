@@ -1,0 +1,35 @@
+skills/spec-flow-decompose/SKILL.md
+  s_a7f45290e91181::t_8f27ccacec34f3 63-77
+spec_flow_runner.py
+  s_a7f45290e91181::t_5cb0acf2715ac8 142,153
+  s_a7f45290e91181::t_b9fc76cf80f5b5 822-824
+  s_a7f45290e91181::t_17d940b5139ac2 991,993,996-997
+  s_a7f45290e91181::t_d6e6e45fd5574d 905-906,910-916,927-931
+  s_a7f45290e91181::t_4f0163171dd320 131-141,147-152,154-165
+  s_a7f45290e91181::t_d44cd0e6179088 33
+  s_a7f45290e91181::t_a5a47123bbad88 942-989
+  s_a7f45290e91181::t_2c48d521e815e1 1082-1083
+  s_a7f45290e91181::t_873f666ae37cbf 143-146
+tests/harness/llm_decomposer.py
+  s_a7f45290e91181::t_b2154bb1172599 54-58,65,68-75
+  s_a7f45290e91181::t_e31b9d1d006cc0 109-112,117-121
+  s_a7f45290e91181::t_8cb7857f0ecbf7 29-30
+tests/test_dedup_gate.py
+  s_a7f45290e91181::t_66a04780b4d5f8 1-124
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "062c09bb1c800fe8c6b66236278a8c731601ee58",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-fable-5"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
