@@ -773,6 +773,10 @@ class Engine:
         # goal by the decomposer agent, node by node (gated at every level)
         root = project.get("tree") or {"id": "L0", "title": project.get("goal", "project")}
         self._visit(root, depth=0, contract_ctx=None, phase="decompose", parent=None)
+        # persist the REALIZED tree (the decomposer attaches children in place)
+        # so reports can render the tree the plugin actually built — in llm mode
+        # the case carried no `tree`, this is where it becomes inspectable.
+        project["tree"] = root
 
         # Sweep: fire any declared revision that did not meet its in-run
         # trigger condition (back-compat + nothing declared is silently dropped).
@@ -821,11 +825,14 @@ class Engine:
             "node": {"id": node["id"], "title": node.get("title", node["id"])},
             "parent": parent, "depth": depth,
         })
-        merged = {**node, **(out or {})}
+        # mutate the node IN PLACE so the realized metrics/children attach to the
+        # live tree — this is how project["tree"] ends up holding the full tree
+        # the decomposer built (needed for the reports in llm mode).
+        node.update(out or {})
         self.emit("decompose", "spec-decomposer", "spec-flow-decompose", node["id"],
                   "decomposer agent built this level from the goal",
-                  f"{len(merged.get('children', []))} children proposed", level=L_MILESTONE)
-        return merged
+                  f"{len(node.get('children', []))} children proposed", level=L_MILESTONE)
+        return node
 
     def _visit(self, node: dict, depth: int, contract_ctx: Optional[dict], phase: str,
                parent: Optional[str] = None):
@@ -1418,8 +1425,11 @@ def render_tree(res: RunResult) -> str:
         for i, c in enumerate(kids):
             walk(c, cp, i == len(kids) - 1, False)
 
+    tree = proj.get("tree")
+    if not tree:
+        return "_(no task tree captured for this run)_"
     out.append("```")
-    walk(proj["tree"], "", True, True)
+    walk(tree, "", True, True)
     out.append("```")
     return "\n".join(out)
 
@@ -1468,7 +1478,10 @@ def render_mermaid(res: RunResult) -> str:
         for c in node.get("children", []):
             walk(c, nid, depth + 1)
 
-    walk(proj["tree"])
+    tree = proj.get("tree")
+    if not tree:
+        return "```mermaid\nflowchart TD\n    L0[\"(no task tree captured)\"]\n```"
+    walk(tree)
     lines += [
         "    classDef research fill:#0b525b,stroke:#118ab2,color:#fff",
         "    classDef contract fill:#3a0ca3,stroke:#7209b7,color:#fff",

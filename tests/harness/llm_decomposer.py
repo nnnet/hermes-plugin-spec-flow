@@ -49,13 +49,20 @@ Return ONLY a JSON object, no prose, no markdown fence:
 """
 
 LEAF_RULE = """
-HARD CONSTRAINT for this node: depth {depth} >= 3, so it MUST be atomic.
-Scope it down to ONE concern doable in <= 100 LOC and <= 5 tasks. Return
-metrics WITHIN the leaf thresholds and NO children."""
+HARD CONSTRAINT for this node: depth {depth} >= {leaf_depth}, so it MUST be
+atomic. Scope it down to ONE concern doable in <= 100 LOC and <= 5 tasks.
+Return metrics WITHIN the leaf thresholds and NO children."""
 
 
 # cheap & fast model for tree decomposition test runs; override via env
 MODEL = os.environ.get("SPEC_FLOW_LLM_MODEL", "haiku")
+# depth at which the decomposer is forced to leaf — bound the tree (and thus the
+# call count / wall time) for tractable live calibration. Default 3; the p1
+# calibration showed fanout ~4 to depth 3 = ~85 calls > the 80 budget, so a
+# tighter cap (e.g. 2) makes a run ~13-21 nodes. Override: SPEC_FLOW_LLM_LEAF_DEPTH.
+LEAF_DEPTH = int(os.environ.get("SPEC_FLOW_LLM_LEAF_DEPTH", "3"))
+# soft cap on children per node (the prompt asks the model to respect it)
+MAX_CHILDREN = int(os.environ.get("SPEC_FLOW_LLM_MAX_CHILDREN", "4"))
 
 
 def _ask(prompt: str) -> str:
@@ -80,16 +87,19 @@ def decompose(ctx: dict) -> dict:
         constitution="; ".join(p.get("constitution", [])),
         title=ctx["node"]["title"], id=ctx["node"]["id"],
         depth=ctx["depth"], parent=ctx.get("parent") or "—")
-    if ctx["depth"] >= 3:
-        prompt += LEAF_RULE.format(depth=ctx["depth"])
+    if ctx["depth"] >= LEAF_DEPTH:
+        prompt += LEAF_RULE.format(depth=ctx["depth"], leaf_depth=LEAF_DEPTH)
     nid = ctx["node"]["id"]
     reply = llm_log.timed_ask(_ask, role="decomposer", node=nid,
                               depth=ctx["depth"], model=MODEL, prompt=prompt)
     out = _extract_json(reply)
     # keep only the keys the engine understands
     keep = {k: out[k] for k in ("metrics", "children", "spike", "clarify") if k in out}
-    if ctx["depth"] >= 3:
+    if ctx["depth"] >= LEAF_DEPTH:
         keep.pop("children", None)          # convergence is enforced, not hoped for
+    # bound fan-out so a wide tree cannot blow the call budget
+    if keep.get("children") and len(keep["children"]) > MAX_CHILDREN:
+        keep["children"] = keep["children"][:MAX_CHILDREN]
     for child in keep.get("children", []) or []:
         child.pop("metrics", None)          # children are sized on their own visit
     children = [c.get("id", "?") for c in keep.get("children", []) or []]
