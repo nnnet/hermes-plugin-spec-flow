@@ -1,0 +1,213 @@
+# Project 5 — the PRODUCT case. Success is binary and material: the seeded
+# end-to-end smoke suite (tests/smoke/) must go green on the ASSEMBLED app at
+# the root integrate. An LLM opinion never substitutes for the green run —
+# the pytest verifier (harness/pytest_verifier.py) holds the gate.
+#
+# The case ships a deterministic skeleton (seed_files): WSGI entry point,
+# route registry, sqlite plumbing and the smoke suite that IS the acceptance
+# contract. Workers build features INTO the skeleton; they cannot redefine it.
+name: p5-mvp-marketplace
+node_engine: fsm
+goal: >
+  Рабочий MVP-маркетплейс: продавец регистрируется, выкладывает товар,
+  покупатель находит его и покупает, продавцу начисляется выплата —
+  всё как одно запускаемое приложение.
+target: >
+  tests/smoke/test_mvp_smoke.py is green on the assembled app:
+  seller registered -> product listed -> found via search -> order paid
+  (stub PSP) -> payout recorded for the seller.
+
+policy: {measurable_target: true, spend_per_action_usd: 0, human_in_loop: true,
+         involves_outreach: false, consent_obtained: true,
+         legal_exposure: false, legality_reviewed: true}
+
+constitution:
+  - "Standard library ONLY: HTTP through WSGI (src/app.py exposes wsgi_app),
+     storage through sqlite3 via src/db.py. No third-party packages anywhere."
+  - "Every feature is one module src/<feature>.py that registers endpoints
+     with @registry.route(METHOD, PATH), declares tables via
+     db.register_schema(SQL); a handler takes (payload, query) and returns
+     (status_code, json_serialisable)."
+  - "The product API contract is FROZEN by the smoke suite: POST /sellers,
+     POST /products, GET /products?search=, POST /orders,
+     GET /payouts?seller_id= — exactly as tests/smoke/test_mvp_smoke.py
+     exercises them. Do not rename, do not extend the contract."
+  - "Payments and KYC are internal stubs with honest interfaces: KYC
+     auto-verifies, the PSP auto-captures; no external providers, no card
+     data stored."
+  - "Every test sets the MARKETPLACE_DB env var to a fresh temp path BEFORE
+     connecting (db.connect reads it per call)."
+
+# HITL: автономный аппрув; воркеры могут спрашивать, человек может вмешаться.
+hitl:
+  approve_required: false
+  worker_may_ask_human: true
+  human_may_intervene: true
+
+# Ревью-политика: доработка до зелёного, до 3 раундов на узел.
+review:
+  on_reject: rework
+  max_rework: 3
+
+# ---- deterministic skeleton the workers build INTO --------------------------
+seed_files:
+  src/registry.py: |
+    """Route registry — features register their endpoints here."""
+    ROUTES = {}
+
+
+    def route(method, path):
+        def deco(fn):
+            ROUTES[(method.upper(), path)] = fn
+            return fn
+        return deco
+
+  src/db.py: |
+    """SQLite plumbing. Features declare schemas; every connection applies
+    them idempotently (CREATE TABLE IF NOT EXISTS), so import order and the
+    MARKETPLACE_DB env var never race."""
+    import os
+    import sqlite3
+
+    _SCHEMAS = []
+
+
+    def register_schema(sql):
+        if sql not in _SCHEMAS:
+            _SCHEMAS.append(sql)
+
+
+    def connect():
+        conn = sqlite3.connect(os.environ.get("MARKETPLACE_DB",
+                                              "marketplace.db"))
+        conn.row_factory = sqlite3.Row
+        for sql in _SCHEMAS:
+            conn.executescript(sql)
+        return conn
+
+  src/app.py: |
+    """WSGI entry point. Features live in src/<feature>.py: importing the
+    package registers their routes; this module only dispatches."""
+    import importlib
+    import json
+    import sys
+    from pathlib import Path
+    from urllib.parse import parse_qs
+
+    _SRC = Path(__file__).resolve().parent
+    if str(_SRC) not in sys.path:
+        sys.path.insert(0, str(_SRC))
+
+    import registry
+
+
+    def _load_features():
+        for f in sorted(_SRC.glob("*.py")):
+            if f.stem not in ("app", "registry", "db"):
+                importlib.import_module(f.stem)
+
+
+    _load_features()
+
+
+    def wsgi_app(environ, start_response):
+        method = environ["REQUEST_METHOD"].upper()
+        path = environ.get("PATH_INFO", "/")
+        query = {k: v[0] for k, v in
+                 parse_qs(environ.get("QUERY_STRING", "")).items()}
+        try:
+            length = int(environ.get("CONTENT_LENGTH") or 0)
+        except ValueError:
+            length = 0
+        raw = environ["wsgi.input"].read(length) if length else b""
+        try:
+            payload = json.loads(raw.decode("utf-8")) if raw else {}
+        except json.JSONDecodeError:
+            payload = None
+        handler = registry.ROUTES.get((method, path))
+        if handler is None:
+            status, body = 404, {"error": f"no route {method} {path}"}
+        elif payload is None:
+            status, body = 400, {"error": "invalid JSON body"}
+        else:
+            try:
+                status, body = handler(payload, query)
+            except Exception as exc:  # noqa: BLE001 — surface, don't crash
+                status, body = 500, {"error": str(exc)[:200]}
+        data = json.dumps(body).encode("utf-8")
+        start_response(f"{status} X", [("Content-Type", "application/json"),
+                                       ("Content-Length", str(len(data)))])
+        return [data]
+
+  tests/smoke/test_mvp_smoke.py: |
+    """END-TO-END acceptance: the assembled marketplace handles the full
+    seller -> product -> search -> paid order -> payout flow. This suite IS
+    the project's measurable target; it gates ONLY the root integrate."""
+    import io
+    import json
+    import os
+    import sys
+    import tempfile
+    from pathlib import Path
+
+    import pytest
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+
+
+    @pytest.fixture(autouse=True)
+    def fresh_db(monkeypatch, tmp_path):
+        monkeypatch.setenv("MARKETPLACE_DB", str(tmp_path / "smoke.db"))
+
+
+    def call(method, path, payload=None, query=""):
+        import app
+        body = json.dumps(payload).encode() if payload is not None else b""
+        environ = {
+            "REQUEST_METHOD": method, "PATH_INFO": path,
+            "QUERY_STRING": query, "CONTENT_LENGTH": str(len(body)),
+            "wsgi.input": io.BytesIO(body),
+        }
+        captured = {}
+
+        def start_response(status, headers):
+            captured["status"] = int(status.split()[0])
+
+        out = b"".join(app.wsgi_app(environ, start_response))
+        return captured["status"], json.loads(out or b"{}")
+
+
+    def test_full_marketplace_flow():
+        status, seller = call("POST", "/sellers",
+                              {"name": "Re-Gear GmbH",
+                               "email": "ops@regear.example"})
+        assert status == 201, seller
+        assert seller["kyc_status"] == "verified"    # KYC stub auto-verifies
+
+        status, product = call("POST", "/products",
+                               {"seller_id": seller["id"],
+                                "title": "Refurbished rack server",
+                                "price_cents": 49900})
+        assert status == 201, product
+
+        status, found = call("GET", "/products", payload={}, query="search=rack")
+        assert status == 200, found
+        ids = [p["id"] for p in found["items"]]
+        assert product["id"] in ids
+
+        status, order = call("POST", "/orders",
+                             {"product_id": product["id"],
+                              "buyer_email": "buyer@corp.example"})
+        assert status == 201, order
+        assert order["status"] == "paid"             # PSP stub auto-captures
+
+        status, payouts = call("GET", "/payouts", payload={},
+                               query=f"seller_id={seller['id']}")
+        assert status == 200, payouts
+        amounts = [p["amount_cents"] for p in payouts["items"]]
+        assert 49900 in amounts, "the seller must be owed the sale amount"
+
+
+    def test_unknown_route_is_404():
+        status, body = call("GET", "/nope", payload={})
+        assert status == 404

@@ -150,6 +150,10 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
             if meter is not None:
                 impl_fn = meter.wrap("implementer", impl_fn)
             agents["implementer"] = impl_fn
+            # the integrate verdict is a REAL pytest run, never an opinion;
+            # the smoke suite (tests/smoke/) gates only the root integrate
+            from harness import pytest_verifier
+            agents["verifier"] = pytest_verifier.make_verifier()
     if hitl == "console":
         from harness import hitl as hitl_mod
         agents["approver"] = hitl_mod.console_approver
@@ -198,6 +202,15 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
     exec_case.pop("node_engine", None)
     review_policy = case.get("review") or None
     exec_case.pop("review", None)
+    # seed files: the case may ship a deterministic skeleton (app entry,
+    # router/db plumbing, the end-to-end smoke suite) the workers build INTO
+    seeds = case.get("seed_files") or {}
+    exec_case.pop("seed_files", None)
+    for rel, body in seeds.items():
+        p = Path(case_dir / "workspace" / rel)
+        if p.resolve().is_relative_to((case_dir / "workspace").resolve()):
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(body, encoding="utf-8")
     res = eng.run_project(exec_case, workspace=str(case_dir / "workspace"), depth=depth,
                           tools=tools, agents=agents or None,
                           contracts_dir=str(eng.CONTRACTS), sink=sink,
