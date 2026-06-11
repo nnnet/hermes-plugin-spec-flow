@@ -2,6 +2,7 @@
 # is DELIBERATELY imprecise (no niche, no metric, no spend cap, outreach + legal
 # exposure unhandled). The plugin must CATCH this, not build it.
 name: p1-earn-for-living
+node_engine: inline   # node lifecycle engine (run config, as Hermes would pass it)
 goal: "Заработать деньги на жизнь и развитие проектов (ниша не задана)"
 imprecision: >
   "Just earn / drive traffic" with mass outreach, real money and no human gate —

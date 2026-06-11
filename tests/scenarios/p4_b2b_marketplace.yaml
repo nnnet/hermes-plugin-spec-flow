@@ -12,6 +12,7 @@
 #       * a 4-level branch ('catalog/listings/...')
 #       * continuous-revision lane invalidating 'billing' (version bump + re-derive)
 name: p4-b2b-marketplace
+node_engine: fsm      # full case runs through the state-machine lifecycle
 goal: "B2B-маркетплейс восстановленного оборудования с выплатами продавцам"
 
 # ---- (a) policy surface -----------------------------------------------------

@@ -56,8 +56,10 @@ def run_scenario(case: dict, **kw):
     """
     from harness import blueprint_decomposer as _bp
     bp = case.get("blueprint")
-    exec_case = {k: v for k, v in case.items() if k != "blueprint"}
+    exec_case = {k: v for k, v in case.items() if k not in ("blueprint", "node_engine")}
     agents = dict(kw.pop("agents", None) or {})
     if bp and "decomposer" not in agents:
         agents["decomposer"] = _bp.make(bp)
+    # run config carried BY the case (as Hermes would pass it): node lifecycle engine
+    kw.setdefault("node_engine", case.get("node_engine", "inline"))
     return _runner.run_project(exec_case, agents=(agents or None), **kw)

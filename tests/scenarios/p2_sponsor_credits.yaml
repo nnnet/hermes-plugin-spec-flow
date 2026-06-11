@@ -2,6 +2,7 @@
 # R&D. Imprecise L0 hides the legitimacy boundary (eligibility / honest use)
 # and has no measurable R&D outcome.
 name: p2-sponsor-credits-rnd
+node_engine: inline   # node lifecycle engine (run config, as Hermes would pass it)
 goal: "Честно получить спонсорские LLM-кредиты и использовать для R&D"
 imprecision: >
   "Get sponsor limits for own use" reads as misappropriation unless scoped to

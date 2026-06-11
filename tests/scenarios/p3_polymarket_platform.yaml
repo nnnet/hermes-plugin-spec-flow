@@ -2,6 +2,7 @@
 # ROI / Sharpe on a prediction market. Imprecise L0 is an unsupervised
 # real-money autonomous trader with jurisdiction exposure and no targets.
 name: p3-prediction-market-platform
+node_engine: inline   # node lifecycle engine (run config, as Hermes would pass it)
 goal: "Саморазвивающаяся платформа: ROI от депозита и коэффициент Шарпа на prediction-market"
 imprecision: >
   "Self-developing platform that earns" implies autonomous real-money trades

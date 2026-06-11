@@ -130,10 +130,13 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
         from harness import blueprint_decomposer
         agents["decomposer"] = blueprint_decomposer.make(case["blueprint"])
         exec_case = {k: v for k, v in case.items() if k != "blueprint"}
+    # run config from the CASE itself (as Hermes would pass it): lifecycle engine
+    node_engine = case.get("node_engine", "inline")
+    exec_case.pop("node_engine", None)
     res = eng.run_project(exec_case, workspace=str(case_dir / "workspace"), depth=depth,
                           tools=tools, agents=agents or None,
                           contracts_dir=str(eng.CONTRACTS), sink=sink,
-                          max_decompose_calls=max_calls)
+                          max_decompose_calls=max_calls, node_engine=node_engine)
     # persist the REALIZED task tree the plugin built (parent->children), so the
     # dashboard / offline review can walk the exact structure node by node
     (case_dir / "tree.json").write_text(
@@ -271,7 +274,18 @@ def main() -> int:
                          "plugin's own report) — stays up after the run for review")
     ap.add_argument("--dashboard-port", type=int, default=8088,
                     help="port for --dashboard (default 8088)")
+    ap.add_argument("--gateway", default="headroom",
+                    choices=["headroom", "bifrost", "direct"],
+                    help="LLM gateway for live agents: 'headroom' keeps the env "
+                         "routing as-is (default), 'bifrost' points claude at the "
+                         "Bifrost Anthropic route (env SPEC_FLOW_BIFROST_URL), "
+                         "'direct' clears ANTHROPIC_BASE_URL")
     args = ap.parse_args()
+    if args.gateway == "bifrost":
+        os.environ["ANTHROPIC_BASE_URL"] = os.environ.get(
+            "SPEC_FLOW_BIFROST_URL", "http://127.0.0.1:8080/anthropic")
+    elif args.gateway == "direct":
+        os.environ.pop("ANTHROPIC_BASE_URL", None)
     os.environ["SPEC_FLOW_LLM_MODEL"] = args.model
     if args.decomposer == "llm" and not args.case:
         # live LLM runs cost real quota: one call per tree node — keep the
@@ -306,6 +320,8 @@ def main() -> int:
         (case_dir / "meta.json").write_text(json.dumps({
             "case": name, "depth": args.depth, "decomposer": args.decomposer,
             "implementer": args.implementer, "model": args.model, "stamp": stamp,
+            "node_engine": case.get("node_engine", "inline"),
+            "gateway": args.gateway,
             "workspace": "workspace", "run_dir": str(case_dir),
         }, ensure_ascii=False, indent=2), encoding="utf-8")
         # fresh state per case so gate cooldowns never leak between cases

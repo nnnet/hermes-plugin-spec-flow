@@ -56,7 +56,20 @@ except Exception:  # noqa: BLE001
     try:
         import spec_flow_node_fsm as _nodefsm  # type: ignore
     except Exception:  # noqa: BLE001
-        _nodefsm = None  # type: ignore
+        # last resort: load by path next to this file — covers embedders that
+        # exec the plugin under a synthetic package name (e.g. the case runner)
+        try:
+            import importlib.util as _ilu
+            import sys as _sys
+            from pathlib import Path as _P
+            _spec = _ilu.spec_from_file_location(
+                "spec_flow_node_fsm", _P(__file__).resolve().parent / "spec_flow_node_fsm.py")
+            _nodefsm = _ilu.module_from_spec(_spec)  # type: ignore
+            # register BEFORE exec: @dataclass resolves cls.__module__ via sys.modules
+            _sys.modules.setdefault("spec_flow_node_fsm", _nodefsm)
+            _spec.loader.exec_module(_nodefsm)       # type: ignore
+        except Exception:  # noqa: BLE001
+            _nodefsm = None  # type: ignore
 
 if _nodefsm is not None:
     _NodeLifecycle = _nodefsm.NodeLifecycle
