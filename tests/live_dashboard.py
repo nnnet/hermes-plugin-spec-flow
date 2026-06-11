@@ -406,17 +406,23 @@ def _build_state(run_dir: pathlib.Path) -> dict:
                            if ok else f"отклонено: {str(e.get('error',''))[:80]}"))
 
     try:
-        report_html = _md_to_html(T.build_run_report(events, level=2, title=run_dir.name)) \
-            if events else "<p class=dim>событий ещё нет…</p>"
-        if events and not done:
+        report_md = T.build_run_report(events, level=2, title=run_dir.name) \
+            if events else ""
+        if report_md and not done:
             # the audit checks COMPLETED-run invariants; on a live run the
             # completion rules (integrate per branch, L0 complete) have not
-            # happened YET — flag that so red rows are read as "pending"
+            # happened YET — show those rows as pending, not as violations
+            report_md = "\n".join(
+                ln.replace("❌ error", "⏳ ждёт финала", 1)
+                if "R5-branch-no-integrate" in ln else ln
+                for ln in report_md.splitlines())
+        report_html = _md_to_html(report_md) if report_md \
+            else "<p class=dim>событий ещё нет…</p>"
+        if events and not done:
             report_html = (
-                "<p class=muted>⏳ прогон ещё идёт: правила завершённости "
-                "(R5 integrate-у-ветки, R8 L0-complete) ожидаемо красные, "
-                "пока ветки не закрыты — это «ещё не наступило», не "
-                "нарушение. Судить по ним — после финала.</p>" + report_html)
+                "<p class=muted>⏳ прогон ещё идёт: интеграция у веток — "
+                "снизу вверх, поэтому R5 у незакрытых веток помечен «ждёт "
+                "финала». Судить аудит — после завершения.</p>" + report_html)
     except Exception as exc:                                       # noqa: BLE001
         report_html = f"<p>report error: {html.escape(str(exc))}</p>"
 

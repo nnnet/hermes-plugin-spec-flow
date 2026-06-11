@@ -979,14 +979,21 @@ class Engine:
         if reviewer is None or not spec_rel:
             return None, ""
         self.gate_calls["spec_review"] = self.gate_calls.get("spec_review", 0) + 1
-        try:
-            out = reviewer({"node": nid, "title": title, "spec": spec_rel,
-                            "goal": self._goal, "constitution": self._constitution,
-                            "workspace_root": self.workspace.root}) or {}
-        except Exception as exc:  # noqa: BLE001 — worker must not kill the run
-            self.emit("review", "spec-reviewer", "spec-reviewer", nid,
-                      "spec review worker failed — no verdict", str(exc)[:200],
-                      "spec_review", "ERROR", level=L_MILESTONE)
+        out = None
+        for round_no in (1, 2):  # one retry — a crash is infra, not a verdict
+            try:
+                out = reviewer({"node": nid, "title": title, "spec": spec_rel,
+                                "goal": self._goal,
+                                "constitution": self._constitution,
+                                "workspace_root": self.workspace.root}) or {}
+                break
+            except Exception as exc:  # noqa: BLE001 — must not kill the run
+                self.emit("review", "spec-reviewer", "spec-reviewer", nid,
+                          "spec review worker failed"
+                          + (" — retrying" if round_no == 1 else " — no verdict"),
+                          str(exc)[:200], "spec_review", "ERROR",
+                          level=L_MILESTONE)
+        if out is None:
             return None, ""
         verdict = "REJECT" if str(out.get("verdict", "PASS")).upper() == "REJECT" else "PASS"
         reasons = "; ".join(str(r) for r in out.get("reasons") or [])

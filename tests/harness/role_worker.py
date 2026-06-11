@@ -111,7 +111,15 @@ def _extract_json(text: str) -> dict:
     m = re.search(r"\{.*\}", text, re.S)
     if not m:
         raise ValueError(f"no JSON in worker reply: {text[-300:]}")
-    return json.loads(m.group(0))
+    # models sometimes append prose (or a second object) after the JSON —
+    # take the FIRST complete object instead of failing with "Extra data"
+    try:
+        return json.loads(m.group(0))
+    except json.JSONDecodeError:
+        obj, _ = json.JSONDecoder().raw_decode(text, m.start())
+        if not isinstance(obj, dict):
+            raise ValueError(f"worker reply is not a JSON object: {text[:200]}")
+        return obj
 
 
 _ASK_RULE = """
