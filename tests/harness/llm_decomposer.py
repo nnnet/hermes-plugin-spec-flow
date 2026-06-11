@@ -17,6 +17,8 @@ import os
 import re
 import subprocess
 
+from . import llm_log
+
 PROMPT = """You are the spec-decomposer of a Spec-Driven Development run.
 
 Project goal: {goal}
@@ -80,11 +82,18 @@ def decompose(ctx: dict) -> dict:
         depth=ctx["depth"], parent=ctx.get("parent") or "—")
     if ctx["depth"] >= 3:
         prompt += LEAF_RULE.format(depth=ctx["depth"])
-    out = _extract_json(_ask(prompt))
+    nid = ctx["node"]["id"]
+    reply = llm_log.timed_ask(_ask, role="decomposer", node=nid,
+                              depth=ctx["depth"], model=MODEL, prompt=prompt)
+    out = _extract_json(reply)
     # keep only the keys the engine understands
     keep = {k: out[k] for k in ("metrics", "children", "spike", "clarify") if k in out}
     if ctx["depth"] >= 3:
         keep.pop("children", None)          # convergence is enforced, not hoped for
     for child in keep.get("children", []) or []:
         child.pop("metrics", None)          # children are sized on their own visit
+    children = [c.get("id", "?") for c in keep.get("children", []) or []]
+    llm_log.log_outcome(role="decomposer", node=nid, depth=ctx["depth"],
+                        verdict="leaf" if not children else "branch",
+                        children=children)
     return keep

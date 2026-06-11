@@ -95,6 +95,10 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
     wraps the LLM agents to record call/token cost into COST.md."""
     tools.CONTRACT_VALIDATORS["openapi"] = [
         "python3", str(eng.OPENAPI_DIFF), "{contract}", "{code}"]
+    # live agents log every model call here for post-hoc analysis (no guessing)
+    live = decomposer == "llm" or implementer == "llm"
+    if live:
+        os.environ["SPEC_FLOW_LLM_LOG"] = str(case_dir / "llm-log.jsonl")
     trace = case_dir / "trace.jsonl"
     sink = eng.LogSink(path=str(trace), level=eng.L_DETAIL, fmt="jsonl", enabled=True)
     # agents are injectable: at depth=execute a real implementer is required
@@ -127,6 +131,16 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
         from harness import cost as _cost
         _cost.write_cost_md(meter, str(case_dir / "COST.md"),
                             model=model, case=case.get("name", ""))
+    # turn the raw LLM call log into an analysis (tree shape, latency, errors)
+    log_file = case_dir / "llm-log.jsonl"
+    if live and log_file.is_file():
+        try:
+            import analyze_llm_log as _an
+            (case_dir / "llm-analysis.md").write_text(
+                _an.render(_an.analyse(_an._load(log_file))), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001 — analysis must not fail a run
+            (case_dir / "llm-analysis.md").write_text(f"analysis failed: {exc}\n",
+                                                      encoding="utf-8")
 
     widths = eng._column_widths(res.events)
     (case_dir / "log.txt").write_text(

@@ -19,6 +19,8 @@ import os
 import re
 import subprocess
 
+from . import llm_log
+
 PROMPT = """You are the implementer of a Spec-Driven Development run.
 
 Implement EXACTLY ONE leaf task as real, working Python.
@@ -84,9 +86,18 @@ def make_implementer(ask=_ask):
         fn = _snake(node)
         prompt = PROMPT.format(id=node, title=title, spec=spec, fn=fn,
                                goal=ctx.get("goal", ""))
-        out = _parse(ask(prompt))
+        reply = llm_log.timed_ask(ask, role="implementer", node=node, depth="-",
+                                  model=MODEL, prompt=prompt)
+        try:
+            out = _parse(reply)
+        except Exception as exc:  # noqa: BLE001
+            llm_log.log_outcome(role="implementer", node=node, parse="fail",
+                                error=repr(exc)[:200])
+            raise
         ws._write(f"src/{fn}.py", out["code"], "code")
         ws._write(f"tests/test_{fn}.py", out["test"], "test")
+        llm_log.log_outcome(role="implementer", node=node, parse="ok",
+                            code_chars=len(out["code"]), test_chars=len(out["test"]))
 
     return implement
 
