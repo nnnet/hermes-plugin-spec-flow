@@ -79,6 +79,14 @@ def _model_for(role: str) -> str:
             or os.environ.get("SPEC_FLOW_LLM_MODEL", "haiku"))
 
 
+def _log_call_start(role: str, node: str, depth: int, model: str) -> None:
+    """The live dashboard derives 'what is being worked on RIGHT NOW' from
+    an open call_start (one without a following outcome) — same contract
+    as the sim harness's timed_ask."""
+    llm_log.log({"event": "call_start", "role": role, "worker": True,
+                 "node": node, "depth": depth, "model": model})
+
+
 def _run_claude(prompt: str, *, system: str, allowed: list[str],
                 disallowed: list[str], cwd: Optional[str], model: str) -> str:
     """One real worker session. Separated for offline test stubbing."""
@@ -255,6 +263,7 @@ def make_decomposer(workspace_dir: Optional[str] = None,
         note = channel.poll_note() if channel is not None else None
         if note:
             prompt += _NOTE_RULE.format(note=note)
+        _log_call_start("decomposer", nid, ctx["depth"], model)
         raw = _dialog_round(prompt, role="decomposer", node=nid, system=system,
                             allowed=allowed, disallowed=disallowed,
                             cwd=workspace_dir, model=model, channel=channel)
@@ -306,6 +315,7 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         note = channel.poll_note() if channel is not None else None
         if note:
             prompt += _NOTE_RULE.format(note=note)
+        _log_call_start("implementer", nid, -1, model)
         raw = _dialog_round(prompt, role="implementer", node=nid, system=system,
                             allowed=allowed, disallowed=disallowed,
                             cwd=ws_root, model=model, channel=channel)
@@ -356,6 +366,7 @@ def make_reviewer() -> Callable[[dict], dict]:
         prompt = _REVIEW_TASK.format(
             spec=ctx["spec"], goal=ctx.get("goal", ""),
             constitution="; ".join(ctx.get("constitution") or []))
+        _log_call_start("reviewer", str(ctx.get("node", "?")), -1, model)
         raw = _run_claude(prompt, system=system, allowed=allowed,
                           disallowed=disallowed, cwd=ctx.get("workspace_root"),
                           model=model)
@@ -393,6 +404,7 @@ def make_researcher() -> Callable[[dict], dict]:
         prompt = _RESEARCH_TASK.format(goal=ctx.get("goal", ""),
                                        node=ctx.get("node", "?"),
                                        question=ctx["question"])
+        _log_call_start("researcher", str(ctx.get("node", "?")), -1, model)
         raw = _run_claude(prompt, system=system, allowed=allowed,
                           disallowed=disallowed, cwd=ctx.get("workspace_root"),
                           model=model)

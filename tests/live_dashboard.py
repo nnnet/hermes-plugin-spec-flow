@@ -421,7 +421,8 @@ def _build_state(run_dir: pathlib.Path) -> dict:
             last_start = None
     if not done:
         if last_start:
-            role_ru = {"decomposer": "декомпозирует", "implementer": "пишет код"}.get(
+            role_ru = {"decomposer": "декомпозирует", "implementer": "пишет код",
+                       "reviewer": "ревьюит", "researcher": "исследует"}.get(
                 last_start.get("role"), last_start.get("role"))
             current = f"🟢 {role_ru} узел «{last_start.get('node')}» (L{last_start.get('depth')})"
         elif events:
@@ -443,6 +444,13 @@ def _build_state(run_dir: pathlib.Path) -> dict:
     if not done and last_start:
         active = {"node": last_start.get("node"),
                   "role": last_start.get("role")}
+    elif not done and events:
+        # fallback for runs whose workers do not bracket sessions with
+        # call_start (older harness in a live process): the tail of the
+        # trace is the best approximation of where the pipeline is
+        last_task = str(events[-1].get("task") or "").split(":")[0]
+        if last_task:
+            active = {"node": last_task, "role": events[-1].get("phase")}
     return {
         "name": run_dir.name,
         "status": "done" if done else "running",
