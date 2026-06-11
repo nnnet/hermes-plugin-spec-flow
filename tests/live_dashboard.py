@@ -439,11 +439,16 @@ def _build_state(run_dir: pathlib.Path) -> dict:
         except json.JSONDecodeError:
             pass
 
+    active = None
+    if not done and last_start:
+        active = {"node": last_start.get("node"),
+                  "role": last_start.get("role")}
     return {
         "name": run_dir.name,
         "status": "done" if done else "running",
         "goal": inputs_goal,
         "current": current,
+        "active": active,
         "counts": {
             "nodes": sum(1 for e in llm if e.get("event") == "outcome"
                          and e.get("role") == "decomposer") or len(meta),
@@ -551,6 +556,7 @@ pre.code{background:#161b22;padding:10px;border-radius:6px;overflow:auto;white-s
 .diff .add{background:#12361f;color:#3fb950}.diff .del{background:#3a1620;color:#f85149}
 .muted{color:#6e7681}.kv{color:#8b949e}
 .badge{font-size:9px;vertical-align:middle;letter-spacing:1px}
+.actv{color:#e3b341;font-weight:700}
 .errbox{background:#3a162040;border:1px solid #f8514966;border-radius:6px;padding:6px 10px;margin:8px 0;font-size:12px}.errbox li{margin:2px 0}
 .gtabs{margin-top:8px}
 </style></head><body>
@@ -572,6 +578,12 @@ pre.code{background:#161b22;padding:10px;border-radius:6px;overflow:auto;white-s
 <script>
 if(window.mermaid)mermaid.initialize({startOnLoad:false,theme:'dark',securityLevel:'loose',flowchart:{useMaxWidth:false}});
 let STATE=null, SEL=null, EXPANDED={}, GCOLL={}, CLICKT=null, NTAB='spec', GTAB='inputs', FILECACHE={}, AUTO=true;
+let ACTIVE={node:null,role:null,since:0};
+function trackActive(){const a=STATE&&STATE.active;
+ if(!a){ACTIVE={node:null,role:null,since:0};return;}
+ if(a.node!==ACTIVE.node||a.role!==ACTIVE.role)ACTIVE={node:a.node,role:a.role,since:Date.now()};}
+setInterval(()=>{const el=document.getElementById('elapsed');
+ if(el&&ACTIVE.since)el.textContent=' · уже '+Math.round((Date.now()-ACTIVE.since)/1000)+'с';},1000);
 const $=s=>document.querySelector(s);
 function mray(){if(window.mermaid){try{mermaid.run({querySelector:'#detail .mermaid'});}catch(e){}}}
 
@@ -586,8 +598,9 @@ function treeHTML(n){
  const open=EXPANDED[n.id]!==false; // default expanded
  const tw=has?`<span class=tw data-tw="${n.id}">${open?'▾':'▸'}</span>`:'<span class=tw></span>';
  const sel=SEL===n.id?' sel':'';
- const ico=has?'🌿':'🍃';
- let h=`<li>${tw}<span class="node${sel}" data-id="${n.id}">${ico} ${n.id} <span class=badge>${badgeStr(n.episodes)}</span></span>`;
+ const act=ACTIVE.node===n.id;
+ const ico=act?'⏳':(has?'🌿':'🍃');
+ let h=`<li>${tw}<span class="node${sel}${act?' actv':''}" data-id="${n.id}">${ico} ${n.id} <span class=badge>${badgeStr(n.episodes)}</span></span>`;
  if(has&&open){h+='<ul>'+n.children.map(treeHTML).join('')+'</ul>';}
  h+='</li>';return h;
 }
@@ -600,7 +613,8 @@ function render(){
  const c=STATE.counts;$('#counts').textContent=`узлов ${c.nodes} · листьев ${c.leaves} · реализовано ${c.impl} · событий ${c.events}`;
  $('#mode').innerHTML='⟳ авто: '+(AUTO?'<span class=live>вкл</span>':'<span class=dim>выкл</span>');
  $('#goal').textContent=STATE.goal?('🎯 '+STATE.goal):'';
- $('#current').innerHTML=live?('сейчас: '+esc(STATE.current||'')):'';
+ trackActive();
+ $('#current').innerHTML=live?('сейчас: '+esc(STATE.current||'')+'<span id=elapsed class=dim></span>'):'';
  $('#tree').innerHTML='<ul>'+treeHTML(STATE.tree)+'</ul>';
  if(!SEL) renderGlobal(); else renderNode();
 }
@@ -642,12 +656,12 @@ function graphSVG(){
  const X=n=>PX+n._d*COLW,Y=n=>PY+n._y*ROWH;const W=PX*2+(maxD+1)*COLW,H=PY*2+(maxY+1)*ROWH;
  let s=`<svg width="${W}" height="${H}" style="min-width:${W}px">`;
  edges.forEach(([a,b])=>{const x1=X(a)+BW,y1=Y(a)+BH/2,x2=X(b),y2=Y(b)+BH/2;s+=`<path d="M${x1} ${y1} C${x1+24} ${y1}, ${x2-24} ${y2}, ${x2} ${y2}" stroke="#30363d" fill="none"/>`;});
- nodes.forEach(n=>{const leaf=!(n.children&&n.children.length);const sel=SEL===n.id;const coll=!leaf&&GCOLL[n.id];
-  const ico=coll?'▸🌿':(leaf?'🍃':'🌿');
+ nodes.forEach(n=>{const leaf=!(n.children&&n.children.length);const sel=SEL===n.id;const coll=!leaf&&GCOLL[n.id];const act=ACTIVE.node===n.id;
+  const ico=act?'⏳':(coll?'▸🌿':(leaf?'🍃':'🌿'));
   const tail=coll?` +${countDesc(n)}`:'';
   const bdg=badgeStr(n.episodes);
   s+=`<g class=gnode data-id="${n.id}" transform="translate(${X(n)},${Y(n)})" style="cursor:pointer">`+
-     `<rect width="${BW}" height="${BH}" rx="5" fill="${sel?'#1f6feb55':(leaf?'#161b22':'#13251a')}" stroke="${sel?'#1f6feb':(leaf?'#30363d':'#3fb950')}"/>`+
+     `<rect width="${BW}" height="${BH}" rx="5" fill="${act?'#3a2a1255':(sel?'#1f6feb55':(leaf?'#161b22':'#13251a'))}" stroke="${act?'#e3b341':(sel?'#1f6feb':(leaf?'#30363d':'#3fb950'))}"${act?' stroke-dasharray="4 3"':''}/>`+
      `<text x="7" y="15" fill="#c9d1d9" font-size="11">${ico} ${esc(n.id).slice(0,14)}${tail}</text>`+
      (bdg?`<text x="${BW-5}" y="14" text-anchor="end" font-size="8">${bdg}</text>`:'')+`</g>`;});
  s+='</svg>';return '<div style="overflow:auto;border:1px solid #21262d;border-radius:6px;padding:6px">'+s+'</div>';
