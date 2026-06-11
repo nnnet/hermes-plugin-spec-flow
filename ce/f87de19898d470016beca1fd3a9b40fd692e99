@@ -1,0 +1,19 @@
+tests/live_dashboard.py
+  s_8e2fa1fa59aaa1::t_aa10ee1353fe34 380
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "cef87de19898d470016beca1fd3a9b40fd692e99",
+  "prompts": {},
+  "sessions": {
+    "s_8e2fa1fa59aaa1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b6f6af14-15fd-4882-a0e5-15da1c167670",
+        "model": "claude-haiku-4-5-20251001"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
