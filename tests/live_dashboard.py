@@ -641,7 +641,7 @@ body{margin:0;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;background:#0d
 .home{cursor:pointer;background:#1f6feb;color:#fff;border-radius:6px;padding:2px 10px;font-weight:700}.home:hover{background:#388bfd}
 .live{color:#3fb950}.donec{color:#8b949e}
 .bar2{position:sticky;top:38px;z-index:4;background:#0f141a;border-bottom:1px solid #21262d;padding:5px 14px;display:flex;gap:18px;align-items:center;flex-wrap:wrap;font-size:12px}
-.goal{color:#e3b341;display:block;min-height:1.25em}.cur{color:#3fb950;font-weight:700;display:block;margin-top:2px;min-height:1.25em}
+.goal{color:#e3b341;display:block;min-height:1.25em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.cur{color:#3fb950;font-weight:700;display:block;margin-top:2px;min-height:1.25em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 ol.tl{padding-left:18px}ol.tl li{margin:1px 0;white-space:nowrap}
 .tl .tk{color:#6e7681;display:inline-block;min-width:34px}
 .tl .ph{color:#79c0ff;display:inline-block;min-width:96px}
