@@ -1,0 +1,39 @@
+spec_flow_runner.py
+  s_a7f45290e91181::t_0d99484ad8453f 37
+  s_a7f45290e91181::t_916228ae61baf6 1747-1750,1752,1755-1764
+  s_a7f45290e91181::t_4ef234b12ad451 1020-1024
+tests/harness/commit_queue.py
+  s_a7f45290e91181::t_617771fb45cd96 1-57
+tests/harness/role_worker.py
+  s_a7f45290e91181::t_0e77125f1cd412 636-651
+  s_a7f45290e91181::t_a95e1d39720d17 30
+  s_a7f45290e91181::t_fc1021c109466a 678-681,684-704,707
+  s_a7f45290e91181::t_8191e7fc6e50f7 560-563
+tests/test_commit_queue.py
+  s_a7f45290e91181::t_7d72ca8c452ac4 93,108,110,114-115
+  s_a7f45290e91181::t_8654582c08d1ed 1-92,94-107,109,111-113
+tests/run_cases.py
+  s_a7f45290e91181::t_7aa279712410b1 358-359
+  s_a7f45290e91181::t_e9937bfe3d56bc 399-403
+  s_a7f45290e91181::t_2e2acca345fb67 360-364
+tests/harness/pytest_verifier.py
+  s_a7f45290e91181::t_ed2b66ad1e5548 257-277
+tests/scenarios/p4_b2b_marketplace.yaml
+  s_a7f45290e91181::t_b9cb84728cd35b 213-218
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "3b1770f90144227cb803ee736904b6bc0eb37dc0",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-fable-5"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
