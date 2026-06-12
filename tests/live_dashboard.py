@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import time as _time
 import pathlib
 import re
 import sys
@@ -473,6 +474,14 @@ def _build_state(run_dir: pathlib.Path) -> dict:
     if not done and last_start:
         active = {"node": last_start.get("node"),
                   "role": last_start.get("role")}
+        # REAL elapsed of the open call: llm-log t is run-relative, the
+        # first trace event carries the run-start epoch — so a page
+        # reload shows the true age, not 'since the client noticed'
+        t0 = events[0].get("t") if events else None
+        rel = last_start.get("t")
+        if t0 is not None and rel is not None:
+            active["elapsed_s"] = max(
+                0.0, _time.time() - (float(t0) + float(rel)))
     elif not done and events:
         # fallback for runs whose workers do not bracket sessions with
         # call_start (older harness in a live process): the tail of the
@@ -480,6 +489,10 @@ def _build_state(run_dir: pathlib.Path) -> dict:
         last_task = str(events[-1].get("task") or "").split(":")[0]
         if last_task:
             active = {"node": last_task, "role": events[-1].get("phase")}
+            t_last = events[-1].get("t")
+            if t_last is not None:
+                active["elapsed_s"] = max(0.0,
+                                          _time.time() - float(t_last))
     return {
         "name": run_dir.name,
         "status": "done" if done else "running",
@@ -619,7 +632,11 @@ let STATE=null, SEL=null, EXPANDED={}, GCOLL={}, CLICKT=null, NTAB='spec', GTAB=
 let ACTIVE={node:null,role:null,since:0};
 function trackActive(){const a=STATE&&STATE.active;
  if(!a){ACTIVE={node:null,role:null,since:0};return;}
- if(a.node!==ACTIVE.node||a.role!==ACTIVE.role)ACTIVE={node:a.node,role:a.role,since:Date.now()};}
+ // the server knows the call's REAL age — resync on every fetch so an
+ // F5 (or a long-lived tab) never restarts the counter from zero
+ const real=a.elapsed_s!=null?Date.now()-a.elapsed_s*1000:0;
+ if(a.node!==ACTIVE.node||a.role!==ACTIVE.role)ACTIVE={node:a.node,role:a.role,since:real||Date.now()};
+ else if(real)ACTIVE.since=real;}
 setInterval(()=>{const el=document.getElementById('elapsed');
  if(!el)return;
  // with auto-refresh OFF the data is frozen — a ticking counter would lie
