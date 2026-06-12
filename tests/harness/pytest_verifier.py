@@ -86,6 +86,16 @@ def _safe_rel(rel: str) -> bool:
             and rel not in protected_files())
 
 
+# worker code must never reach into platform internals: a leaf test once
+# did db._SCHEMAS.clear() to 'isolate' itself and silently destroyed every
+# sibling's schema for the rest of the pytest session
+_FORBIDDEN_CONTENT = re.compile(r"_SCHEMAS|ROUTES\s*\.\s*clear\s*\(")
+
+
+def content_allowed(body: str) -> bool:
+    return not _FORBIDDEN_CONTENT.search(body or "")
+
+
 def _implicated_files(root: str, output: str) -> dict[str, str]:
     """The failing files (from the pytest output) and their src counterparts.
 
@@ -140,6 +150,11 @@ def _write_files(root: str, files: dict) -> tuple[bool, dict]:
     snapshot: dict[str, Optional[str]] = {}
     for rel, body in (files or {}).items():
         if not (_safe_rel(str(rel)) and isinstance(body, str) and body.strip()):
+            continue
+        if not content_allowed(body):
+            llm_log.log({"event": "write_refused", "role": "verifier",
+                         "path": str(rel),
+                         "reason": "touches platform internals"})
             continue
         f = Path(root) / rel
         snapshot[str(rel)] = (f.read_text(encoding="utf-8")

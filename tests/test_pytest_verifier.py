@@ -97,3 +97,9 @@ def test_readonly_context_inlines_protected_smoke(tmp_path, monkeypatch):
     out = "FAILED tests/smoke/test_mvp_smoke.py::test_x - AssertionError"
     ro = pv._readonly_context(str(tmp_path), out)
     assert "EXPECTED-API-MARKER" in ro and "READ-ONLY" in ro
+
+
+def test_platform_internal_mutations_are_refused():
+    assert not pv.content_allowed("def t():\n    db._SCHEMAS.clear()\n")
+    assert not pv.content_allowed("registry.ROUTES.clear()")
+    assert pv.content_allowed("import db\ndb.register_schema('CREATE...')\n")

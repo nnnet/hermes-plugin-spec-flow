@@ -420,6 +420,10 @@ it among regular tests fails every partial build it reaches first.
 NEVER import app from a feature module: the platform loader imports every
 src/*.py FROM app, so importing it back is a circular import that kills
 the whole assembly. A feature imports only registry, db and the stdlib.
+NEVER touch platform internals (db._SCHEMAS, registry.ROUTES) from code or
+tests — clearing the schema registry once destroyed every sibling's tables
+for the whole session. Test isolation = a fresh MARKETPLACE_DB path per
+test, nothing else. Such writes are REFUSED by the platform.
 
 Reply with ONLY a JSON object (no prose, no fence):
 {{"files": {{"src/{fn}.py": "<full file text>",
@@ -462,6 +466,11 @@ def _write_reply_files(ws: Any, files: dict, fn: str) -> bool:
             continue
         body = files.get(rel)
         if isinstance(body, str) and body.strip():
+            if not pytest_verifier.content_allowed(body):
+                llm_log.log({"event": "write_refused", "role": "implementer",
+                             "node": fn, "path": rel,
+                             "reason": "touches platform internals"})
+                continue
             ws._write(rel, body if body.endswith("\n") else body + "\n", kind)
             wrote = True
     return wrote
