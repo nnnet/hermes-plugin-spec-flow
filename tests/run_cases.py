@@ -42,18 +42,24 @@ from pathlib import Path
 
 
 def _next_run_no(case_name: str) -> int:
-    """Sequential run number for the case: one more than anything seen in
-    runs-out — both v-numbered dirs and legacy unnumbered ones count."""
+    """Sequential run number for the case. The counter file is the source
+    of truth — it tracks the OPERATOR's run sequence (v10, v11, ...) and
+    survives runs-out cleanups; legacy unnumbered dirs never inflate it.
+    Fallback (no counter yet): the highest v-number among existing dirs."""
     import re as _re
-    total, max_v = 0, 0
-    for d in OUT_DIR.glob(f"*__{case_name}"):
-        total += 1
-    for d in OUT_DIR.glob(f"*__v*__{case_name}"):
-        total += 1
-        m = _re.search(r"__v(\d+)__", d.name)
-        if m:
-            max_v = max(max_v, int(m.group(1)))
-    return max(total, max_v) + 1
+    marker = OUT_DIR / f".run-counter-{case_name}"
+    try:
+        last = int(marker.read_text().strip())
+    except (OSError, ValueError):
+        last = 0
+        for d in OUT_DIR.glob(f"*__v*__{case_name}"):
+            m = _re.search(r"__v(\d+)__", d.name)
+            if m:
+                last = max(last, int(m.group(1)))
+    nxt = last + 1
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(str(nxt))
+    return nxt
 
 
 def _worker_models() -> dict:
