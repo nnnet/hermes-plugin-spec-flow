@@ -322,13 +322,18 @@ def make_decomposer(workspace_dir: Optional[str] = None,
             trace_rule = (" Every requirement you author MUST carry"
                           f" 'Traces-to: REQ-{parent_id}-n' pointing at the"
                           " parent requirement it refines.")
+            # Workspace.spec snake_cases filenames — 'L0' lives at
+            # specs/l0.md; the case-sensitive miss once stalled a worker
+            spec_rel = ("specs/"
+                        + re.sub(r"\W+", "_", parent_id).strip("_").lower()
+                        + ".md")
             if _chat_only():
-                prompt += (f"\n\nParent approved spec (specs/{parent_id}.md):"
+                prompt += (f"\n\nParent approved spec ({spec_rel}):"
                            "\n---\n"
-                           + _inline_file(workspace_dir, f"specs/{parent_id}.md")
+                           + _inline_file(workspace_dir, spec_rel)
                            + "\n---\n" + trace_rule)
             else:
-                prompt += (f"\n\nParent approved spec: specs/{parent_id}.md —"
+                prompt += (f"\n\nParent approved spec: {spec_rel} —"
                            " READ it first (Read tool, relative to the"
                            " current directory)." + trace_rule)
         if ctx["depth"] >= LEAF_DEPTH:
