@@ -1,0 +1,41 @@
+tests/test_worker_config.py
+  s_a7f45290e91181::t_b4ac4f5e8d55f3 115-173
+tests/harness/memory.py
+  s_a7f45290e91181::t_82b4bd61431a62 1-100,108-112,114-169
+  s_a7f45290e91181::t_2a2a37767f7c55 101-107,113
+spec_flow_runner.py
+  s_a7f45290e91181::t_ae4c228049b59e 112-115,889-900,1360-1372,1376-1389,1393-1396
+  s_a7f45290e91181::t_8357b3cf79c5ec 656-657,663-667,671-673,675-677,686,694,706,714,874-882,884-885
+  s_a7f45290e91181::t_f81dde02895571 674
+tests/harness/llm_backend.py
+  s_a7f45290e91181::t_57f649e29f60bd 74,77-106
+  s_a7f45290e91181::t_f43f033f14a781 199,205
+spec_flow_journal.py
+  s_a7f45290e91181::t_bb8b70d3ccbfe5 62,66-83
+  s_a7f45290e91181::t_7bbf5a7a0d0237 1-61,63-65,84-148
+tests/test_integrate_policy.py
+  s_a7f45290e91181::t_eaab54195d8ce5 1-109
+tests/test_run_journal.py
+  s_a7f45290e91181::t_1e8682ffb35236 68-69,72-74
+  s_a7f45290e91181::t_e6d60564950aa4 1-67,70-71,75-101
+tests/test_memory_provider.py
+  s_a7f45290e91181::t_bf7576a553af8d 1-123
+tests/test_node_engines.py
+  s_a7f45290e91181::t_e22326f9066f1d 163-181
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "f2cc816d361a04102e812e0f685127b48de98981",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-fable-5"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
