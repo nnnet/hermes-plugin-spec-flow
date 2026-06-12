@@ -33,6 +33,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -750,6 +751,12 @@ class Engine:
         # acceptance runs on the assembled product is a ROOT-LEVEL concern,
         # never a child of whatever branch happened to decompose next.
         self._standing_requirements = standing_requirements
+        # parallelization stage 1: locks make the engine's bookkeeping
+        # single-writer; the worker pool size comes from the project dict
+        # at run() time (parallel: {children: N})
+        self._emit_lock = threading.RLock()
+        self._task_lock = threading.RLock()
+        self._parallel_children = 1
         self.review_policy = {**DEFAULT_REVIEW_POLICY, **(review_policy or {})}
         self._seed_files = seed_files
         # tools (gate provider) is injectable; default to the bundled gates so
@@ -801,18 +808,22 @@ class Engine:
 
     # -- logging helpers ---------------------------------------------------
     def emit(self, phase, profile, skill, task, action, detail="", gate="", verdict="", level=L_STEP):
-        self._t += 1
-        self.skills.add(skill) if skill in ALL_SKILLS else None
-        self.profiles.add(profile) if profile in ALL_PROFILES else None
-        ev = Event(self._t, phase, profile, skill, task, action, detail, gate, verdict, level)
-        self.events.append(ev)
-        if self.sink is not None:
-            self.sink.handle(ev)
+        # single writer: with parallel children several subtrees emit at
+        # once — the tick counter, event list and sink stay consistent
+        with self._emit_lock:
+            self._t += 1
+            self.skills.add(skill) if skill in ALL_SKILLS else None
+            self.profiles.add(profile) if profile in ALL_PROFILES else None
+            ev = Event(self._t, phase, profile, skill, task, action, detail, gate, verdict, level)
+            self.events.append(ev)
+            if self.sink is not None:
+                self.sink.handle(ev)
 
     def task(self, tid, title, kind, profile, skill, parents=None) -> Task:
-        t = Task(tid, title, kind, profile, skill, parents or [])
-        self.tasks[tid] = t
-        return t
+        with self._task_lock:
+            t = Task(tid, title, kind, profile, skill, parents or [])
+            self.tasks[tid] = t
+            return t
 
     # -- real tool wrappers ------------------------------------------------
     def _policy(self, policy):
@@ -950,6 +961,18 @@ class Engine:
                 + repr(self._on_integrate_fail))
         self._integrate_max_rework = int(
             project.get("integrate_max_rework", 2))
+        par = project.get("parallel") or {}
+        self._parallel_children = max(1, int(par.get("children", 1)))
+        # overhead guard: forking 2 threads for 2 tiny children can cost
+        # more than it saves — the case sets its own bar
+        self._parallel_min_siblings = max(2, int(par.get("min_siblings", 2)))
+        # nested forks multiply concurrency multiplicatively — by default
+        # only top-level branches (depth 0) fork their children
+        self._parallel_depth_limit = int(par.get("depth_limit", 0))
+        # GLOBAL ceiling on concurrently running subtrees, whole tree —
+        # depth_limit bounds WHERE forks happen, this bounds HOW MANY
+        self._parallel_sem = threading.BoundedSemaphore(
+            max(1, int(par.get("max_workers", par.get("children", 1)))))
         try:
             if self.sink is not None:
                 self.sink.open()
@@ -1435,10 +1458,48 @@ class Engine:
                               {"verdict": verdict, "reasons": "; ".join(reasons),
                                "plan": plan}, ancestors)
             child_ids = []
-            for child in node.get("children", []):
-                self._visit(child, depth + 1, child_contract_ctx, phase,
-                            parent=title, ancestors=ancestors + ((nid, title),))
-                child_ids.append(child["id"])
+            kids = node.get("children", [])
+            if (self._parallel_children > 1
+                    and depth <= self._parallel_depth_limit
+                    and len(kids) >= self._parallel_min_siblings):
+                # stage 1: each child's WHOLE subtree runs in its own
+                # thread; the branch integrate below is the join barrier.
+                # Trade-off (why opt-in): parallel siblings see the node
+                # registry as of fork time, so the dedup gate is weaker.
+                errs = []
+
+                def _one(c):
+                    try:
+                        with self._parallel_sem:
+                            self._visit(c, depth + 1, child_contract_ctx,
+                                        phase, parent=title,
+                                        ancestors=ancestors + ((nid, title),))
+                    except Exception as exc:    # noqa: BLE001 — re-raised after join
+                        errs.append(exc)
+
+                pool, alive = list(kids), []
+                limit = self._parallel_children
+                while pool or alive:
+                    while pool and len(alive) < limit:
+                        th = threading.Thread(target=_one,
+                                              args=(pool.pop(0),),
+                                              daemon=True)
+                        th.start()
+                        alive.append(th)
+                    for th in alive:
+                        th.join(timeout=0.05)
+                    alive = [th for th in alive if th.is_alive()]
+                    if errs:
+                        for th in alive:
+                            th.join()
+                        raise errs[0]
+                child_ids = [c["id"] for c in kids]
+            else:
+                for child in kids:
+                    self._visit(child, depth + 1, child_contract_ctx, phase,
+                                parent=title,
+                                ancestors=ancestors + ((nid, title),))
+                    child_ids.append(child["id"])
 
             # standing requirements, two placement rules (the ENGINE owns
             # placement, never a worker's whim):

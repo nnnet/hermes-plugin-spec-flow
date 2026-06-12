@@ -97,3 +97,85 @@ into the case constitution at load).
 **Why.** Mechanical context beats wishful prompting: workers build INTO a
 frozen skeleton instead of each inventing their own app shape — the
 single biggest source of integrate-time chaos in early runs.
+
+## 7. Shared project state flows into EVERY node (dedup safeguards)
+
+**Mechanism (predates this doc; pinned here so later work never drops
+it).** Each decomposer call receives the project's shared state:
+the full node registry (`existing_nodes`: id + title of every node
+already created anywhere in the tree), the ancestor chain, the
+repository map (AST digest of `src/`), and the frozen contract context.
+On top of that the ENGINE runs `_dedup_children`: proposed children that
+re-create existing work (near-identical titles/scope) are pruned before
+they become tasks.
+
+**Why.** Without the registry every branch reinvents its siblings'
+endpoints; without pruning the tree grows duplicate leaves that later
+collide at integrate. (The parallel-children tests tripped this
+safeguard with look-alike titles — proof it bites.)
+
+**Parallel-mode caveat (deliberate).** Parallel siblings see the
+registry as of fork time and register their nodes under a lock as they
+land; the dedup gate between concurrent siblings is therefore weaker —
+one reason parallelism is opt-in and bounded (see 13).
+
+## 8. Late requirements: ENGINE-owned placement (root / scoped / fallback)
+
+Branch prompts proved obedient in the wrong way: a branch swallowed the
+cross-cutting web_ui requirement into its own subtree. Placement now
+belongs to the engine: unscoped requirement → direct ROOT child (its
+acceptance runs on the assembled product); `@scope: <branch>` → child of
+that branch while it is still open; missed scope → root fallback; a name
+already covered → no injection. Workers get awareness text only.
+Tests: tests/test_requirement_injection.py (levels × arrival stages).
+
+## 9. Deterministic spec lint + minimal-edit rework
+
+The reviewer repeated 'AC-5 lacks REQ-5' through a whole rework budget
+while rework re-authored the spec from scratch each round. Now: (a) the
+mechanical traceability rule (every AC↔REQ pair) is checked by CODE
+before any reviewer round (`spec_lint` gate); (b) every rework carries
+the PREVIOUS spec verbatim with a minimal-edit instruction. LLM rounds
+are spent on meaning, never on what code can state precisely.
+
+## 10. Integrate-fail policy (record | rework | halt)
+
+What a FAILed branch integrate does next is the case's choice:
+`on_integrate_fail: record` (book the debt, carry on — the default),
+`rework` (re-invoke the verifier with a fresh repair budget,
+`integrate_max_rework` rounds), `halt` (stop the run). p4 runs `rework`
+since v13 to measure the efficiency effect.
+
+## 11. Providers/models as case parameters; failures walk the chain
+
+The case YAML `workers:` block is the single source of truth: a
+`providers` registry (lists with parameters: prefix, required `:free`
+suffix, daily quota) and per-role ordered model chains. ANY provider
+failure — daily quota, the per-minute 429 ceiling (it killed a live run
+once), a dead endpoint — walks to the next chain entry; only config
+errors abort. Budget: `workers.budget` caps total calls per run.
+
+## 12. Run journal (waves) + memory providers — landed, not yet wired
+
+`spec_flow_journal.RunJournal`: append-only JSONL, ONE writer (OS lock),
+atomic fsynced waves, torn-tail cut on recovery. The substrate for
+parallelization stages 2+. `harness/memory.py`: role/project banks,
+Hindsight adapter (Hermes stack, 127.0.0.1:8888) verified live;
+failures never kill a run. Both wait for engine wiring behind flags.
+
+## 13. Parallel children (stage 1) — opt-in, bounded, criteria as parameters
+
+A branch may run children's subtrees in a thread pool. Smart-enable
+criteria are CASE PARAMETERS, not hardcode:
+`parallel: {children: N, min_siblings: M, depth_limit: D,
+max_workers: W}` — pool size, the don't-bother floor, where forking is
+allowed (nested forks multiply concurrency), and a global subtree
+ceiling. `workers.concurrency` caps in-flight LLM calls (the free pool
+is ~8 req/min — unbounded parallel calls trade speed for a 429 storm).
+
+**Safeguards pinned by tests/test_parallel_children.py — MUST survive
+all future work:** sequential default without the flag; single-writer
+trace (strictly increasing unique ticks); branch integrate joins ALL
+children; the budget counter stays exact under threads; one pytest at a
+time per workspace; an agent crash in one child spares the others;
+dedup pruning still bites.

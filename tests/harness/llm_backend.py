@@ -27,6 +27,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -85,6 +86,29 @@ class BudgetExhausted(RuntimeError):
 # wins over the env knob, consistent with the models rule. Every provider
 # attempt counts (a chain that walks 3 models on quota spends 3).
 _calls_made = 0
+_counters_lock = threading.Lock()
+# ONE pytest at a time: under parallel children every worker thread
+# shells out into the SAME workspace — concurrent runs corrupt
+# __pycache__ and sqlite fixtures. Lives here because llm_backend is the
+# harness's common dependency (no import cycles).
+PYTEST_LOCK = threading.Lock()
+
+# at most workers.concurrency LLM calls in flight — the free pool's
+# per-minute ceiling turns unbounded parallel calls into a 429 storm
+_llm_slots: "threading.Semaphore | None" = None
+_llm_slots_for = 0
+
+
+def _concurrency_gate() -> "threading.Semaphore | None":
+    global _llm_slots, _llm_slots_for
+    want = int(WORKERS_CFG.get("concurrency")
+               or os.environ.get("SPEC_FLOW_LLM_CONCURRENCY", "0"))
+    if want <= 0:
+        return None
+    if _llm_slots is None or _llm_slots_for != want:
+        _llm_slots = threading.BoundedSemaphore(want)
+        _llm_slots_for = want
+    return _llm_slots
 
 
 def _budget() -> int:
@@ -99,11 +123,13 @@ def calls_made() -> int:
 
 def _spend_call() -> None:
     global _calls_made
-    limit = _budget()
-    if limit and _calls_made >= limit:
-        raise BudgetExhausted(
-            f"run budget of {limit} LLM calls is spent — refusing the call")
-    _calls_made += 1
+    with _counters_lock:
+        limit = _budget()
+        if limit and _calls_made >= limit:
+            raise BudgetExhausted(
+                f"run budget of {limit} LLM calls is spent — refusing the"
+                " call")
+        _calls_made += 1
 
 
 def _provider_for(model: str) -> dict | None:
@@ -195,9 +221,13 @@ def ask(prompt: str, *, model: str, system: str | None = None,
     unless the chain already contains a 'claude/' entry."""
     chain = [model, *fallbacks]
     last_exc: Exception | None = None
+    gate = _concurrency_gate()
     for i, m in enumerate(chain):
         _spend_call()
         try:
+            if gate is not None:
+                with gate:
+                    return _ask_one(prompt, m, system, fallback=i > 0)
             return _ask_one(prompt, m, system, fallback=i > 0)
         except (QuotaExhausted, RuntimeError) as exc:
             # the chain exists to absorb PROVIDER failure of any kind —

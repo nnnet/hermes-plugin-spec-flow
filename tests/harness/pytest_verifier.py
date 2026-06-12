@@ -60,8 +60,9 @@ def run_suite(root: str, include_smoke: bool) -> tuple[bool, str]:
            "-p", "no:cacheprovider"]
     if not include_smoke and (Path(root) / SMOKE_DIR).is_dir():
         cmd += ["--ignore", SMOKE_DIR]
-    proc = subprocess.run(cmd, capture_output=True, text=True,
-                          timeout=PYTEST_TIMEOUT, cwd=root)
+    with llm_backend.PYTEST_LOCK:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=PYTEST_TIMEOUT, cwd=root)
     out = (proc.stdout or "") + (proc.stderr or "")
     # pytest exit 5 = no tests collected — nothing to verify is not a failure
     return proc.returncode in (0, 5), out[-2000:]
