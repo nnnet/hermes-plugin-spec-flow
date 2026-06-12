@@ -643,6 +643,7 @@ pre.code{background:#161b22;padding:10px;border-radius:6px;overflow:auto;white-s
 if(window.mermaid)mermaid.initialize({startOnLoad:false,theme:'dark',securityLevel:'loose',flowchart:{useMaxWidth:false}});
 let STATE=null, SEL=null, EXPANDED={}, GCOLL={}, CLICKT=null, NTAB='spec', GTAB='inputs', FILECACHE={}, AUTO=true;
 let ACTIVE=[];
+const isActive=id=>ACTIVE.some(a=>a.node===id);
 function trackActive(){
  const arr=(STATE&&STATE.actives)||(STATE&&STATE.active?[STATE.active]:[]);
  const now=Date.now();
@@ -680,7 +681,7 @@ function treeHTML(n){
  const open=EXPANDED[n.id]!==false; // default expanded
  const tw=has?`<span class=tw data-tw="${n.id}">${open?'▾':'▸'}</span>`:'<span class=tw></span>';
  const sel=SEL===n.id?' sel':'';
- const act=ACTIVE.node===n.id;
+ const act=isActive(n.id);
  const ico=act?'⏳':(has?'🌿':'🍃');
  let h=`<li>${tw}<span class="node${sel}${act?' actv':''}" data-id="${n.id}">${ico} ${n.id} <span class=badge>${badgeHTML(n.episodes)}</span></span>`;
  if(has&&open){h+='<ul>'+n.children.map(treeHTML).join('')+'</ul>';}
@@ -738,7 +739,7 @@ function graphSVG(){
  const X=n=>PX+n._d*COLW,Y=n=>PY+n._y*ROWH;const W=PX*2+(maxD+1)*COLW,H=PY*2+(maxY+1)*ROWH;
  let s=`<svg width="${W}" height="${H}" style="min-width:${W}px">`;
  edges.forEach(([a,b])=>{const x1=X(a)+BW,y1=Y(a)+BH/2,x2=X(b),y2=Y(b)+BH/2;s+=`<path d="M${x1} ${y1} C${x1+24} ${y1}, ${x2-24} ${y2}, ${x2} ${y2}" stroke="#30363d" fill="none"/>`;});
- nodes.forEach(n=>{const leaf=!(n.children&&n.children.length);const sel=SEL===n.id;const coll=!leaf&&GCOLL[n.id];const act=ACTIVE.node===n.id;
+ nodes.forEach(n=>{const leaf=!(n.children&&n.children.length);const sel=SEL===n.id;const coll=!leaf&&GCOLL[n.id];const act=isActive(n.id);
   const ico=act?'⏳':(coll?'▸🌿':(leaf?'🍃':'🌿'));
   const tail=coll?` +${countDesc(n)}`:'';
   const bdg=badgeStr(n.episodes);
