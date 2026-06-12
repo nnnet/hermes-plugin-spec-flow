@@ -41,7 +41,10 @@ def project_bank(case: str) -> str:
 
 
 class MemoryProvider:
-    """retain/recall contract every provider implements."""
+    """retain/recall/clear contract every provider implements."""
+
+    def clear(self, bank: str) -> bool:
+        raise NotImplementedError
 
     def retain(self, bank: str, content: str, *,
                context: str = "", tags: Optional[list[str]] = None) -> bool:
@@ -71,6 +74,10 @@ class FakeMemory(MemoryProvider):
 
     def retain(self, bank, content, *, context="", tags=None) -> bool:
         self._banks.setdefault(bank, []).append(str(content))
+        return True
+
+    def clear(self, bank) -> bool:
+        self._banks.pop(bank, None)
         return True
 
     def recall(self, bank, query, *, limit=RECALL_LIMIT,
@@ -114,6 +121,22 @@ class HindsightMemory(MemoryProvider):
                 return resp.status, resp.read().decode("utf-8", "replace")
         except urllib.error.HTTPError as e:
             return e.code, e.read().decode("utf-8", "replace")
+
+    def _http_delete(self, url: str) -> int:
+        req = urllib.request.Request(url, method="DELETE")
+        try:
+            with self._opener.open(req, timeout=self.timeout) as resp:
+                return resp.status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    def clear(self, bank) -> bool:
+        try:
+            status = self._http_delete(
+                f"{self.base_url}/v1/default/banks/{bank}/memories")
+            return status in (200, 202, 204, 404)
+        except Exception:            # noqa: BLE001 — memory never kills a run
+            return False
 
     def retain(self, bank, content, *, context="", tags=None) -> bool:
         # strip markdown decoration — the extractor returns 0 facts on raw
@@ -167,3 +190,129 @@ def make_provider(cfg: Optional[dict]) -> Optional[MemoryProvider]:
     if kind == "hindsight":
         return HindsightMemory(base_url=cfg.get("url", DEFAULT_URL))
     raise ValueError(f"unknown memory provider {kind!r} (fake|hindsight)")
+
+
+ROLE_MODES = ("accumulate", "readonly", "fresh", "off")
+PROJECT_MODES = ("fresh", "resume", "readonly", "off")
+_KNOWN_ROLES = ("decomposer", "reviewer", "implementer", "verifier",
+                "researcher")
+
+
+class MemoryManager:
+    """Mode-aware front for the two memory tiers.
+
+    ROLE banks carry a role's craft ACROSS runs; the PROJECT bank carries
+    one case's decisions. The case YAML picks what happens to each at run
+    start and what the run may do to them:
+
+      memory:
+        provider: hindsight | fake
+        roles:   {mode: accumulate|readonly|fresh|off}   # default accumulate
+        project: {mode: fresh|resume|readonly|off}       # default fresh
+        recall_budget_chars: 1200
+
+    roles.mode   — accumulate: read+write, craft grows run over run;
+                   readonly: recall only (a noisy experiment must not
+                   pollute the banks); fresh: clear role banks at start,
+                   then read+write; off: no role memory.
+    project.mode — fresh: a NEW project starts with a clean bank (the
+                   default — stale decisions of a previous attempt are
+                   poison); resume: continuation of the SAME project,
+                   keep everything; readonly: recall only; off.
+    """
+
+    def __init__(self, provider: MemoryProvider, case_name: str,
+                 roles_mode: str = "accumulate",
+                 project_mode: str = "fresh",
+                 budget_chars: int = RECALL_BUDGET_CHARS):
+        if roles_mode not in ROLE_MODES:
+            raise ValueError(
+                f"memory.roles.mode must be one of {ROLE_MODES}")
+        if project_mode not in PROJECT_MODES:
+            raise ValueError(
+                f"memory.project.mode must be one of {PROJECT_MODES}")
+        self.provider = provider
+        self.case = case_name
+        self.roles_mode = roles_mode
+        self.project_mode = project_mode
+        self.budget = budget_chars
+
+    def setup(self) -> dict:
+        """Apply the start-of-run modes; returns what was cleared."""
+        cleared = {"roles": [], "project": False}
+        if self.roles_mode == "fresh":
+            for role in _KNOWN_ROLES:
+                if self.provider.clear(role_bank(role)):
+                    cleared["roles"].append(role)
+        if self.project_mode == "fresh":
+            cleared["project"] = self.provider.clear(
+                project_bank(self.case))
+        return cleared
+
+    # -- role tier ---------------------------------------------------------
+    def recall_role(self, role: str, query: str) -> str:
+        if self.roles_mode == "off":
+            return ""
+        return self.provider.recall_block(role_bank(role), query,
+                                          budget_chars=self.budget)
+
+    def retain_role(self, role: str, content: str, *,
+                    context: str = "", tags=None) -> bool:
+        if self.roles_mode in ("off", "readonly"):
+            return False
+        return self.provider.retain(role_bank(role), content,
+                                    context=context, tags=tags)
+
+    # -- project tier --------------------------------------------------------
+    def recall_project(self, query: str) -> str:
+        if self.project_mode == "off":
+            return ""
+        return self.provider.recall_block(project_bank(self.case), query,
+                                          budget_chars=self.budget)
+
+    def retain_project(self, content: str, *, context: str = "",
+                       tags=None) -> bool:
+        if self.project_mode in ("off", "readonly"):
+            return False
+        return self.provider.retain(project_bank(self.case), content,
+                                    context=context, tags=tags)
+
+
+# the run-wide manager — set by the runner from the case YAML; workers
+# consult it through the helpers below (None = memory disabled, all
+# helpers degrade to no-ops: a worker without memory is a worker as before)
+MANAGER: Optional[MemoryManager] = None
+
+
+def configure(cfg: Optional[dict], case_name: str) -> Optional[MemoryManager]:
+    """Build + install the run-wide manager from the case YAML block;
+    clears banks per the start-of-run modes. None when memory is off."""
+    global MANAGER
+    provider = make_provider(cfg)
+    if provider is None:
+        MANAGER = None
+        return None
+    cfg = cfg or {}
+    MANAGER = MemoryManager(
+        provider, case_name,
+        roles_mode=str((cfg.get("roles") or {}).get("mode", "accumulate")),
+        project_mode=str((cfg.get("project") or {}).get("mode", "fresh")),
+        budget_chars=int(cfg.get("recall_budget_chars",
+                                 RECALL_BUDGET_CHARS)))
+    MANAGER.setup()
+    return MANAGER
+
+
+def recall_block_for(role: str, query: str) -> str:
+    """Worker-facing: role craft + project decisions in one block."""
+    if MANAGER is None:
+        return ""
+    return MANAGER.recall_role(role, query) + MANAGER.recall_project(query)
+
+
+def retain_role(role: str, content: str, **kw) -> bool:
+    return MANAGER.retain_role(role, content, **kw) if MANAGER else False
+
+
+def retain_project(content: str, **kw) -> bool:
+    return MANAGER.retain_project(content, **kw) if MANAGER else False

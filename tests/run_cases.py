@@ -161,10 +161,13 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
     if workers == "real":
         # Industrial mode without Hermes: real worker sessions from the
         # plugin's own SKILL.md + profile tool policy, per role.
-        from harness import llm_backend, role_worker
+        from harness import llm_backend, memory as memory_mod, role_worker
         # per-role provider/model from the case YAML (env vars override);
         # MUST happen before the factories capture their models
         llm_backend.configure_workers(case.get("workers"))
+        # memory tiers (role craft / project decisions) + start-of-run
+        # modes (fresh/resume/readonly/off) from the case YAML
+        memory_mod.configure(case.get("memory"), case.get("name", ""))
         ws_dir = str(case_dir / "workspace")
         q_chan = channel if hitl_questions or hitl_notes else None
         dec_fn = role_worker.make_decomposer(workspace_dir=ws_dir, channel=q_chan)
@@ -233,6 +236,7 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
     node_engine = case.get("node_engine", "inline")
     exec_case.pop("node_engine", None)
     exec_case.pop("workers", None)
+    exec_case.pop("memory", None)
     review_policy = case.get("review") or None
     exec_case.pop("review", None)
     # seed files: the case may ship a deterministic skeleton (app entry,

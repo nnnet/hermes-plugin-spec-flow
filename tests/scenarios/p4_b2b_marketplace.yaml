@@ -224,6 +224,14 @@ parallel:
   children: 3
   max_workers: 3
 
+# Memory tiers (v15+): role banks accumulate craft across runs, the
+# project bank starts FRESH for every new attempt of this case (stale
+# decisions of a failed run are poison). Hindsight from the Hermes stack.
+memory:
+  provider: hindsight
+  roles:   {mode: accumulate}
+  project: {mode: fresh}
+
 # Platform conventions (the seeded skeleton; same school as p5): features
 # build INTO it, late human requirements arrive as standing requirements
 # with acceptance tests that gate the root integrate.

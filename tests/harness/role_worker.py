@@ -32,7 +32,7 @@ from typing import Any, Callable, Optional
 
 import yaml
 
-from . import claude_cli, llm_backend, llm_log
+from . import claude_cli, llm_backend, llm_log, memory
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 SKILLS_DIR = PLUGIN_ROOT / "skills"
@@ -202,6 +202,9 @@ def _dialog_round(prompt: str, *, role: str, node: str, system: str,
         return raw
     answer = channel.ask(role, node, question) if channel is not None else None
     if answer:
+        memory.retain_project(
+            f"Operator decision at node '{node}': Q: {question} A: {answer}",
+            context=f"hitl answer to {role}", tags=["hitl"])
         followup = (f"{prompt}\n\nYOU ASKED: {question}\n"
                     f"HUMAN ANSWER: {answer}\n"
                     "Fold the answer into your work and produce the normal "
@@ -370,6 +373,10 @@ def make_decomposer(workspace_dir: Optional[str] = None,
                        " (routes, schemas, signatures). Plan children that"
                        " complement this surface; never plan a node that"
                        " duplicates an existing route or table:\n" + rmap)
+        prompt += memory.recall_block_for(
+            "decomposer",
+            f"{ctx['node'].get('title', nid)}:"
+            f" {ctx['project'].get('goal', '')}")
         branch_capable = ctx["depth"] < LEAF_DEPTH
         # standing human requirements (possibly added MID-RUN) bind every
         # branch decomposition — a late requirement enters the tree here
@@ -553,7 +560,9 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         if _chat_only():
             return _implement_chat(ctx, ws_root, nid, fn)
         prompt = _IMPLEMENT_TASK.format(title=ctx["title"], id=nid,
-                                        spec=ctx["spec"], fn=fn) + _ASK_RULE
+                                        spec=ctx["spec"], fn=fn) \
+            + memory.recall_block_for("implementer", ctx["title"]) \
+            + _ASK_RULE
         note = channel.poll_note() if channel is not None else None
         if note:
             prompt += _NOTE_RULE.format(note=note)
@@ -650,6 +659,18 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
                 if _write_reply_files(ws, out2.get("files") or {}, fn):
                     passed, test_out = _leaf_bar(ws_root, fn, baseline, pv)
                 raw = raw2
+        if passed:
+            # a GREEN leaf is worth remembering: craft for the role,
+            # the decision for the project (no-ops when memory is off)
+            memory.retain_role(
+                "implementer",
+                f"Leaf '{nid}' ({ctx.get('title', '')}) landed green as"
+                f" src/{fn}.py with its own tests and no suite regression.",
+                context="green leaf", tags=["leaf"])
+            memory.retain_project(
+                f"Feature '{ctx.get('title', '')}' is implemented by"
+                f" src/{fn}.py (node {nid}).",
+                context="leaf landed", tags=["leaf"])
         llm_log.log_outcome(role="implementer", worker=True, node=nid, depth=-1,
                             model=model, prompt=prompt, reply=raw, ok=True,
                             tests_passed=passed,
