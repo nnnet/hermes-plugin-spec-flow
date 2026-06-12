@@ -1,0 +1,29 @@
+spec_flow_runner.py
+  s_a7f45290e91181::t_9acf3a9e2c954d 409-410,412-417,423-427
+  s_a7f45290e91181::t_e2829b395e266a 1771-1772
+  s_a7f45290e91181::t_fae87a62a0dc31 704-705,709
+  s_a7f45290e91181::t_c9b06fab6ef760 861-862
+  s_a7f45290e91181::t_ebc00e639959ad 1786
+tests/test_seed_files.py
+  s_a7f45290e91181::t_a5062b295a5add 8-20,25,27,39
+  s_a7f45290e91181::t_8c3fedbb753e73 1-7,21-24,26,28-38,40-41
+tests/run_cases.py
+  s_a7f45290e91181::t_13a82f6392996b 206-209
+  s_a7f45290e91181::t_650047fb4d9c2f 215
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "e9950cc5f4bea497d8cfa973f73a558d19237ba3",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-fable-5"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
