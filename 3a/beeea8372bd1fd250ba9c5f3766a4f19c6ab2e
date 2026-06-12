@@ -1,0 +1,43 @@
+tests/harness/role_worker.py
+  s_a7f45290e91181::t_d6cb3a5c417812 103-105
+  s_a7f45290e91181::t_794cd5fb8129e6 95-96,98-100,102,195,214,619,644,698,736
+  s_a7f45290e91181::t_2fe584ce84e76e 84
+  s_a7f45290e91181::t_385eeb359942ea 81-83
+tests/harness/pytest_verifier.py
+  s_a7f45290e91181::t_c00e5708554877 201
+tests/harness/llm_backend.py
+  s_a7f45290e91181::t_d0095cafcdb965 70-77,100-101,119
+  s_a7f45290e91181::t_4a0f1f22f1864a 58-69,78-99,102-106,108,110-118
+  s_a7f45290e91181::t_70885932560a64 125-128,131-133,135-136,139,146-167,169-177
+  s_a7f45290e91181::t_f01346ab7cf57e 130,134,137
+  s_a7f45290e91181::t_ee5af3ad20220d 107,109
+tests/run_cases.py
+  s_a7f45290e91181::t_83ca1596234fd0 43-50,143-146,214,448-449
+  s_a7f45290e91181::t_4abbe0c14d85fc 436-439
+tests/scenarios/p4_b2b_marketplace.yaml
+  s_a7f45290e91181::t_15b4a9648b5af1 246-252
+  s_a7f45290e91181::t_e890bfc407d366 265-266
+  s_a7f45290e91181::t_385eeb359942ea 267-272,274-295
+  s_a7f45290e91181::t_dcf74f6258b42a 264,273
+tests/scenarios/p5_mvp_marketplace.yaml
+  s_a7f45290e91181::t_15b4a9648b5af1 149-156
+tests/test_worker_config.py
+  s_a7f45290e91181::t_daf74b6baece43 7-9,12-13
+  s_a7f45290e91181::t_4231881e8c132f 1-6,10-11,14-114
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "3abeeea8372bd1fd250ba9c5f3766a4f19c6ab2e",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-fable-5"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
