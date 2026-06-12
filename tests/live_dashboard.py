@@ -641,7 +641,7 @@ body{margin:0;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;background:#0d
 .home{cursor:pointer;background:#1f6feb;color:#fff;border-radius:6px;padding:2px 10px;font-weight:700}.home:hover{background:#388bfd}
 .live{color:#3fb950}.donec{color:#8b949e}
 .bar2{position:sticky;top:38px;z-index:4;background:#0f141a;border-bottom:1px solid #21262d;padding:5px 14px;display:flex;gap:18px;align-items:center;flex-wrap:wrap;font-size:12px}
-.goal{color:#e3b341}.cur{color:#3fb950;font-weight:700}
+.goal{color:#e3b341;display:block}.cur{color:#3fb950;font-weight:700;display:block;margin-top:2px}
 ol.tl{padding-left:18px}ol.tl li{margin:1px 0;white-space:nowrap}
 .tl .tk{color:#6e7681;display:inline-block;min-width:34px}
 .tl .ph{color:#79c0ff;display:inline-block;min-width:96px}
@@ -681,8 +681,8 @@ pre.code{background:#161b22;padding:10px;border-radius:6px;overflow:auto;white-s
  <span class=pill id=mode title="клик — вкл/выкл авторефреш"></span>
 </div>
 <div class=bar2>
- <span id=goal class=goal></span>
- <span id=current class=cur></span>
+ <div id=goal class=goal></div>
+ <div id=current class=cur></div>
 </div>
 <div class=wrap>
  <div class="col tree" id=tree></div>
