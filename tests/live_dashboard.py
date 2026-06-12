@@ -707,11 +707,12 @@ function trackActive(){
  ACTIVE=arr.map(a=>{const prev=ACTIVE.find(x=>x.node===a.node&&x.role===a.role);
   return {node:a.node,role:a.role,
           since:a.elapsed_s!=null?now-a.elapsed_s*1000:(prev?prev.since:now)};});}
-setInterval(()=>{const el=document.getElementById('elapsed');
+function updElapsed(){const el=document.getElementById('elapsed');
  if(!el)return;
  // with auto-refresh OFF the data is frozen — a ticking counter would lie
  if(!AUTO){el.textContent='';return;}
- if(ACTIVE.length)el.textContent=' · уже '+ACTIVE.map(a=>fmtDur((Date.now()-a.since)/1000)).join(' / ');},1000);
+ if(ACTIVE.length)el.textContent=' · уже '+ACTIVE.map(a=>fmtDur((Date.now()-a.since)/1000)).join(' / ');}
+setInterval(updElapsed,1000);
 const $=s=>document.querySelector(s);
 // one duration format everywhere: <60s -> '42s', then 'MM:SS', with hours 'H:MM:SS'
 function fmtDur(s){s=Math.max(0,Math.round(s));
@@ -754,6 +755,8 @@ function render(){
  trackActive();
  // the line is ALWAYS rendered (finished runs show the final state) — an emptied div collapses and the header jumps between 1 and 2 lines
  $('#current').innerHTML='сейчас: '+esc(STATE.current||'…')+'<span id=elapsed class=dim></span>';
+ // fill the chip IMMEDIATELY — re-rendering recreated it empty and it stayed blank until the next 1s tick (visible blinking)
+ updElapsed();
  $('#tree').innerHTML='<ul>'+treeHTML(STATE.tree)+'</ul>';
  if(!SEL) renderGlobal(); else renderNode();
 }
@@ -773,11 +776,11 @@ function timelineHTML(){
 
 function renderGlobal(){
  const R=STATE.reports;
- const tabs=[['inputs','▶ Старт (цель+вход)'],['graph','🕸 Граф спеков'],['flow','🔀 Поток выполнения'],['timeline','⏱ Таймлайн'],['report','Отчёт+аудит'],['workflow','Воркфлоу'],['oracle','Оракул'],['commits','Версии/коммиты'],['summary','Итог']];
- let h='<div class=tabs>'+tabs.map(([k,t])=>(k==='timeline'||k==='graph'||R[k])?`<span class="tab${GTAB===k?' on':''}" data-g="${k}">${t}</span>`:'').join('')+'</div>';
- h+='<h3 class=muted>Что делают агенты сейчас <span class=dim>(сверху — последнее)</span></h3><ol class=feed reversed>'+(STATE.feed||[]).slice().reverse().map(f=>`<li>${esc(f)}</li>`).join('')+'</ol>';
+ const tabs=[['inputs','▶ Старт (цель+вход)'],['graph','🕸 Граф спеков'],['flow','🔀 Поток выполнения'],['timeline','⏱ Таймлайн'],['report','Отчёт+аудит'],['agents','🤖 Агенты сейчас'],['workflow','Воркфлоу'],['oracle','Оракул'],['commits','Версии/коммиты'],['summary','Итог']];
+ let h='<div class=tabs>'+tabs.map(([k,t])=>(k==='timeline'||k==='graph'||k==='agents'||R[k])?`<span class="tab${GTAB===k?' on':''}" data-g="${k}">${t}</span>`:'').join('')+'</div>';
  let body;
- if(GTAB==='timeline')body=timelineHTML();
+ if(GTAB==='agents')body='<h3 class=muted>Что делают агенты сейчас <span class=dim>(сверху — последнее)</span></h3><ol class=feed reversed>'+(STATE.feed||[]).slice().reverse().map(f=>`<li>${esc(f)}</li>`).join('')+'</ol>';
+ else if(GTAB==='timeline')body=timelineHTML();
  else if(GTAB==='graph')body='<p class=muted>граф задач, что построил плагин — <b>дабл-клик</b> = провалиться в спеку/код/версии · <b>клик</b> = свернуть поддерево / развернуть следующий уровень. 🌿 ветка · 🍃 лист · бейджи = эпизоды</p>'+graphSVG();
  else body=R[GTAB]||'<p class=dim>нет данных</p>';
  h+='<div id=gbody>'+body+'</div>';
