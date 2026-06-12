@@ -1103,12 +1103,27 @@ class Engine:
         if self.depth >= DEPTH_VERIFY:
             self._verify_tests()
 
-        # Final L0 integration
-        self.emit("integrate", "verifier", "spec-integrate", "L0:integrate",
-                  "L0 integrate done = project COMPLETE", "all subtrees merged & verified",
-                  level=L_MILESTONE)
+        # Final L0 integration — the engine itself must never claim
+        # COMPLETE over a recorded root FAIL (v17 did exactly that)
+        root_id = str((project.get("tree") or {}).get("id", "L0"))
+        root_red = any(lp.get("type") == "integrate-fail"
+                       and str(lp.get("task")) == root_id
+                       for lp in self.loops)
+        if root_red:
+            self.emit("integrate", "verifier", "spec-integrate",
+                      "L0:integrate",
+                      "L0 integrate RED — project NOT complete",
+                      "root gate recorded FAIL (record policy); the"
+                      " assembled product is not green",
+                      "integrate_verify", "FAIL", level=L_MILESTONE)
+        else:
+            self.emit("integrate", "verifier", "spec-integrate",
+                      "L0:integrate",
+                      "L0 integrate done = project COMPLETE",
+                      "all subtrees merged & verified", level=L_MILESTONE)
         if "L0:integrate" in self.tasks:
-            self.tasks["L0:integrate"].status = "done"
+            self.tasks["L0:integrate"].status = ("failed" if root_red
+                                                 else "done")
 
         # Depth 'product': after the project is integrated (and, at >=execute,
         # real code exists), build+run the product and assert readiness against

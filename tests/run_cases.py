@@ -354,15 +354,21 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
         "gate_calls": res.gate_calls,
         "audit_errors": sum(1 for f in findings if f["severity"] == "error"),
         "audit_warns": sum(1 for f in findings if f["severity"] == "warn"),
-        "complete": summary["complete"],
-        # the ROOT integrate recorded a FAIL (policy record-and-continue):
-        # the run finished, but the assembled product is NOT green
-        "root_red": any(
-            lp.get("type") == "integrate-fail"
-            and str(lp.get("task"))
-            == str((res.project.get("tree") or {}).get("id"))
-            for lp in res.loops),
+        # 'complete' is a VERDICT, not a progress bar: a run whose ROOT
+        # gate recorded a FAIL can never present itself as ✅ — v17 did,
+        # and that deception must be structurally impossible
+        "complete": summary["complete"] and not _root_red(res),
+        "root_red": _root_red(res),
     }
+
+
+def _root_red(res) -> bool:
+    """The ROOT integrate recorded a FAIL (record-and-continue policy):
+    the run reached the end, but the assembled product is NOT green."""
+    root_id = str((res.project.get("tree") or {}).get("id"))
+    return any(lp.get("type") == "integrate-fail"
+               and str(lp.get("task")) == root_id
+               for lp in res.loops)
 
 
 def _run_policy(path: Path, case_dir: Path, tools) -> dict:

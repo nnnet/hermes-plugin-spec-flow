@@ -254,14 +254,17 @@ def make_verifier(model: Optional[str] = None,
                                     node=str(ctx.get("node")), depth=-1,
                                     model=model, ok=False, error=str(exc)[:200])
                 break
-            # COMMIT QUEUE: write + re-verify + rollback is ONE atomic
-            # commit — interleaved with a leaf's write it once produced a
-            # module/test pair no single writer ever wrote (v17)
-            from . import commit_queue
-            with commit_queue.exclusive(
-                    f"verifier:{ctx.get('node')}", f"repair round {rounds}"):
+            # GIT TRANSACTION: write + re-verify + rollback is ONE atomic,
+            # attributable commit — interleaved with a leaf's write it
+            # once produced a module/test pair no single writer ever
+            # wrote (v17). Rollback is exact, incl. files the repair
+            # CREATED (the old snapshot restored only overwritten ones).
+            from . import ws_tx
+            with ws_tx.transaction(
+                    root, f"verifier:{ctx.get('node')}",
+                    f"repair round {rounds}") as tx:
                 before = _badness(passed, out)
-                wrote, snapshot = _write_files(root, reply.get("files"))
+                wrote, _snapshot = _write_files(root, reply.get("files"))
                 if wrote:
                     llm_log.log({"event": "ws_write", "writer": "verifier",
                                  "node": str(ctx.get("node")),
@@ -272,7 +275,7 @@ def make_verifier(model: Optional[str] = None,
                     if _badness(passed, out) > before:
                         # the round made the suite WORSE — a repair never
                         # leaves the tree worse than it found it
-                        _rollback(root, snapshot)
+                        tx.rollback()
                         passed, out = run_suite(root, include_smoke)
                         rolled_back = True
             if not wrote:

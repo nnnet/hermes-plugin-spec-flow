@@ -676,12 +676,13 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         # the leaf bar is TWO-tier: its own tests green AND the whole suite
         # not degraded — 'green alone, poisons the suite' must surface at
         # leaf completion, not branches later at the integrate gate.
-        # COMMIT QUEUE: baseline + write + bar is ONE atomic commit — a
-        # baseline captured while a sibling is mid-write poisoned v17
-        from . import commit_queue
+        # GIT TRANSACTION: baseline + write + bar is ONE serialized,
+        # attributable commit — a baseline captured while a sibling was
+        # mid-write poisoned v17; git history answers 'who wrote what'
         from . import pytest_verifier as pv
+        from . import ws_tx
         passed, test_out = False, "(no files written)"
-        with commit_queue.exclusive(f"leaf:{nid}", "baseline+write+bar"):
+        with ws_tx.transaction(ws_root, f"leaf:{nid}", "write+bar"):
             base_passed, base_out = pv.run_suite(ws_root, include_smoke=False)
             baseline = pv._badness(base_passed, base_out)
             wrote = _write_reply_files(ws, out.get("files") or {}, fn)
@@ -701,7 +702,8 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
                 # never the run (this exact site once killed a whole
                 # live run on a Russian-prose reply)
                 out2 = {}
-            with commit_queue.exclusive(f"leaf:{nid}", "repair write+bar"):
+            with ws_tx.transaction(ws_root, f"leaf:{nid}",
+                                   "repair write+bar"):
                 if _write_reply_files(ws, out2.get("files") or {}, fn):
                     passed, test_out = _leaf_bar(ws_root, fn, baseline, pv)
             raw = raw2
