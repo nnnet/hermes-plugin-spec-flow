@@ -153,7 +153,7 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
             # the integrate verdict is a REAL pytest run, never an opinion;
             # the smoke suite (tests/smoke/) gates only the root integrate
             from harness import pytest_verifier
-            agents["verifier"] = pytest_verifier.make_verifier()
+            agents["verifier"] = pytest_verifier.make_verifier(channel=q_chan)
     if hitl == "console":
         from harness import hitl as hitl_mod
         agents["approver"] = hitl_mod.console_approver

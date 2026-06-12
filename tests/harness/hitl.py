@@ -31,6 +31,7 @@ Env knobs:
 """
 from __future__ import annotations
 
+import json
 import os
 import select
 import subprocess
@@ -55,6 +56,12 @@ class HumanChannel:
         self.outbox = self.root / "outbox.md"
         self.questions = self.root / "questions.md"
         self.answer = self.root / "answer.md"
+        # standing human requirements (may be added MID-RUN): one folder per
+        # requirement under hitl/requirements/<name>/ holding REQUIREMENT.md
+        # (the statement, shown to every branch decomposer) and test_*.py
+        # acceptance tests (synced into the workspace smoke suite — the root
+        # integrate cannot go green until the requirement is REAL)
+        self.requirements_dir = self.root / "requirements"
 
     # -- worker → human ---------------------------------------------------
     def ask(self, role: str, node: str, question: str) -> Optional[str]:
@@ -90,8 +97,14 @@ class HumanChannel:
         return ans or None
 
     # -- human → workers ---------------------------------------------------
-    def poll_note(self) -> Optional[str]:
+    def poll_note(self, branch_capable: bool = False) -> Optional[str]:
         """Read-and-consume the operator's pending note, if any.
+
+        A note starting with ``@branch`` is ADDRESSED: only a worker that
+        can act on tree structure (a branch-capable decomposer) consumes
+        it — atomic-depth nodes leave it in place instead of burning it on
+        a powerless 'cannot act' reply (observed live: four deliveries of a
+        web-ui requirement eaten by leaves that could do nothing).
 
         An orphan ``answer.md`` (the human answered a worker question AFTER
         its waiting window expired) is consumed here too — a late answer is
@@ -99,7 +112,9 @@ class HumanChannel:
         note = ""
         if self.inbox.exists():
             note = self.inbox.read_text(encoding="utf-8").strip()
-            if note:
+            if note.startswith("@branch") and not branch_capable:
+                note = ""
+            elif note:
                 self.inbox.write_text("", encoding="utf-8")
         if not note and self.answer.exists():
             late = self.answer.read_text(encoding="utf-8").strip()
@@ -116,6 +131,52 @@ class HumanChannel:
         with open(self.outbox, "a", encoding="utf-8") as fh:
             fh.write(f"\n## [{stamp}] {role} @ {node} — {position.upper()}\n"
                      f"**operator:** {note}\n**worker:** {response}\n")
+
+    # -- standing requirements (artifact-based, enforceable) ----------------
+    def standing_requirements(self) -> list[tuple[str, str]]:
+        """[(name, statement)] of every registered requirement. Shown to
+        branch decomposers so late requirements enter the tree as leaves."""
+        out = []
+        if self.requirements_dir.is_dir():
+            for d in sorted(self.requirements_dir.iterdir()):
+                f = d / "REQUIREMENT.md"
+                if d.is_dir() and f.is_file():
+                    out.append((d.name, f.read_text(encoding="utf-8").strip()))
+        return out
+
+    def sync_requirements(self, ws_root: str | Path) -> list[str]:
+        """Copy each requirement's acceptance tests into the workspace smoke
+        suite (root-gate only, like the platform smoke) and mark them
+        protected. A message can be ignored; a red acceptance test cannot —
+        the root integrate stays FAIL until the requirement is REAL.
+
+        Returns the workspace-relative paths synced (for logging)."""
+        synced: list[str] = []
+        if not self.requirements_dir.is_dir():
+            return synced
+        smoke = Path(ws_root) / "tests" / "smoke"
+        for d in sorted(self.requirements_dir.iterdir()):
+            if not d.is_dir():
+                continue
+            for t in sorted(d.glob("test_*.py")):
+                rel = f"tests/smoke/acceptance_{d.name}_{t.name}"
+                target = Path(ws_root) / rel
+                body = t.read_text(encoding="utf-8")
+                if not target.exists() or \
+                        target.read_text(encoding="utf-8") != body:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(body, encoding="utf-8")
+                synced.append(rel)
+        if synced:
+            current = set()
+            raw = os.environ.get("SPEC_FLOW_PROTECTED_FILES", "")
+            try:
+                current = set(json.loads(raw)) if raw else set()
+            except json.JSONDecodeError:
+                pass
+            os.environ["SPEC_FLOW_PROTECTED_FILES"] = json.dumps(
+                sorted(current | set(synced)))
+        return synced
 
 
 def console_approver(ctx: dict) -> dict:

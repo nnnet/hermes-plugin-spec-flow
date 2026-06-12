@@ -349,7 +349,21 @@ def make_decomposer(workspace_dir: Optional[str] = None,
                        " (routes, schemas, signatures). Plan children that"
                        " complement this surface; never plan a node that"
                        " duplicates an existing route or table:\n" + rmap)
-        note = channel.poll_note() if channel is not None else None
+        branch_capable = ctx["depth"] < LEAF_DEPTH
+        if channel is not None and branch_capable:
+            # standing human requirements (possibly added MID-RUN) bind every
+            # branch decomposition — a late requirement enters the tree here
+            # (getattr: transport channels may predate this capability)
+            reqs_fn = getattr(channel, "standing_requirements", None)
+            reqs = reqs_fn() if reqs_fn else []
+            if reqs:
+                prompt += ("\n\nSTANDING HUMAN REQUIREMENTS (binding; may"
+                           " have been added mid-run). Unless the existing"
+                           " surface already covers one, YOUR children MUST"
+                           " include a leaf for it:\n" + "\n".join(
+                               f"- [{n}] {t}" for n, t in reqs))
+        note = channel.poll_note(branch_capable=branch_capable) \
+            if channel is not None else None
         if note:
             prompt += _NOTE_RULE.format(note=note)
         _log_call_start("decomposer", nid, ctx["depth"], model)

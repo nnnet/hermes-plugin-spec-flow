@@ -196,11 +196,19 @@ def _badness(passed: bool, output: str) -> int:
 
 
 def make_verifier(model: Optional[str] = None,
-                  max_repair: int = MAX_REPAIR) -> Callable[[dict], dict]:
+                  max_repair: int = MAX_REPAIR,
+                  channel: Optional[object] = None) -> Callable[[dict], dict]:
     model = model or llm_backend.DEFAULT_FREE_MODEL
 
     def verify(ctx: dict) -> dict:
         root = ctx["workspace_root"]
+        if channel is not None:
+            # standing-requirement acceptance tests land in the smoke suite
+            # (root gate): a late human requirement becomes ENFORCEABLE here
+            synced = channel.sync_requirements(root)
+            if synced:
+                llm_log.log({"event": "requirements_synced",
+                             "role": "verifier", "paths": synced})
         include_smoke = str(ctx.get("node")) == "L0"
         passed, out = run_suite(root, include_smoke)
         if not passed:

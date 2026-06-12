@@ -194,7 +194,7 @@ class _FakeChannel:
         self.asked.append((role, node, question))
         return self.answer
 
-    def poll_note(self):
+    def poll_note(self, branch_capable=False):
         n, self.note = self.note, None
         return n
 
@@ -571,3 +571,64 @@ def test_fallback_goes_direct_past_the_gateway(monkeypatch):
     assert lb.ask("hi", model="openrouter/x:free") == "ok"
     assert seen["direct"] is True, "the exhaustion fallback must bypass the gateway"
     monkeypatch.setattr(lb, "_free_down_until", 0.0)
+
+
+# ── standing requirements: artifact-based late-requirement enforcement ──
+
+
+def _req_channel(tmp_path):
+    from harness import hitl
+    ch = hitl.HumanChannel(tmp_path / "hitl")
+    d = ch.requirements_dir / "web_ui"
+    d.mkdir(parents=True)
+    (d / "REQUIREMENT.md").write_text(
+        "Minimal web interface: HTML catalog page with search.",
+        encoding="utf-8")
+    (d / "test_web_ui.py").write_text(
+        "def test_catalog_page():\n    assert True\n", encoding="utf-8")
+    return ch
+
+
+def test_requirements_sync_into_smoke_and_protect(tmp_path, monkeypatch):
+    monkeypatch.delenv("SPEC_FLOW_PROTECTED_FILES", raising=False)
+    ch = _req_channel(tmp_path)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    synced = ch.sync_requirements(ws)
+    rel = "tests/smoke/acceptance_web_ui_test_web_ui.py"
+    assert synced == [rel]
+    assert (ws / rel).exists()
+    from harness import pytest_verifier as pv
+    assert rel in pv.protected_files(), "acceptance must be worker-immutable"
+
+
+def test_branch_decomposer_sees_standing_requirements(tmp_path, monkeypatch):
+    import json as _json
+    from harness import llm_backend as lb
+    monkeypatch.setattr(lb, "BACKEND", "openai")
+    ch = _req_channel(tmp_path)
+    seen = {}
+
+    def fake_ask(prompt, model, system=None):
+        seen["prompt"] = prompt
+        return _json.dumps({"metrics": dict(SMALL)})
+
+    monkeypatch.setattr(lb, "ask", fake_ask)
+    dec = rw.make_decomposer(workspace_dir=str(tmp_path), channel=ch)
+    dec({"project": {"goal": "g", "target": "t", "constitution": []},
+         "node": {"id": "L0", "title": "Root"}, "parent": None, "depth": 0,
+         "ancestors": [], "parent_id": None, "existing_nodes": []})
+    assert "STANDING HUMAN REQUIREMENTS" in seen["prompt"]
+    assert "web_ui" in seen["prompt"]
+
+
+def test_branch_addressed_note_not_burned_by_leaf(tmp_path):
+    from harness import hitl
+    ch = hitl.HumanChannel(tmp_path / "hitl")
+    ch.inbox.write_text("@branch: add a web_ui leaf", encoding="utf-8")
+    assert ch.poll_note(branch_capable=False) is None, \
+        "an atomic node must not consume a @branch note"
+    assert ch.inbox.read_text(encoding="utf-8").strip(), "note must survive"
+    note = ch.poll_note(branch_capable=True)
+    assert note and "web_ui" in note
+    assert not ch.inbox.read_text(encoding="utf-8").strip()
