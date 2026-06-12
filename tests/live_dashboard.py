@@ -390,6 +390,7 @@ def _flow_mermaid(events: list[dict], tree: dict | None = None) -> str | None:
             title = clean(lane)
             lines.append(f'  subgraph lane_{re.sub(r"\W", "_", str(lane))}'
                          f'["{title}"]')
+            lines.append("    direction BT")
             lines += body[lane]
             lines.append("  end")
     else:
@@ -665,7 +666,7 @@ body.treecol .wrap{grid-template-columns:0 6px 1fr}
 .tw{cursor:pointer;display:inline-block;width:12px;color:#8b949e}
 .badge{font-size:11px}
 .detail{padding:12px 18px}
-.tabs{display:flex;gap:4px;flex-wrap:wrap;margin:6px 0 10px;border-bottom:1px solid #21262d}
+.tabs{display:flex;gap:4px;flex-wrap:wrap;margin:6px 0 10px;border-bottom:1px solid #21262d;position:sticky;top:-12px;background:#0d1117;z-index:6;padding-top:12px}
 .tab{cursor:pointer;padding:4px 10px;border:1px solid #30363d;border-bottom:none;border-radius:6px 6px 0 0;background:#161b22;color:#8b949e}
 .tab.on{background:#0d1117;color:#58a6ff;border-color:#1f6feb}
 h2{color:#58a6ff;border-bottom:1px solid #21262d;padding-bottom:4px}h3,h4{color:#79c0ff}
