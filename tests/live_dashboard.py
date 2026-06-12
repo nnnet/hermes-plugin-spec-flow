@@ -727,6 +727,10 @@ function renderNode(){
  let h=`<h2>${SEL} <span class=badge>${badgeHTML(nd.episodes)}</span></h2>`;
  h+=`<div class=kv>вердикт: <b>${nd.verdict}</b> · уровень: L${nd.depth} · родитель: ${nd.parent||'—'}`;
  const m=nd.metrics||{};if(Object.keys(m).length)h+=` · LOC≈${m.estimated_loc??'?'} · задач ${m.tasks??'?'} · решений ${m.open_decisions??'?'}`;
+ // 'versions' counts SPEC re-authorings only; integrate-time repairs live
+ // in events — surface them so a red node never looks 'untouched'
+ const nrep=(nd.events||[]).filter(e=>/rework|repair/i.test(e.action||'')).length;
+ if(nrep)h+=` · <span title="раунды доработки спеки + раунды починки интеграции (события rework/repair)">попыток починки: ${nrep}</span>`;
  h+=`</div>`;
  // a bad verdict followed by a later PASS on the SAME gate is fixed history,
  // not a live problem — show the two groups apart so badges and boxes agree
