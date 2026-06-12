@@ -1705,9 +1705,23 @@ class Engine:
                           "resume: reuse persisted artifact (run journal)", code_rel,
                           level=L_DETAIL)
             else:
-                self.agents["implementer"]({"node": nid, "title": title,
-                                            "depth": depth,
-                                            "workspace": self.workspace, "spec": f"specs/{fn}.md"})
+                try:
+                    self.agents["implementer"]({"node": nid, "title": title,
+                                                "depth": depth,
+                                                "workspace": self.workspace,
+                                                "spec": f"specs/{fn}.md"})
+                except NotImplementedError:
+                    raise   # missing agent is a CONFIG error, not a crash
+                except Exception as exc:  # noqa: BLE001
+                    # a crashing WORKER surrenders the leaf, never the run:
+                    # the artifacts stay red and the gates judge them
+                    self.loops.append({"type": "implementer-crash",
+                                       "task": nid,
+                                       "detail": str(exc)[:200]})
+                    self.emit("implement", "implementer", "spec-implement",
+                              f"{nid}:impl",
+                              "implementer crashed — leaf surrendered red",
+                              str(exc)[:200], level=L_MILESTONE)
                 self._judge_leaf(nid, title, fn, code_rel, test_rel)
         elif self.depth >= DEPTH_SCAFFOLD:
             code_rel = self.workspace.code(nid, title)

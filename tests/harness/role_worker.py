@@ -413,7 +413,19 @@ def make_decomposer(workspace_dir: Optional[str] = None,
         raw = _dialog_round(prompt, role="decomposer", node=nid, system=system,
                             allowed=allowed, disallowed=disallowed,
                             cwd=workspace_dir, model=model, channel=channel)
-        out = _handle_operator_reply(_extract_json(raw), role="decomposer",
+        try:
+            parsed = _extract_json(raw)
+        except ValueError:
+            # prose instead of JSON: one strict re-ask (the implementer's
+            # discipline) — a second failure raises and the ENGINE
+            # surrenders the node, not the run
+            raw = _call_model(
+                prompt + "\n\nYOUR PREVIOUS REPLY WAS NOT VALID JSON."
+                " Reply with ONLY the JSON object, no prose, no fence.",
+                system=system, allowed=allowed, disallowed=disallowed,
+                cwd=workspace_dir, model=model, role="decomposer")
+            parsed = _extract_json(raw)
+        out = _handle_operator_reply(parsed, role="decomposer",
                                      node=nid, note=note, channel=channel)
         if ctx["depth"] >= LEAF_DEPTH:
             out.pop("children", None)
@@ -573,7 +585,7 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         try:
             _handle_operator_reply(_extract_json(raw), role="implementer",
                                    node=nid, note=note, channel=channel)
-        except ValueError:
+        except ValueError:  # noqa: TRY302 — prose reply, judged by artifacts
             # non-JSON final reply: artifacts still judge the work; an
             # unaddressed operator note is recorded honestly
             if note and channel is not None:
@@ -655,7 +667,13 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
                 raw2 = _call_model(repair, system=system, allowed=allowed,
                                    disallowed=disallowed, cwd=ws_root,
                                    model=model, role="implementer")
-                out2 = _extract_json(raw2)
+                try:
+                    out2 = _extract_json(raw2)
+                except ValueError:
+                    # prose instead of JSON surrenders the REPAIR round,
+                    # never the run (this exact site once killed a whole
+                    # live run on a Russian-prose reply)
+                    out2 = {}
                 if _write_reply_files(ws, out2.get("files") or {}, fn):
                     passed, test_out = _leaf_bar(ws_root, fn, baseline, pv)
                 raw = raw2

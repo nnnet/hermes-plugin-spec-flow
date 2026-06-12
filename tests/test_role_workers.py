@@ -749,3 +749,35 @@ def test_leaf_bar_catches_suite_degradation(monkeypatch, tmp_path):
     impl({"node": "shared", "title": "Shared", "workspace": ws,
           "spec": "specs/shared.md"})
     assert calls["n"] == 2, "suite degradation must trigger the repair round"
+
+
+def test_garbage_decomposer_reply_gets_one_strict_reask(monkeypatch):
+    import json as _json
+    from harness import llm_backend as lb
+    monkeypatch.setattr(lb, "BACKEND", "openai")
+    replies = ["вот моя декомпозиция прозой, без JSON",
+               _json.dumps({"atomic": True, "metrics": dict(SMALL),
+                            "spec_markdown": "## Requirements\n- x"})]
+
+    def fake_ask(prompt, model, system=None, **kw):
+        return replies.pop(0)
+
+    monkeypatch.setattr(lb, "ask", fake_ask)
+    dec = rw.make_decomposer()
+    out = dec({"project": {"goal": "g", "target": "t", "constitution": []},
+               "node": {"id": "n", "title": "N"}, "parent": "L0",
+               "depth": 3, "ancestors": [], "existing_nodes": []})
+    assert out["atomic"] is True and not replies
+
+
+def test_implementer_crash_surrenders_leaf_not_run(plugin, tmp_path):
+    def implementer(ctx):
+        raise ValueError("no JSON object in worker reply: проза")
+
+    res = eng.run_project(dict(GOAL), workspace=str(tmp_path / "wk"),
+                          tools=plugin.tools, depth="execute",
+                          agents={"decomposer": simple_decomposer,
+                                  "implementer": implementer})
+    crashes = [l for l in res.loops if l["type"] == "implementer-crash"]
+    assert crashes, "the crash must be recorded as a loop"
+    assert "editor" in res.tasks      # the run carried on to the end
