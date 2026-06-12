@@ -350,18 +350,25 @@ def make_decomposer(workspace_dir: Optional[str] = None,
                        " complement this surface; never plan a node that"
                        " duplicates an existing route or table:\n" + rmap)
         branch_capable = ctx["depth"] < LEAF_DEPTH
-        if channel is not None and branch_capable:
-            # standing human requirements (possibly added MID-RUN) bind every
-            # branch decomposition — a late requirement enters the tree here
-            # (getattr: transport channels may predate this capability)
-            reqs_fn = getattr(channel, "standing_requirements", None)
-            reqs = reqs_fn() if reqs_fn else []
-            if reqs:
-                prompt += ("\n\nSTANDING HUMAN REQUIREMENTS (binding; may"
-                           " have been added mid-run). Unless the existing"
-                           " surface already covers one, YOUR children MUST"
-                           " include a leaf for it:\n" + "\n".join(
-                               f"- [{n}] {t}" for n, t in reqs))
+        # standing human requirements (possibly added MID-RUN) bind every
+        # branch decomposition — a late requirement enters the tree here
+        # (getattr: transport channels may predate this capability)
+        reqs_fn = getattr(channel, "standing_requirements", None) \
+            if channel is not None else None
+        reqs = reqs_fn() if reqs_fn else []
+        own_req = next((t for n, t in reqs if n == nid), None)
+        if own_req:
+            prompt += ("\n\nTHIS NODE EXISTS to satisfy a standing HUMAN"
+                       " REQUIREMENT (added mid-run; binding). Author a spec"
+                       " that covers it COMPLETELY — every page, element and"
+                       " behaviour below is an acceptance criterion:\n"
+                       + own_req)
+        elif reqs and branch_capable:
+            prompt += ("\n\nSTANDING HUMAN REQUIREMENTS (binding; may"
+                       " have been added mid-run). Unless the existing"
+                       " surface already covers one, YOUR children MUST"
+                       " include a leaf for it:\n" + "\n".join(
+                           f"- [{n}] {t}" for n, t in reqs))
         note = channel.poll_note(branch_capable=branch_capable) \
             if channel is not None else None
         if note:
@@ -376,6 +383,27 @@ def make_decomposer(workspace_dir: Optional[str] = None,
             out.pop("children", None)
         if out.get("children"):
             out["children"] = out["children"][:MAX_CHILDREN]
+        if branch_capable and reqs and not out.get("atomic") \
+                and out.get("children"):
+            # A prompt is NOT a gate: live runs show branch decomposers
+            # ignore the binding block above (each branch assumes another
+            # one covers the requirement). Materialize every still-uncovered
+            # standing requirement DETERMINISTICALLY — attach it as a child
+            # of the first branch decomposed after the requirement landed;
+            # existing_nodes keeps the attach idempotent across branches.
+            # The attached child may exceed MAX_CHILDREN by design.
+            known = {n["id"] for n in ctx.get("existing_nodes") or []}
+            known.add(nid)
+            known.update(c.get("id") for c in out["children"])
+            for req_name, statement in reqs:
+                if req_name in known:
+                    continue
+                out["children"].append(
+                    {"id": req_name,
+                     "title": " ".join(statement.split())[:120]})
+                llm_log.log({"event": "requirement_attached",
+                             "role": "decomposer", "node": nid,
+                             "requirement": req_name})
         # canonical role name + children ids — the live dashboard rebuilds
         # the growing tree from exactly these fields; ``worker`` marks the
         # real-worker (skill+profile) origin

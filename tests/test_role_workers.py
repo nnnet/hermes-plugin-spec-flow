@@ -622,6 +622,80 @@ def test_branch_decomposer_sees_standing_requirements(tmp_path, monkeypatch):
     assert "web_ui" in seen["prompt"]
 
 
+def test_branch_decomposer_auto_attaches_uncovered_requirement(
+        tmp_path, monkeypatch):
+    # the prompt block is advisory; the ATTACH is the gate — a branch that
+    # ignores the standing requirement still gets it as a child
+    import json as _json
+    from harness import llm_backend as lb
+    monkeypatch.setattr(lb, "BACKEND", "openai")
+    ch = _req_channel(tmp_path)
+
+    def fake_ask(prompt, model, system=None):
+        return _json.dumps({"atomic": False, "metrics": dict(SMALL),
+                            "children": [{"id": "catalog", "title": "C"}],
+                            "spec_markdown": "## Requirements\n- x"})
+
+    monkeypatch.setattr(lb, "ask", fake_ask)
+    dec = rw.make_decomposer(workspace_dir=str(tmp_path), channel=ch)
+    out = dec({"project": {"goal": "g", "target": "t", "constitution": []},
+               "node": {"id": "L0", "title": "Root"}, "parent": None,
+               "depth": 0, "ancestors": [], "parent_id": None,
+               "existing_nodes": []})
+    ids = [c["id"] for c in out["children"]]
+    assert ids == ["catalog", "web_ui"], \
+        "an uncovered standing requirement must be attached as a child"
+    attached = out["children"][-1]
+    assert "web interface" in attached["title"].lower()
+
+
+def test_requirement_already_in_tree_not_attached_twice(
+        tmp_path, monkeypatch):
+    import json as _json
+    from harness import llm_backend as lb
+    monkeypatch.setattr(lb, "BACKEND", "openai")
+    ch = _req_channel(tmp_path)
+
+    def fake_ask(prompt, model, system=None):
+        return _json.dumps({"atomic": False, "metrics": dict(SMALL),
+                            "children": [{"id": "payments", "title": "P"}],
+                            "spec_markdown": "## Requirements\n- x"})
+
+    monkeypatch.setattr(lb, "ask", fake_ask)
+    dec = rw.make_decomposer(workspace_dir=str(tmp_path), channel=ch)
+    out = dec({"project": {"goal": "g", "target": "t", "constitution": []},
+               "node": {"id": "orders", "title": "Orders"}, "parent": "L0",
+               "depth": 1, "ancestors": ["Root"], "parent_id": None,
+               "existing_nodes": [{"id": "web_ui", "title": "Web UI"}]})
+    ids = [c["id"] for c in out["children"]]
+    assert ids == ["payments"], "a covered requirement must NOT re-attach"
+
+
+def test_requirement_node_gets_full_statement_in_prompt(
+        tmp_path, monkeypatch):
+    # the attached child's own decompose pass must see the FULL requirement
+    # text — its spec is authored from it, not from a 120-char title
+    import json as _json
+    from harness import llm_backend as lb
+    monkeypatch.setattr(lb, "BACKEND", "openai")
+    ch = _req_channel(tmp_path)
+    seen = {}
+
+    def fake_ask(prompt, model, system=None):
+        seen["prompt"] = prompt
+        return _json.dumps({"atomic": True, "metrics": dict(SMALL),
+                            "spec_markdown": "## Requirements\n- x"})
+
+    monkeypatch.setattr(lb, "ask", fake_ask)
+    dec = rw.make_decomposer(workspace_dir=str(tmp_path), channel=ch)
+    dec({"project": {"goal": "g", "target": "t", "constitution": []},
+         "node": {"id": "web_ui", "title": "Web UI"}, "parent": "L0",
+         "depth": 3, "ancestors": ["Root"], "parent_id": None,
+         "existing_nodes": []})
+    assert "THIS NODE EXISTS to satisfy" in seen["prompt"]
+    assert "HTML catalog page with search" in seen["prompt"]
+
+
 def test_branch_addressed_note_not_burned_by_leaf(tmp_path):
     from harness import hitl
     ch = hitl.HumanChannel(tmp_path / "hitl")
