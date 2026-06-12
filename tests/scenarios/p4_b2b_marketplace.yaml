@@ -217,6 +217,13 @@ review:
 on_integrate_fail: rework
 integrate_max_rework: 1
 
+# Parallelization stage 1 (v14+): top-level branches run children in a
+# pool; the global ceiling and the LLM in-flight cap keep the free pool's
+# per-minute limit from turning speed into a 429 storm.
+parallel:
+  children: 3
+  max_workers: 3
+
 # Platform conventions (the seeded skeleton; same school as p5): features
 # build INTO it, late human requirements arrive as standing requirements
 # with acceptance tests that gate the root integrate.
@@ -277,6 +284,7 @@ seed_files:
 # ('claude/<model>') ONLY — paid API models are forbidden. Author \!= judge:
 # the reviewer model differs from the implementer model (defaults).
 workers:
+  concurrency: 2
   providers:
     - name: openrouter-free
       kind: openai
