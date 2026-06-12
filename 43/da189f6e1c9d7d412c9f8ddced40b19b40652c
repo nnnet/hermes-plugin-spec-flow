@@ -1,0 +1,35 @@
+tests/harness/role_worker.py
+  s_a7f45290e91181::t_0085b2ccf039d1 508-513
+spec_flow_runner.py
+  s_a7f45290e91181::t_40cfb3317e2b69 36,754-759,811-820,823-826,1461,1465-1472,1477-1502
+  s_a7f45290e91181::t_f915c10200977e 964-975,1462-1464,1473-1476
+tests/test_parallel_children.py
+  s_a7f45290e91181::t_6ddb0a5d2ce0c7 137-140,146-151
+  s_a7f45290e91181::t_25f674c5749130 96,107
+  s_a7f45290e91181::t_a6bc7004c7982b 1-30,35-41,45,48-95,97-106,108-136,141-145
+  s_a7f45290e91181::t_dd8aac86ce2860 31-34,42-44,46-47
+  s_a7f45290e91181::t_ee096e5e0aca6c 152-214
+docs/implemented-improvements.md
+  s_a7f45290e91181::t_3f2d7ee301caa6 100-181
+tests/harness/pytest_verifier.py
+  s_a7f45290e91181::t_0085b2ccf039d1 63-65
+tests/harness/llm_backend.py
+  s_a7f45290e91181::t_0085b2ccf039d1 30,89-94,126-132
+  s_a7f45290e91181::t_f915c10200977e 96-111,224,228-230
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "43da189f6e1c9d7d412c9f8ddced40b19b40652c",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-fable-5"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
