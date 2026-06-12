@@ -37,6 +37,13 @@ constitution:
      201; every successful GET returns 200. POST /orders responds
      {id, status: 'paid'}; GET /payouts responds {items: [{order_id,
      amount_cents, status}]} with amount_cents equal to the product price."
+  - "Request payloads are contractual — accept EXACTLY these fields, no
+     extras required: POST /sellers takes {name, email} and responds
+     {id, kyc_status: 'verified', ...}; POST /products takes {seller_id,
+     title, price_cents} (the field is TITLE — never name/description) and
+     responds {id, ...}; GET /products?search= matches against title and
+     responds {items: [{id, seller_id, title, price_cents}]};
+     POST /orders takes {product_id, buyer_email}."
   - "Payments and KYC are internal stubs with honest interfaces: KYC
      auto-verifies, the PSP auto-captures; no external providers, no card
      data stored."
