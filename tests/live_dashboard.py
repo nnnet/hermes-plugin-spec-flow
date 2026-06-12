@@ -324,9 +324,29 @@ def _inputs_md(run_dir: pathlib.Path) -> str:
     return "\n\n".join(out) if out else "_исходные данные не записаны_"
 
 
-def _flow_mermaid(events: list[dict]) -> str | None:
-    """Execution-flow graph (mermaid): the milestones the plugin hit, in order,
-    with episode edges. Episode phases are coloured so the loops stand out."""
+def _lane_map(tree: dict | None) -> dict:
+    """node id -> its L1 ancestor id (the lane). Root maps to itself."""
+    lanes: dict = {}
+    if not tree:
+        return lanes
+    lanes[tree.get("id", "L0")] = tree.get("id", "L0")
+
+    def walk(n, lane):
+        lanes[n.get("id")] = lane
+        for c in n.get("children") or []:
+            walk(c, lane)
+
+    for child in tree.get("children") or []:
+        walk(child, child.get("id"))
+    return lanes
+
+
+def _flow_mermaid(events: list[dict], tree: dict | None = None) -> str | None:
+    """Execution-flow graph (mermaid). With a tree available the
+    milestones are grouped into LANES (one subgraph per L1 branch) and
+    chained within their lane — under parallel children the branches sit
+    side by side instead of interleaving into one false chain. Episode
+    phases are coloured so the loops stand out."""
     miles = [e for e in events if int(e.get("level") or 2) <= 1]
     if not miles:
         return None
@@ -335,24 +355,46 @@ def _flow_mermaid(events: list[dict]) -> str | None:
         return re.sub(r'["\[\]|{}<>]', " ", str(s))[:46]
 
     ep_phase = {"research", "drift", "respec", "hitl"}
+    lanes = _lane_map(tree)
+    root_id = (tree or {}).get("id", "L0")
     # BT (bottom-to-top): the run STARTS at the bottom, the newest milestone
     # is on top — matches reading order while the run is live. Arrows still
     # point old -> new.
     lines = ["flowchart BT"]
-    prev = None
+    body: dict = {}        # lane -> [mermaid lines]
+    prev_in: dict = {}     # lane -> previous node id (chain WITHIN a lane)
+    order: list = []       # lanes in first-appearance order
     for idx, e in enumerate(miles):
         nid = f"s{idx}"
-        node = clean(e.get("task") or e.get("phase") or "")
+        task = str(e.get("task") or "")
+        base = task.split(":")[0]
+        lane = lanes.get(base, root_id) if lanes else root_id
+        if lane not in body:
+            body[lane] = []
+            order.append(lane)
+        node = clean(task or e.get("phase") or "")
         act = clean(e.get("action") or "")
-        lines.append(f'  {nid}["{e.get("phase")} · {node}<br/>{act}"]')
+        body[lane].append(f'    {nid}["{e.get("phase")} · {node}<br/>{act}"]')
         if str(e.get("verdict")) in {"REJECT", "FAIL", "ERROR"}:
-            lines.append(f"  style {nid} fill:#3a1620,stroke:#f85149")
+            body[lane].append(f"    style {nid} fill:#3a1620,stroke:#f85149")
         elif str(e.get("phase")) in ep_phase or e.get("gate") in ("clarify", "drift", "hitl"):
-            lines.append(f"  style {nid} fill:#3a2a12,stroke:#e3b341")
+            body[lane].append(f"    style {nid} fill:#3a2a12,stroke:#e3b341")
+        prev = prev_in.get(lane)
         if prev is not None:
             edge = clean(e.get("verdict") or e.get("gate") or "")
-            lines.append(f"  {prev} -->|{edge}| {nid}" if edge else f"  {prev} --> {nid}")
-        prev = nid
+            body[lane].append(f"    {prev} -->|{edge}| {nid}" if edge
+                              else f"    {prev} --> {nid}")
+        prev_in[lane] = nid
+    if len(order) > 1:
+        for lane in order:
+            title = clean(lane)
+            lines.append(f'  subgraph lane_{re.sub(r"\W", "_", str(lane))}'
+                         f'["{title}"]')
+            lines += body[lane]
+            lines.append("  end")
+    else:
+        for lane in order:
+            lines += [ln[2:] for ln in body[lane]]
     return "```mermaid\n" + "\n".join(lines) + "\n```"
 
 
@@ -458,10 +500,12 @@ def _build_state(run_dir: pathlib.Path) -> dict:
                 "reviewer": "ревьюит", "researcher": "исследует"}
     if not done:
         if open_calls:
-            parts = [
-                f"{_ROLE_RU.get(e.get('role'), e.get('role'))}"
-                f" «{e.get('node')}» (L{e.get('depth')})"
-                for e in open_calls.values()]
+            parts = []
+            for e in open_calls.values():
+                lvl = e.get("depth")
+                chip = f" (L{lvl})" if isinstance(lvl, int) and lvl >= 0 else ""
+                parts.append(f"{_ROLE_RU.get(e.get('role'), e.get('role'))}"
+                             f" «{e.get('node')}»{chip}")
             current = "🟢 " + "  ⏐  ".join(parts)
         elif events:
             le = events[-1]
@@ -527,7 +571,7 @@ def _build_state(run_dir: pathlib.Path) -> dict:
         "timeline": timeline[-250:],
         "reports": {
             "inputs": _md_to_html(_inputs_md(run_dir)),
-            "flow": _md_to_html(_flow_mermaid(events)) if events else None,
+            "flow": _md_to_html(_flow_mermaid(events, tree)) if events else None,
             "report": report_html,
             "oracle": read_md("oracle-report.md"),
             "summary": read_md("SUMMARY.md"),

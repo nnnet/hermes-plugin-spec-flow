@@ -1125,7 +1125,7 @@ class Engine:
                   f"{len(node.get('children', []))} children proposed", level=L_MILESTONE)
         return node
 
-    def _consult_reviewer(self, nid: str, title: str, spec_rel: Optional[str]) -> None:
+    def _consult_reviewer(self, nid: str, title: str, spec_rel: Optional[str], depth: int = -1) -> None:
         """Real spec-reviewer worker, when attached. Without one the engine
         keeps its historical simulated PASS events untouched.
 
@@ -1140,7 +1140,7 @@ class Engine:
         for round_no in (1, 2):  # one retry — a crash is infra, not a verdict
             try:
                 out = reviewer({"node": nid, "title": title, "spec": spec_rel,
-                                "goal": self._goal,
+                                "goal": self._goal, "depth": depth,
                                 "constitution": self._constitution,
                                 "workspace_root": self.workspace.root}) or {}
                 break
@@ -1222,7 +1222,8 @@ class Engine:
                                        str(node.get("spec_markdown") or "")):
             self.emit("review", "engine", "", nid, "spec lint clean", "",
                       "spec_lint", "PASS")
-        verdict, reasons = self._consult_reviewer(nid, title, spec_rel)
+        verdict, reasons = self._consult_reviewer(nid, title, spec_rel,
+                                                  depth)
         if verdict != "REJECT":
             return
         pol = self.review_policy
@@ -1278,7 +1279,7 @@ class Engine:
                 spec_rel = self.workspace.spec(
                     nid, title, depth, spec_args["verdict"], spec_args["reasons"],
                     parent, spec_args["plan"], node=node, target=self._target)
-                verdict, reasons = self._consult_reviewer(nid, title, spec_rel)
+                verdict, reasons = self._consult_reviewer(nid, title, spec_rel, depth)
             if verdict == "REJECT":
                 self.emit("review", "spec-reviewer", "spec-reviewer", nid,
                           f"rework budget exhausted ({budget}) — REJECT stands;"
@@ -1646,6 +1647,7 @@ class Engine:
                           level=L_DETAIL)
             else:
                 self.agents["implementer"]({"node": nid, "title": title,
+                                            "depth": depth,
                                             "workspace": self.workspace, "spec": f"specs/{fn}.md"})
                 self._judge_leaf(nid, title, fn, code_rel, test_rel)
         elif self.depth >= DEPTH_SCAFFOLD:

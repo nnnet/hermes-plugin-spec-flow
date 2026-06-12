@@ -557,7 +557,7 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         note = channel.poll_note() if channel is not None else None
         if note:
             prompt += _NOTE_RULE.format(note=note)
-        _log_call_start("implementer", nid, -1, model)
+        _log_call_start("implementer", nid, int(ctx.get("depth", -1)), model)
         raw = _dialog_round(prompt, role="implementer", node=nid, system=system,
                             allowed=allowed, disallowed=disallowed,
                             cwd=ws_root, model=model, channel=channel)
@@ -607,7 +607,7 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         note = channel.poll_note() if channel is not None else None
         if note:
             prompt += _NOTE_RULE.format(note=note)
-        _log_call_start("implementer", nid, -1, model)
+        _log_call_start("implementer", nid, int(ctx.get("depth", -1)), model)
         raw = _dialog_round(prompt, role="implementer", node=nid, system=system,
                             allowed=allowed, disallowed=disallowed,
                             cwd=ws_root, model=model, channel=channel)
@@ -696,7 +696,7 @@ def make_reviewer() -> Callable[[dict], dict]:
         prompt = _REVIEW_TASK.format(
             spec=ctx["spec"], spec_body=spec_body, goal=ctx.get("goal", ""),
             constitution="; ".join(ctx.get("constitution") or []))
-        _log_call_start("reviewer", str(ctx.get("node", "?")), -1, model)
+        _log_call_start("reviewer", str(ctx.get("node", "?")), int(ctx.get("depth", -1)), model)
         raw = _call_model(prompt, system=system, allowed=allowed,
                           disallowed=disallowed, cwd=ctx.get("workspace_root"),
                           model=model, role="reviewer")
@@ -734,7 +734,7 @@ def make_researcher() -> Callable[[dict], dict]:
         prompt = _RESEARCH_TASK.format(goal=ctx.get("goal", ""),
                                        node=ctx.get("node", "?"),
                                        question=ctx["question"])
-        _log_call_start("researcher", str(ctx.get("node", "?")), -1, model)
+        _log_call_start("researcher", str(ctx.get("node", "?")), int(ctx.get("depth", -1)), model)
         raw = _call_model(prompt, system=system, allowed=allowed,
                           disallowed=disallowed, cwd=ctx.get("workspace_root"),
                           model=model, role="researcher")
