@@ -110,6 +110,24 @@ _EVENT_GATE = {
 NODE_ENGINES = ("inline", "fsm")
 
 
+def _lint_spec_traceability(nid: str, md: str) -> list:
+    """Deterministic traceability rules a reviewer should never have to
+    repeat: every AC-<node>-N traces to REQ-<node>-N and every REQ has an
+    acceptance criterion. Specs without REQ/AC ids lint clean."""
+    import re as _re
+    esc = _re.escape(str(nid))
+    reqs = set(_re.findall(rf"\bREQ-{esc}-(\d+)\b", md or ""))
+    acs = set(_re.findall(rf"\bAC-{esc}-(\d+)\b", md or ""))
+    out = []
+    for n in sorted(acs - reqs, key=int):
+        out.append(f"AC-{nid}-{n} exists but REQ-{nid}-{n} is missing — "
+                   "add the explicit requirement it traces to")
+    for n in sorted(reqs - acs, key=int):
+        out.append(f"REQ-{nid}-{n} has no acceptance criterion "
+                   f"AC-{nid}-{n} — every requirement must be testable")
+    return out
+
+
 class IntegrateFailHalt(RuntimeError):
     """on_integrate_fail='halt': a FAILed integrate stops the run."""
 
@@ -1135,6 +1153,52 @@ class Engine:
         spec_rel = self.workspace.spec(
             nid, title, depth, spec_args["verdict"], spec_args["reasons"],
             parent, spec_args["plan"], node=node, target=self._target)
+        # deterministic lint BEFORE the reviewer: the mechanical
+        # traceability class (AC without REQ and the reverse) is fixed by
+        # a bounded author round with the EXACT violations — a reviewer
+        # round is never spent on what code can state precisely
+        for _lint_round in range(2):
+            lint = _lint_spec_traceability(nid,
+                                           str(node.get("spec_markdown")
+                                               or ""))
+            if not lint:
+                break
+            self.emit("review", "engine", "", nid,
+                      f"spec lint: {len(lint)} traceability violation(s)",
+                      "; ".join(lint)[:300], "spec_lint", "FAIL",
+                      level=L_MILESTONE)
+            if "decomposer" not in self.agents:
+                break
+            self._decompose_calls += 1
+            lctx = self._decomposer_ctx(node, depth, parent, ancestors)
+            lctx["review_feedback"] = ("DETERMINISTIC LINT (code-checked,"
+                                       " not an opinion):\n- "
+                                       + "\n- ".join(lint))
+            lctx["previous_spec"] = str(node.get("spec_markdown") or "")
+            lctx["rework"] = True
+            try:
+                lout = self.agents["decomposer"](lctx) or {}
+            except Exception as exc:  # noqa: BLE001
+                self.emit("review", "spec-decomposer", "spec-flow-decompose",
+                          nid, "lint-fix worker failed — keeping the spec",
+                          str(exc)[:200], level=L_MILESTONE)
+                break
+            lmd = str(lout.get("spec_markdown") or "").strip()
+            if not lmd:
+                break
+            node["spec_markdown"] = lmd
+            spec_rel = self.workspace.spec(
+                nid, title, depth, spec_args["verdict"],
+                spec_args["reasons"], parent, spec_args["plan"],
+                node=node, target=self._target)
+        else:
+            lint = _lint_spec_traceability(nid,
+                                           str(node.get("spec_markdown")
+                                               or ""))
+        if not _lint_spec_traceability(nid,
+                                       str(node.get("spec_markdown") or "")):
+            self.emit("review", "engine", "", nid, "spec lint clean", "",
+                      "spec_lint", "PASS")
         verdict, reasons = self._consult_reviewer(nid, title, spec_rel)
         if verdict != "REJECT":
             return
@@ -1155,6 +1219,7 @@ class Engine:
                 self._decompose_calls += 1
                 ctx = self._decomposer_ctx(node, depth, parent, ancestors)
                 ctx["review_feedback"] = reasons
+                ctx["previous_spec"] = str(node.get("spec_markdown") or "")
                 ctx["rework"] = True
                 try:
                     out = self.agents["decomposer"](ctx) or {}

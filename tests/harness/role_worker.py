@@ -310,8 +310,23 @@ def make_decomposer(workspace_dir: Optional[str] = None,
             ancestors=" → ".join(ctx.get("ancestors") or []) or "—",
             existing=existing) + _ASK_RULE
         feedback = str(ctx.get("review_feedback") or "").strip()
+        prev_spec = str(ctx.get("previous_spec") or "").strip()
+        if feedback and prev_spec:
+            # minimal-edit rework: re-authoring from scratch re-rolls the
+            # dice on every id and section — the reviewer's point about ONE
+            # missing line then survives whole rework budgets (the
+            # product_discovery class)
+            feedback_block = (
+                "\n\nYOUR PREVIOUS SPEC (verbatim):\n" + prev_spec +
+                "\n\nMake the MINIMAL edit to the text above that fixes"
+                " EVERY reason below — keep all ids, numbering and"
+                " untouched sections exactly as they are, do NOT rewrite"
+                " from scratch.")
+        else:
+            feedback_block = ""
         if feedback:
-            prompt += ("\n\nREWORK ROUND — the reviewer REJECTED the previous"
+            prompt += (feedback_block +
+                       "\n\nREWORK ROUND — the reviewer REJECTED the previous"
                        " version of this node's spec. The exact reasons:\n"
                        + feedback +
                        "\nThe node's atomicity and children are already"
