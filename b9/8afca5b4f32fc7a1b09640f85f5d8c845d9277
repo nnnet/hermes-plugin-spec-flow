@@ -1,0 +1,19 @@
+.claude/plans/2026-06-12T10-20__p5-mvp-retrospective-and-improvements.md
+  s_a7f45290e91181::t_4a6caad8f9509b 554-615
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "b98afca5b4f32fc7a1b09640f85f5d8c845d9277",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-fable-5"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
