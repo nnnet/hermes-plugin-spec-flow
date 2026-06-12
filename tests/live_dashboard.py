@@ -651,11 +651,15 @@ ol.tl{padding-left:18px}ol.tl li{margin:1px 0;white-space:nowrap}
 .tl .tk{color:#6e7681;display:inline-block;min-width:34px}
 .tl .ph{color:#79c0ff;display:inline-block;min-width:96px}
 .tl li:last-child{background:#12361f;border-radius:4px;padding:0 4px}
-.wrap{display:grid;grid-template-columns:340px 1fr;gap:0;height:calc(100vh - 70px)}
+.wrap{display:grid;grid-template-columns:var(--treew,340px) 6px 1fr;gap:0;height:calc(100vh - 70px)}
+.split{cursor:col-resize;background:#21262d;position:relative}.split:hover{background:#1f6feb}
+.split .knob{position:absolute;top:8px;left:-7px;width:20px;height:20px;line-height:20px;text-align:center;cursor:pointer;background:#161b22;border:1px solid #30363d;border-radius:5px;color:#8b949e;font-size:11px;z-index:5}.split .knob:hover{color:#58a6ff}
+body.treecol .col.tree{display:none}body.treecol .split .knob{left:1px}
+body.treecol .wrap{grid-template-columns:0 6px 1fr}
 .col{overflow:auto;height:100%}
 .tree{padding:10px 8px;border-right:1px solid #21262d}
 .tree ul{list-style:none;margin:0;padding-left:16px}
-.tree li{margin:1px 0}
+.tree li{margin:1px 0;white-space:nowrap}/* a wrapped label left the twisty alone on its own line — a fake empty row before long ids */
 .node{cursor:pointer;padding:1px 6px;border-radius:5px;white-space:nowrap}
 .node:hover{background:#161b22}.node.sel{background:#1f6feb33;outline:1px solid #1f6feb}
 .tw{cursor:pointer;display:inline-block;width:12px;color:#8b949e}
@@ -691,11 +695,43 @@ pre.code{background:#161b22;padding:10px;border-radius:6px;overflow:auto;white-s
 </div>
 <div class=wrap>
  <div class="col tree" id=tree></div>
+ <div class=split id=split><span class=knob id=treeknob title="свернуть/развернуть панель">◀</span></div>
  <div class="col detail" id=detail></div>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 <script>
 if(window.mermaid)mermaid.initialize({startOnLoad:false,theme:'dark',securityLevel:'loose',flowchart:{useMaxWidth:false}});
+// left panel: drag-resize + collapse (persisted)
+(function(){
+ const root=document.documentElement, body=document.body;
+ const saved=localStorage.getItem('treew');
+ if(saved)root.style.setProperty('--treew',saved);
+ const knob=document.getElementById('treeknob');
+ function setCollapsed(on){
+  body.classList.toggle('treecol',on);
+  knob.textContent=on?'▶':'◀';
+  localStorage.setItem('treecol',on?'1':'');
+ }
+ setCollapsed(localStorage.getItem('treecol')==='1');
+ knob.addEventListener('click',e=>{e.stopPropagation();
+  setCollapsed(!body.classList.contains('treecol'));});
+ const split=document.getElementById('split');
+ let drag=false;
+ split.addEventListener('mousedown',e=>{
+  if(e.target===knob)return;
+  drag=true;e.preventDefault();body.style.userSelect='none';});
+ window.addEventListener('mousemove',e=>{
+  if(!drag)return;
+  const w=Math.max(120,Math.min(window.innerWidth-300,e.clientX));
+  root.style.setProperty('--treew',w+'px');
+  if(body.classList.contains('treecol'))setCollapsed(false);
+ });
+ window.addEventListener('mouseup',()=>{
+  if(!drag)return;drag=false;body.style.userSelect='';
+  localStorage.setItem('treew',
+   getComputedStyle(root).getPropertyValue('--treew').trim());
+ });
+})();
 let STATE=null, SEL=null, EXPANDED={}, GCOLL={}, CLICKT=null, NTAB='spec', GTAB='inputs', FILECACHE={}, AUTO=true;
 let ACTIVE=[];
 const isActive=id=>ACTIVE.some(a=>a.node===id);
