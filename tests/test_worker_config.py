@@ -171,3 +171,40 @@ def test_configure_resets_budget_counter(monkeypatch):
     assert lb.calls_made() == 1
     lb.configure_workers({"budget": 3})
     assert lb.calls_made() == 0
+
+
+def test_mixed_429_raises_quota_for_fallback(monkeypatch):
+    # one 429 among the retries is a quota signal — the old `all retries
+    # throttled` rule let a final 429 surface as RuntimeError and killed
+    # a whole live run with no fallback
+    monkeypatch.setattr(lb, "BACKEND", "openai")
+    monkeypatch.setattr(lb, "_free_down_until", 0.0)
+    monkeypatch.setattr(lb, "BACKOFF", 0.0)
+    answers = [(500, "boom"), (429, '{"retry_after_seconds": 0}'),
+               (502, "bad gateway")]
+    monkeypatch.setattr(lb, "_http_post",
+                        lambda url, payload, headers: answers.pop(0))
+    with pytest.raises(lb.QuotaExhausted, match="throttled"):
+        lb._ask_openai("q", "openrouter/a:free")
+
+
+def test_chain_absorbs_plain_provider_failure(monkeypatch):
+    monkeypatch.setattr(lb, "BACKEND", "openai")
+    monkeypatch.setattr(lb, "_free_down_until", 0.0)
+
+    def broken(prompt, model, system=None):
+        raise RuntimeError("openai backend failed after 3 tries: HTTP 500")
+
+    monkeypatch.setattr(lb, "_ask_openai", broken)
+    monkeypatch.setattr(
+        lb, "_ask_claude",
+        lambda prompt, model, system=None, direct=False: "fallback answer")
+    out = lb.ask("q", model="openrouter/a:free", fallbacks=["claude/haiku"])
+    assert out == "fallback answer"
+
+
+def test_paid_gate_error_still_aborts_the_chain(monkeypatch):
+    monkeypatch.setattr(lb, "BACKEND", "openai")
+    monkeypatch.setattr(lb, "_free_down_until", 0.0)
+    with pytest.raises(ValueError, match="forbidden"):
+        lb.ask("q", model="openrouter/gpt-4o", fallbacks=["claude/haiku"])

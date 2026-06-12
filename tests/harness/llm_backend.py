@@ -199,7 +199,10 @@ def ask(prompt: str, *, model: str, system: str | None = None,
         _spend_call()
         try:
             return _ask_one(prompt, m, system, fallback=i > 0)
-        except QuotaExhausted as exc:
+        except (QuotaExhausted, RuntimeError) as exc:
+            # the chain exists to absorb PROVIDER failure of any kind —
+            # quota, throttling, a dead endpoint; only config errors
+            # (ValueError: paid gate, unknown provider) abort the call
             last_exc = exc
     if FALLBACK_MODEL and not any(m.startswith("claude/") for m in chain):
         _spend_call()
@@ -277,7 +280,10 @@ def _ask_openai(prompt: str, model: str, system: str | None = None) -> str:
             time.sleep(min(90.0, float(m.group(1)) + 2) if m else BACKOFF * attempt)
         else:
             time.sleep(BACKOFF)
-    if throttled == RETRIES:
+    if throttled:
+        # ANY 429 among the attempts is a quota signal (the per-minute
+        # ceiling of the free pool killed a whole run once: the final 429
+        # surfaced as a plain RuntimeError and no fallback engaged)
         raise QuotaExhausted(
-            f"free pool throttled through {RETRIES} tries: {last}")
+            f"free pool throttled ({throttled}/{RETRIES} tries): {last}")
     raise RuntimeError(f"openai backend failed after {RETRIES} tries: {last}")
