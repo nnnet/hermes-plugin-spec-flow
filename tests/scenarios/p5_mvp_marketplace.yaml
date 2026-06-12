@@ -31,7 +31,12 @@ constitution:
   - "The product API contract is FROZEN by the smoke suite: POST /sellers,
      POST /products, GET /products?search=, POST /orders,
      GET /payouts?seller_id= — exactly as tests/smoke/test_mvp_smoke.py
-     exercises them. Do not rename, do not extend the contract."
+     exercises them. Do not rename, do not extend the contract. ALL FIVE
+     endpoints must exist in the assembled product — each owned by a leaf."
+  - "Status codes are contractual: every successful POST (creation) returns
+     201; every successful GET returns 200. POST /orders responds
+     {id, status: 'paid'}; GET /payouts responds {items: [{order_id,
+     amount_cents, status}]} with amount_cents equal to the product price."
   - "Payments and KYC are internal stubs with honest interfaces: KYC
      auto-verifies, the PSP auto-captures; no external providers, no card
      data stored."
