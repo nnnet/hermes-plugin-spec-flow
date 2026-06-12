@@ -132,6 +132,10 @@ def _lint_spec_traceability(nid: str, md: str) -> list:
 class IntegrateFailHalt(RuntimeError):
     """on_integrate_fail='halt': a FAILed integrate stops the run."""
 
+
+class ReviewExhaustedHalt(RuntimeError):
+    """gates.review.exhausted='halt': an unresolved REJECT stops the run."""
+
 # Event verbosity levels — what each emit() is worth. Lower = more important.
 L_MILESTONE = 1   # gate verdicts, loops (clarify/critique/drift/respec), phase signals
 L_STEP = 2        # routine worker steps (read handoff, design, integrate)
@@ -743,7 +747,8 @@ class Engine:
                  resume: bool = False, git_provenance: bool = False,
                  review_policy: Optional[dict] = None,
                  seed_files: Optional[dict] = None,
-                 standing_requirements: Optional[Any] = None):
+                 standing_requirements: Optional[Any] = None,
+                 human_ask: Optional[Any] = None):
         if not workspace:
             raise ValueError("Workspace is mandatory — pass a path or a Workspace")
         # () -> [(name, statement)] — standing HUMAN requirements (possibly
@@ -751,6 +756,9 @@ class Engine:
         # acceptance runs on the assembled product is a ROOT-LEVEL concern,
         # never a child of whatever branch happened to decompose next.
         self._standing_requirements = standing_requirements
+        # (role, node, question) -> answer|None — the HITL question channel
+        # for gate escalation (gates.review.exhausted='ask')
+        self._human_ask = human_ask
         # parallelization stage 1: locks make the engine's bookkeeping
         # single-writer; the worker pool size comes from the project dict
         # at run() time (parallel: {children: N})
@@ -961,6 +969,34 @@ class Engine:
                 + repr(self._on_integrate_fail))
         self._integrate_max_rework = int(
             project.get("integrate_max_rework", 2))
+        # unified gate policies — the `gates:` block wins over legacy keys
+        gates = project.get("gates") or {}
+        g_rev = gates.get("review") or {}
+        g_int = gates.get("integrate") or {}
+        if g_int:
+            self._on_integrate_fail = ("rework" if int(g_int.get("rework", 0))
+                                       else "record")
+            self._integrate_max_rework = int(g_int.get("rework", 0)) or 1
+            if str(g_int.get("exhausted", "record")).lower() == "halt":
+                self._on_integrate_fail_exhausted = "halt"
+            else:
+                self._on_integrate_fail_exhausted = "record"
+        else:
+            self._on_integrate_fail_exhausted = (
+                "halt" if self._on_integrate_fail == "halt" else "record")
+            if self._on_integrate_fail == "halt":
+                # legacy halt = no rework rounds, stop on first FAIL
+                self._integrate_max_rework = 0
+        if g_rev:
+            self.review_policy = {**self.review_policy,
+                                  "on_reject": "rework",
+                                  "max_rework": int(g_rev.get("rework", 2))}
+        self._review_exhausted = str(
+            (g_rev.get("exhausted")
+             or project.get("on_review_exhausted", "record"))).lower()
+        if self._review_exhausted not in ("record", "halt", "ask"):
+            raise ValueError(
+                "gates.review.exhausted must be record|halt|ask")
         par = project.get("parallel") or {}
         self._parallel_children = max(1, int(par.get("children", 1)))
         # overhead guard: forking 2 threads for 2 tiny children can cost
@@ -1281,6 +1317,26 @@ class Engine:
                     parent, spec_args["plan"], node=node, target=self._target)
                 verdict, reasons = self._consult_reviewer(nid, title, spec_rel, depth)
             if verdict == "REJECT":
+                exhausted = getattr(self, "_review_exhausted", "record")
+                if exhausted == "ask" and self._human_ask is not None:
+                    # the operator decides: keep going with the recorded
+                    # debt, or stop the run here
+                    answer = str(self._human_ask(
+                        "spec-reviewer", nid,
+                        f"review budget exhausted at '{nid}' — unresolved: "
+                        f"{reasons[:300]}. Reply 'halt' to stop the run,"
+                        " anything else records the debt and continues.")
+                        or "").strip().lower()
+                    self.emit("review", "engine", "", nid,
+                              "review exhausted — operator consulted",
+                              answer or "(no answer — recording)",
+                              "hitl", "", level=L_MILESTONE)
+                    if answer == "halt":
+                        exhausted = "halt"
+                if exhausted == "halt":
+                    raise ReviewExhaustedHalt(
+                        f"unresolved review REJECT at '{nid}' after "
+                        f"{budget} rework round(s): {reasons[:300]}")
                 self.emit("review", "spec-reviewer", "spec-reviewer", nid,
                           f"rework budget exhausted ({budget}) — REJECT stands;"
                           " needs research or a human decision",
@@ -1578,7 +1634,9 @@ class Engine:
                 if vstatus != "PASS":
                     self.loops.append({"type": "integrate-fail", "task": nid,
                                        "detail": vdetail})
-                    if policy == "halt":
+                    if (policy == "halt"
+                            or getattr(self, "_on_integrate_fail_exhausted",
+                                       "record") == "halt"):
                         raise IntegrateFailHalt(
                             "integrate FAIL at " + nid + " - the case demands"
                             " a halt: " + vdetail)
@@ -2024,7 +2082,8 @@ def run_project(project: dict, *, workspace, depth: Any = DEPTH_SPEC,
                 git_provenance: bool = False,
                 review_policy: Optional[dict] = None,
                 seed_files: Optional[dict] = None,
-                standing_requirements: Optional[Any] = None) -> RunResult:
+                standing_requirements: Optional[Any] = None,
+                human_ask: Optional[Any] = None) -> RunResult:
     """Public entry: run a project to completion. ``workspace`` is mandatory.
 
     ``depth`` is one of spec|scaffold|verify|execute|product (or 1..5).
@@ -2041,7 +2100,8 @@ def run_project(project: dict, *, workspace, depth: Any = DEPTH_SPEC,
                   review_policy=review_policy, seed_files=seed_files,
                   node_engine=node_engine, runtime_guard=runtime_guard,
                   resume=resume, git_provenance=git_provenance,
-                  standing_requirements=standing_requirements).run(project)
+                  standing_requirements=standing_requirements,
+                  human_ask=human_ask).run(project)
 
 
 def render_log(res: RunResult, level: int = None) -> str:

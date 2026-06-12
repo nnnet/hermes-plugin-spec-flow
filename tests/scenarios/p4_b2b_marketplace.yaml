@@ -207,22 +207,21 @@ hitl:
 #              still rejected -> honest episode stays, run continues.
 #              record = bookkeeping only; halt = stop the run;
 #              ask_human = the approver (HITL) decides accept-or-halt.
-review:
-  on_reject: rework
-  max_rework: 2
-
-# Integrate-fail policy (plan P11): rework re-invokes the verifier with a
-# FRESH repair budget (one extra round on top of the verifier's internal
-# repair ladder) instead of carrying the red straight to the root.
-on_integrate_fail: rework
-integrate_max_rework: 1
+# Unified gate policies: rework budgets + what happens when they are
+# spent. review 'ask' escalates the unresolved REJECT to the operator
+# through the HITL question channel (silent operator = record).
+gates:
+  review:    {rework: 2, exhausted: ask}
+  integrate: {rework: 1, exhausted: record}
 
 # Parallelization stage 1 (v14+): top-level branches run children in a
 # pool; the global ceiling and the LLM in-flight cap keep the free pool's
 # per-minute limit from turning speed into a 429 storm.
 parallel:
   children: 3
-  max_workers: 3
+  depth_limit: 2     # fork at every branch level down to depth 2
+  max_workers: 5     # global ceiling on concurrent subtrees
+  min_siblings: 2
 
 # Memory tiers (v15+): role banks accumulate craft across runs, the
 # project bank starts FRESH for every new attempt of this case (stale
@@ -292,7 +291,7 @@ seed_files:
 # ('claude/<model>') ONLY — paid API models are forbidden. Author \!= judge:
 # the reviewer model differs from the implementer model (defaults).
 workers:
-  concurrency: 2
+  concurrency: 3
   providers:
     - name: openrouter-free
       kind: openai

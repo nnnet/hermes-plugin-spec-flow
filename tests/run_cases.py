@@ -260,7 +260,8 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
                           max_decompose_calls=max_calls, node_engine=node_engine,
                           review_policy=review_policy, seed_files=seeds,
                           standing_requirements=getattr(
-                              channel, "standing_requirements", None))
+                              channel, "standing_requirements", None),
+                          human_ask=getattr(channel, "ask", None))
     # persist the REALIZED task tree the plugin built (parent->children), so the
     # dashboard / offline review can walk the exact structure node by node
     (case_dir / "tree.json").write_text(
