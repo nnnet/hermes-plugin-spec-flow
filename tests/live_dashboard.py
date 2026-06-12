@@ -418,18 +418,24 @@ def _build_state(run_dir: pathlib.Path) -> dict:
         if nid not in meta:
             continue
         eps = meta[nid]["episodes"]
-        # spec_review: only the LATEST verdict counts — a reworked spec that
-        # passed re-review clears the red badge (the episode stays in events)
-        reviews = [e for e in evs if e.get("gate") == "spec_review"]
-        review_bad = bool(reviews) and str(reviews[-1].get("verdict")) in bad
-        other_bad = any(str(e.get("verdict")) in bad
-                        for e in evs if e.get("gate") != "spec_review")
-        if (review_bad or other_bad) and "error" not in eps:
+        # PER GATE only the LATEST verdict counts — spec_review rework,
+        # spec_lint fix rounds and integrate repairs all clear the red
+        # badge once the same gate passes (the node page already grouped
+        # them as fixed history; the tree showed ❌ regardless — they
+        # must agree)
+        latest_by_gate = {}
+        for e in evs:
+            if e.get("gate"):
+                latest_by_gate[e["gate"]] = str(e.get("verdict") or "")
+        gate_bad = any(v in bad for v in latest_by_gate.values())
+        loose_bad = any(str(e.get("verdict")) in bad
+                        for e in evs if not e.get("gate"))
+        had_bad = any(str(e.get("verdict")) in bad for e in evs)
+        if (gate_bad or loose_bad) and "error" not in eps:
             eps.append("error")
-        if reviews and not review_bad and "error" not in eps and not other_bad:
-            # reworked-to-green node gets a visible 'fixed' mark
-            if "reworked" not in eps and len(reviews) > 1:
-                eps.append("reworked")
+        elif had_bad and "error" not in eps and "reworked" not in eps:
+            # bad history, green now — the visible 'fixed' mark
+            eps.append("reworked")
         if any(str(e.get("verdict")) == "PRUNED" for e in evs) and "pruned" not in eps:
             eps.append("pruned")
 
