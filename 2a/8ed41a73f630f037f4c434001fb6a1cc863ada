@@ -1,0 +1,21 @@
+tests/harness/llm_backend.py
+  s_a7f45290e91181::t_8ffe4360b25571 202-205,283-286,288
+tests/test_worker_config.py
+  s_a7f45290e91181::t_8ffe4360b25571 174-210
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "2a8ed41a73f630f037f4c434001fb6a1cc863ada",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-fable-5"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
