@@ -453,6 +453,19 @@ only) and reply again with ONLY the same JSON shape:
 {{"files": {{"src/{fn}.py": "...", "tests/test_{fn}.py": "..."}}}}"""
 
 
+def _leaf_bar(ws_root: str, fn: str, baseline: int, pv) -> tuple[bool, str]:
+    """The leaf's completion bar: own tests green AND the whole (non-smoke)
+    suite no worse than before this leaf touched the tree."""
+    passed, out = _run_pytest(ws_root, f"tests/test_{fn}.py")
+    if not passed:
+        return False, out
+    s_passed, s_out = pv.run_suite(ws_root, include_smoke=False)
+    if pv._badness(s_passed, s_out) > baseline:
+        return False, ("OWN tests green, but the WHOLE suite degraded after"
+                       " this leaf (cross-feature breakage):\n" + s_out)
+    return True, out
+
+
 def _run_pytest(ws_root: str, test_rel: str) -> tuple[bool, str]:
     """Run the leaf's tests for REAL. Returns (passed, output tail)."""
     import sys as _sys
@@ -580,9 +593,15 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
                 return None
         out = _handle_operator_reply(parsed, role="implementer",
                                      node=nid, note=note, channel=channel)
+        # the leaf bar is TWO-tier: its own tests green AND the whole suite
+        # not degraded — 'green alone, poisons the suite' must surface at
+        # leaf completion, not branches later at the integrate gate
+        from . import pytest_verifier as pv
+        base_passed, base_out = pv.run_suite(ws_root, include_smoke=False)
+        baseline = pv._badness(base_passed, base_out)
         passed, test_out = False, "(no files written)"
         if _write_reply_files(ws, out.get("files") or {}, fn):
-            passed, test_out = _run_pytest(ws_root, f"tests/test_{fn}.py")
+            passed, test_out = _leaf_bar(ws_root, fn, baseline, pv)
             if not passed:
                 repair = (prompt + "\n\n"
                           + _REPAIR_TASK.format(output=test_out, fn=fn))
@@ -591,7 +610,7 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
                                    model=model)
                 out2 = _extract_json(raw2)
                 if _write_reply_files(ws, out2.get("files") or {}, fn):
-                    passed, test_out = _run_pytest(ws_root, f"tests/test_{fn}.py")
+                    passed, test_out = _leaf_bar(ws_root, fn, baseline, pv)
                 raw = raw2
         llm_log.log_outcome(role="implementer", worker=True, node=nid, depth=-1,
                             model=model, prompt=prompt, reply=raw, ok=True,

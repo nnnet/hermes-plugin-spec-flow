@@ -632,3 +632,43 @@ def test_branch_addressed_note_not_burned_by_leaf(tmp_path):
     note = ch.poll_note(branch_capable=True)
     assert note and "web_ui" in note
     assert not ch.inbox.read_text(encoding="utf-8").strip()
+
+
+def test_leaf_bar_catches_suite_degradation(monkeypatch, tmp_path):
+    # the leaf's own tests are green, but it REWRITES a module a sibling
+    # relies on — the leaf bar must go red at leaf completion, not at the
+    # integrate gate branches later
+    import json as _json
+    from harness import llm_backend as lb
+    monkeypatch.setattr(lb, "BACKEND", "openai")
+    (tmp_path / "src").mkdir(parents=True)
+    (tmp_path / "tests").mkdir(parents=True)
+    (tmp_path / "specs").mkdir(parents=True)
+    (tmp_path / "src" / "shared.py").write_text(
+        "def val():\n    return 2\n", encoding="utf-8")
+    (tmp_path / "tests" / "test_sibling.py").write_text(
+        "import sys\nfrom pathlib import Path\n"
+        "sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'src'))\n"
+        "from shared import val\n"
+        "def test_sibling_ok():\n    assert val() == 2\n",
+        encoding="utf-8")
+    (tmp_path / "specs" / "shared.md").write_text("## Requirements\n- x\n",
+                                                  encoding="utf-8")
+    calls = {"n": 0}
+
+    def fake_ask(prompt, model, system=None):
+        calls["n"] += 1
+        return _json.dumps({"files": {
+            "src/shared.py": "def val():\n    return 3\n",
+            "tests/test_shared.py": (
+                "import sys\nfrom pathlib import Path\n"
+                "sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'src'))\n"
+                "from shared import val\n"
+                "def test_new():\n    assert val() == 3\n")}})
+
+    monkeypatch.setattr(lb, "ask", fake_ask)
+    impl = rw.make_implementer()
+    ws = _ChatWS(tmp_path)
+    impl({"node": "shared", "title": "Shared", "workspace": ws,
+          "spec": "specs/shared.md"})
+    assert calls["n"] == 2, "suite degradation must trigger the repair round"
