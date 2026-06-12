@@ -1012,6 +1012,10 @@ class Engine:
         # depth_limit bounds WHERE forks happen, this bounds HOW MANY
         self._parallel_sem = threading.BoundedSemaphore(
             max(1, int(par.get("max_workers", par.get("children", 1)))))
+        # marks "this thread holds a _parallel_sem slot" — a parent must
+        # hand its slot over while it merely WAITS for children (holding
+        # it deadlocks nested levels: all slots end up at joining parents)
+        self._sem_state = threading.local()
         try:
             if self.sink is not None:
                 self.sink.open()
@@ -1540,28 +1544,45 @@ class Engine:
                 def _one(c):
                     try:
                         with self._parallel_sem:
-                            self._visit(c, depth + 1, child_contract_ctx,
-                                        phase, parent=title,
-                                        ancestors=ancestors + ((nid, title),))
+                            self._sem_state.held = True
+                            try:
+                                self._visit(c, depth + 1, child_contract_ctx,
+                                            phase, parent=title,
+                                            ancestors=ancestors + ((nid, title),))
+                            finally:
+                                self._sem_state.held = False
                     except Exception as exc:    # noqa: BLE001 — re-raised after join
                         errs.append(exc)
 
-                pool, alive = list(kids), []
-                limit = self._parallel_children
-                while pool or alive:
-                    while pool and len(alive) < limit:
-                        th = threading.Thread(target=_one,
-                                              args=(pool.pop(0),),
-                                              daemon=True)
-                        th.start()
-                        alive.append(th)
-                    for th in alive:
-                        th.join(timeout=0.05)
-                    alive = [th for th in alive if th.is_alive()]
-                    if errs:
+                # a parent that only JOINS must not sit on a worker slot:
+                # with nested forks every slot lands at a waiting parent
+                # and the grandchildren starve (live deadlock in v16)
+                lent = getattr(self._sem_state, "held", False)
+                if lent:
+                    self._sem_state.held = False
+                    self._parallel_sem.release()
+                try:
+                    pool, alive = list(kids), []
+                    limit = self._parallel_children
+                    while pool or alive:
+                        while pool and len(alive) < limit:
+                            th = threading.Thread(target=_one,
+                                                  args=(pool.pop(0),),
+                                                  daemon=True)
+                            th.start()
+                            alive.append(th)
                         for th in alive:
-                            th.join()
-                        raise errs[0]
+                            th.join(timeout=0.05)
+                        alive = [th for th in alive if th.is_alive()]
+                        if errs:
+                            for th in alive:
+                                th.join()
+                            raise errs[0]
+                finally:
+                    if lent:
+                        # take a slot back BEFORE own integrate work
+                        self._parallel_sem.acquire()
+                        self._sem_state.held = True
                 child_ids = [c["id"] for c in kids]
             else:
                 for child in kids:

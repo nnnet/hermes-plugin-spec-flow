@@ -212,3 +212,52 @@ def test_llm_concurrency_gate(monkeypatch):
         assert state["peak"] <= 2, f"LLM gate must cap in-flight calls, saw {state['peak']}"
     finally:
         lb.configure_workers(None)
+
+
+def test_nested_forks_do_not_deadlock_on_max_workers(tmp_path):
+    # v16 live freeze: branch threads HELD max_workers slots while
+    # join()ing their children — grandchildren starved for a slot and
+    # the whole run sat in futex_wait forever. A joining parent must
+    # lend its slot back for the duration of the wait.
+    grand = [["Catalog browsing", "Payment capture", "Seller payouts"],
+             ["Search indexing", "Order tracking", "Email receipts"],
+             ["Refund handling", "Stock alerts", "Review moderation"]]
+    sub = ["Storefront", "Fulfilment", "Trust safety"]
+    proj = {
+        "name": "nested-par", "goal": "deep wide service", "target": "x",
+        "policy": {"measurable_target": True, "spend_per_action_usd": 1,
+                   "human_in_loop": False, "involves_outreach": False,
+                   "consent_obtained": True, "legal_exposure": False,
+                   "legality_reviewed": True},
+        # 3 branches x 3 leaves, forks allowed at depth 0 AND 1, but only
+        # 2 worker slots: before the fix the 2 slots land on two joining
+        # branch parents and every grandchild waits forever
+        "tree": {"id": "L0", "title": "Root", "metrics": dict(_BRANCH),
+                 "children": [
+                     {"id": f"br{i}", "title": f"{sub[i]} area",
+                      "metrics": dict(_BRANCH),
+                      "children": [{"id": f"br{i}_leaf{j}",
+                                    "title": grand[i][j],
+                                    "metrics": dict(_LEAF)}
+                                   for j in range(3)]}
+                     for i in range(3)]},
+        "parallel": {"children": 3, "min_siblings": 2,
+                     "depth_limit": 2, "max_workers": 2},
+    }
+    box = {}
+
+    def _run():
+        box["res"] = eng.run_project(
+            proj, workspace=str(tmp_path / "wk"), depth="spec",
+            agents={"reviewer": _OverlapProbe(dwell=0.02)})
+
+    th = threading.Thread(target=_run, daemon=True)
+    th.start()
+    th.join(timeout=60)
+    assert not th.is_alive(), \
+        "nested parallel run deadlocked on max_workers slots"
+    res = box["res"]
+    done = {t for t in res.tasks}
+    for i in range(3):
+        for j in range(3):
+            assert f"br{i}_leaf{j}" in done, "every grandchild processed"
