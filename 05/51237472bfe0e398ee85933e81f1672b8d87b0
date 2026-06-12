@@ -1,0 +1,22 @@
+tests/test_role_workers.py
+  s_a7f45290e91181::t_a94874a768d1dc 554-573
+tests/harness/llm_backend.py
+  s_a7f45290e91181::t_26315639f4e24f 86
+  s_a7f45290e91181::t_98c50ba0b60c4c 90-95,98-101,106-107
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "0551237472bfe0e398ee85933e81f1672b8d87b0",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-fable-5"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
