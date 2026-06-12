@@ -34,6 +34,7 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -1016,6 +1017,11 @@ class Engine:
         # hand its slot over while it merely WAITS for children (holding
         # it deadlocks nested levels: all slots end up at joining parents)
         self._sem_state = threading.local()
+        # soft time ceiling per LEAF (limits.leaf_seconds, 0 = off):
+        # checked at round boundaries, an exceeded leaf surrenders red —
+        # a single wedged leaf must never silently stall the whole run
+        self._leaf_seconds = float(
+            (project.get("limits") or {}).get("leaf_seconds", 0))
         try:
             if self.sink is not None:
                 self.sink.open()
@@ -1738,13 +1744,24 @@ class Engine:
                           "resume: reuse persisted artifact (run journal)", code_rel,
                           level=L_DETAIL)
             else:
+                ictx = {"node": nid, "title": title, "depth": depth,
+                        "workspace": self.workspace, "spec": f"specs/{fn}.md"}
+                if self._leaf_seconds:
+                    ictx["deadline"] = time.time() + self._leaf_seconds
                 try:
-                    self.agents["implementer"]({"node": nid, "title": title,
-                                                "depth": depth,
-                                                "workspace": self.workspace,
-                                                "spec": f"specs/{fn}.md"})
+                    self.agents["implementer"](ictx)
                 except NotImplementedError:
                     raise   # missing agent is a CONFIG error, not a crash
+                except TimeoutError as exc:
+                    # the leaf hit its time ceiling: surrender it RED and
+                    # move on — one wedged leaf must never stall the run
+                    self.loops.append({"type": "leaf-timeout", "task": nid,
+                                       "detail": str(exc)[:200]})
+                    self.emit("implement", "engine", "spec-implement",
+                              f"{nid}:impl",
+                              "leaf time ceiling hit — leaf surrendered red",
+                              str(exc)[:200], "leaf_timeout", "TIMEOUT",
+                              level=L_MILESTONE)
                 except Exception as exc:  # noqa: BLE001
                     # a crashing WORKER surrenders the leaf, never the run:
                     # the artifacts stay red and the gates judge them

@@ -210,6 +210,12 @@ hitl:
 # Unified gate policies: rework budgets + what happens when they are
 # spent. review 'ask' escalates the unresolved REJECT to the operator
 # through the HITL question channel (silent operator = record).
+# soft per-leaf time ceiling: checked at round boundaries, an exceeded
+# leaf surrenders red (trace gate=leaf_timeout) — one wedged leaf must
+# never silently stall the run (v16 froze 12+ min before this existed)
+limits:
+  leaf_seconds: 900
+
 gates:
   review:    {rework: 2, exhausted: ask}
   integrate: {rework: 1, exhausted: record}

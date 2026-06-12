@@ -355,6 +355,13 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
         "audit_errors": sum(1 for f in findings if f["severity"] == "error"),
         "audit_warns": sum(1 for f in findings if f["severity"] == "warn"),
         "complete": summary["complete"],
+        # the ROOT integrate recorded a FAIL (policy record-and-continue):
+        # the run finished, but the assembled product is NOT green
+        "root_red": any(
+            lp.get("type") == "integrate-fail"
+            and str(lp.get("task"))
+            == str((res.project.get("tree") or {}).get("id"))
+            for lp in res.loops),
     }
 
 
@@ -389,6 +396,11 @@ def _summary_md(name: str, goal: str, depth: str, full: dict | None,
                   f"- циклы: {loops}",
                   f"- вызовы гейтов: {gates}",
                   f"- завершён: {'✅' if full['complete'] else '❌'}",
+                  # a RED root recorded by the integrate policy must shout —
+                  # v17 looked '✅ завершён' while the final suite never
+                  # went green (record-and-continue hid it)
+                  f"- корневой гейт: "
+                  f"{'🟥 КРАСНЫЙ — финальный набор тестов не зелёный (политика record)' if full.get('root_red') else '🟩 зелёный'}",
                   f"- методологический аудит: {audit}",
                   f"- умный оракул (опорные точки/глубина/эпизоды): {oracle}",
                   f"- готовность продукта: {product}", ""]

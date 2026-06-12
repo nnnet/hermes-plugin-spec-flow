@@ -254,18 +254,29 @@ def make_verifier(model: Optional[str] = None,
                                     node=str(ctx.get("node")), depth=-1,
                                     model=model, ok=False, error=str(exc)[:200])
                 break
-            before = _badness(passed, out)
-            wrote, snapshot = _write_files(root, reply.get("files"))
+            # COMMIT QUEUE: write + re-verify + rollback is ONE atomic
+            # commit — interleaved with a leaf's write it once produced a
+            # module/test pair no single writer ever wrote (v17)
+            from . import commit_queue
+            with commit_queue.exclusive(
+                    f"verifier:{ctx.get('node')}", f"repair round {rounds}"):
+                before = _badness(passed, out)
+                wrote, snapshot = _write_files(root, reply.get("files"))
+                if wrote:
+                    llm_log.log({"event": "ws_write", "writer": "verifier",
+                                 "node": str(ctx.get("node")),
+                                 "round": rounds,
+                                 "paths": sorted((reply.get("files") or {}))})
+                    passed, out = run_suite(root, include_smoke)
+                    rolled_back = False
+                    if _badness(passed, out) > before:
+                        # the round made the suite WORSE — a repair never
+                        # leaves the tree worse than it found it
+                        _rollback(root, snapshot)
+                        passed, out = run_suite(root, include_smoke)
+                        rolled_back = True
             if not wrote:
                 break
-            passed, out = run_suite(root, include_smoke)
-            rolled_back = False
-            if _badness(passed, out) > before:
-                # the round made the suite WORSE — a repair never leaves the
-                # tree in a worse state than it found it
-                _rollback(root, snapshot)
-                passed, out = run_suite(root, include_smoke)
-                rolled_back = True
             llm_log.log_outcome(role="verifier", worker=True,
                                 node=str(ctx.get("node")), depth=-1,
                                 model=model, ok=True, tests_passed=passed,

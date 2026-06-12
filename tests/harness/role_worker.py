@@ -27,6 +27,7 @@ import json
 import os
 import re
 import subprocess
+import time as _time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -556,6 +557,10 @@ def _write_reply_files(ws: Any, files: dict, fn: str) -> bool:
                              "reason": "touches platform internals"})
                 continue
             ws._write(rel, body if body.endswith("\n") else body + "\n", kind)
+            # every workspace write is journaled with its writer — the
+            # one tool that ATTRIBUTES any future clobbering instantly
+            llm_log.log({"event": "ws_write", "writer": "implementer",
+                         "node": fn, "paths": [rel]})
             wrote = True
     return wrote
 
@@ -628,6 +633,22 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         note = channel.poll_note() if channel is not None else None
         if note:
             prompt += _NOTE_RULE.format(note=note)
+        # every entry into the leaf is journaled with its elapsed time —
+        # a wedged leaf becomes visible BEFORE the ceiling fires
+        leaf_t0 = _time.time()
+        deadline = float(ctx.get("deadline") or 0)
+
+        def _round_gate(round_no: int, what: str) -> None:
+            llm_log.log({"event": "leaf_round", "node": nid,
+                         "round": round_no, "stage": what,
+                         "elapsed_s": round(_time.time() - leaf_t0, 1)})
+            if deadline and _time.time() > deadline:
+                raise TimeoutError(
+                    f"leaf time ceiling reached before {what}"
+                    f" (round {round_no},"
+                    f" {round(_time.time() - leaf_t0)}s elapsed)")
+
+        _round_gate(1, "first implement round")
         _log_call_start("implementer", nid, int(ctx.get("depth", -1)), model)
         raw = _dialog_round(prompt, role="implementer", node=nid, system=system,
                             allowed=allowed, disallowed=disallowed,
@@ -654,29 +675,36 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
                                      node=nid, note=note, channel=channel)
         # the leaf bar is TWO-tier: its own tests green AND the whole suite
         # not degraded — 'green alone, poisons the suite' must surface at
-        # leaf completion, not branches later at the integrate gate
+        # leaf completion, not branches later at the integrate gate.
+        # COMMIT QUEUE: baseline + write + bar is ONE atomic commit — a
+        # baseline captured while a sibling is mid-write poisoned v17
+        from . import commit_queue
         from . import pytest_verifier as pv
-        base_passed, base_out = pv.run_suite(ws_root, include_smoke=False)
-        baseline = pv._badness(base_passed, base_out)
         passed, test_out = False, "(no files written)"
-        if _write_reply_files(ws, out.get("files") or {}, fn):
-            passed, test_out = _leaf_bar(ws_root, fn, baseline, pv)
-            if not passed:
-                repair = (prompt + "\n\n"
-                          + _REPAIR_TASK.format(output=test_out, fn=fn))
-                raw2 = _call_model(repair, system=system, allowed=allowed,
-                                   disallowed=disallowed, cwd=ws_root,
-                                   model=model, role="implementer")
-                try:
-                    out2 = _extract_json(raw2)
-                except ValueError:
-                    # prose instead of JSON surrenders the REPAIR round,
-                    # never the run (this exact site once killed a whole
-                    # live run on a Russian-prose reply)
-                    out2 = {}
+        with commit_queue.exclusive(f"leaf:{nid}", "baseline+write+bar"):
+            base_passed, base_out = pv.run_suite(ws_root, include_smoke=False)
+            baseline = pv._badness(base_passed, base_out)
+            wrote = _write_reply_files(ws, out.get("files") or {}, fn)
+            if wrote:
+                passed, test_out = _leaf_bar(ws_root, fn, baseline, pv)
+        if wrote and not passed:
+            _round_gate(2, "repair round")
+            repair = (prompt + "\n\n"
+                      + _REPAIR_TASK.format(output=test_out, fn=fn))
+            raw2 = _call_model(repair, system=system, allowed=allowed,
+                               disallowed=disallowed, cwd=ws_root,
+                               model=model, role="implementer")
+            try:
+                out2 = _extract_json(raw2)
+            except ValueError:
+                # prose instead of JSON surrenders the REPAIR round,
+                # never the run (this exact site once killed a whole
+                # live run on a Russian-prose reply)
+                out2 = {}
+            with commit_queue.exclusive(f"leaf:{nid}", "repair write+bar"):
                 if _write_reply_files(ws, out2.get("files") or {}, fn):
                     passed, test_out = _leaf_bar(ws_root, fn, baseline, pv)
-                raw = raw2
+            raw = raw2
         if passed:
             # a GREEN leaf is worth remembering: craft for the role,
             # the decision for the project (no-ops when memory is off)
