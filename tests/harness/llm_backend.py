@@ -83,18 +83,28 @@ def ask(prompt: str, *, model: str, system: str | None = None) -> str:
     if not FALLBACK_MODEL:
         raise QuotaExhausted("free pool exhausted and no fallback configured")
     last_call.update(backend="claude", model=FALLBACK_MODEL, fallback=True)
-    return _ask_claude(prompt, FALLBACK_MODEL, system=system)
+    return _ask_claude(prompt, FALLBACK_MODEL, system=system, direct=True)
 
 
 # ── claude CLI (fallback; gateway via ANTHROPIC_BASE_URL env) ────────────────
-def _ask_claude(prompt: str, model: str, system: str | None = None) -> str:
+def _ask_claude(prompt: str, model: str, system: str | None = None,
+                direct: bool = False) -> str:
+    """``direct=True`` strips the gateway override (ANTHROPIC_BASE_URL):
+    the exhaustion fallback is the SUBSCRIPTION — a broken/limited gateway
+    must not take the fallback down with it (a 403 via Bifrost once killed
+    a whole run while `claude` direct worked fine)."""
     last = ""
     extra = ["--append-system-prompt", system] if system else []
+    env = None
+    if direct:
+        env = {k: v for k, v in os.environ.items()
+               if k != "ANTHROPIC_BASE_URL"}
     for _ in range(RETRIES):
         proc = subprocess.run([*claude_cli.claude_cmd(), "-p", "--model", model,
                                *extra, *claude_cli.mcp_args_no_serena()],
                               input=prompt, capture_output=True, text=True,
-                              timeout=TIMEOUT, cwd=claude_cli.agent_cwd())
+                              timeout=TIMEOUT, cwd=claude_cli.agent_cwd(),
+                              env=env)
         if proc.returncode == 0 and proc.stdout.strip():
             return claude_cli.strip_headroom_banner(proc.stdout)
         last = (proc.stderr or proc.stdout)[-300:]

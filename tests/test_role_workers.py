@@ -551,3 +551,23 @@ def test_chat_implementer_survives_garbage_reply(monkeypatch, tmp_path):
                         "I cannot produce JSON today {broken")
     impl = rw.make_implementer()
     assert impl(_chat_ctx(tmp_path)) is None    # surrendered, not crashed
+
+
+def test_fallback_goes_direct_past_the_gateway(monkeypatch):
+    from harness import llm_backend as lb
+    monkeypatch.setattr(lb, "BACKEND", "openai")
+    monkeypatch.setattr(lb, "_free_down_until", 0.0)
+    monkeypatch.setattr(lb, "FALLBACK_MODEL", "haiku")
+    monkeypatch.setattr(lb, "_ask_openai",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            lb.QuotaExhausted("dry")))
+    seen = {}
+
+    def fake_claude(prompt, model, system=None, direct=False):
+        seen["direct"] = direct
+        return "ok"
+
+    monkeypatch.setattr(lb, "_ask_claude", fake_claude)
+    assert lb.ask("hi", model="openrouter/x:free") == "ok"
+    assert seen["direct"] is True, "the exhaustion fallback must bypass the gateway"
+    monkeypatch.setattr(lb, "_free_down_until", 0.0)
