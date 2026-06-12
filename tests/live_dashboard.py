@@ -624,8 +624,13 @@ setInterval(()=>{const el=document.getElementById('elapsed');
  if(!el)return;
  // with auto-refresh OFF the data is frozen — a ticking counter would lie
  if(!AUTO){el.textContent='';return;}
- if(ACTIVE.since)el.textContent=' · уже '+Math.round((Date.now()-ACTIVE.since)/1000)+'с';},1000);
+ if(ACTIVE.since)el.textContent=' · уже '+fmtDur((Date.now()-ACTIVE.since)/1000);},1000);
 const $=s=>document.querySelector(s);
+// one duration format everywhere: <60s -> '42s', then 'MM:SS', with hours 'H:MM:SS'
+function fmtDur(s){s=Math.max(0,Math.round(s));
+ if(s<60)return s+'с';
+ const h=Math.floor(s/3600),m=Math.floor(s%3600/60),sec=s%60,p=n=>String(n).padStart(2,'0');
+ return h?h+':'+p(m)+':'+p(sec):p(m)+':'+p(sec);}
 function mray(){if(window.mermaid){try{mermaid.run({querySelector:'#detail .mermaid'});}catch(e){}}}
 
 async function poll(){
@@ -670,7 +675,7 @@ function timelineHTML(){
  if(!t.length)return '<p class=dim>событий ещё нет…</p>';
  const ts=t.map(e=>e.t).filter(x=>x!=null);const t0=ts.length?Math.min(...ts):0;
  const rows=t.slice().reverse().map(e=>{
-  const rel=e.t!=null?('+'+(e.t-t0).toFixed(1)+'с'):'—';
+  const rel=e.t!=null?('+'+fmtDur(e.t-t0)):'—';
   return `<tr><td>${rel}</td><td>${e.tick??''}</td><td><span class=ph>${esc(e.phase)}</span></td><td>${esc(e.text)}</td><td>${e.verdict?('<b>'+esc(e.verdict)+'</b>'):''}</td></tr>`;
  }).join('');
  return '<p class=muted>сверху — последние по времени; «время» = от старта прогона; '+
