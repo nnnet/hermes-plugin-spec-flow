@@ -40,6 +40,14 @@ import types
 from datetime import datetime
 from pathlib import Path
 
+
+def _worker_models() -> dict:
+    """Resolved role -> model map for the run's meta.json."""
+    from harness import llm_backend
+    return {r: llm_backend.model_for(r)
+            for r in ("decomposer", "reviewer", "implementer", "verifier")}
+
+
 import yaml
 
 HERE = Path(__file__).resolve().parent
@@ -132,7 +140,10 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
     if workers == "real":
         # Industrial mode without Hermes: real worker sessions from the
         # plugin's own SKILL.md + profile tool policy, per role.
-        from harness import role_worker
+        from harness import llm_backend, role_worker
+        # per-role provider/model from the case YAML (env vars override);
+        # MUST happen before the factories capture their models
+        llm_backend.configure_workers(case.get("workers"))
         ws_dir = str(case_dir / "workspace")
         q_chan = channel if hitl_questions or hitl_notes else None
         dec_fn = role_worker.make_decomposer(workspace_dir=ws_dir, channel=q_chan)
@@ -200,6 +211,7 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
     # run config from the CASE itself (as Hermes would pass it): lifecycle engine
     node_engine = case.get("node_engine", "inline")
     exec_case.pop("node_engine", None)
+    exec_case.pop("workers", None)
     review_policy = case.get("review") or None
     exec_case.pop("review", None)
     # seed files: the case may ship a deterministic skeleton (app entry,
@@ -421,6 +433,10 @@ def main() -> int:
                    "imprecise", "resolved", "oracle") if k in case}
         (case_dir / "inputs.json").write_text(
             json.dumps(inputs, ensure_ascii=False, indent=2), encoding="utf-8")
+        # per-role provider/model from the case YAML — configured here so the
+        # meta.json map below reflects it (re-applied in _run_full; idempotent)
+        from harness import llm_backend as _lb
+        _lb.configure_workers(case.get("workers"))
         # service metadata (how the run was launched) for the dashboard's info pane
         (case_dir / "meta.json").write_text(json.dumps({
             "case": name, "depth": args.depth, "decomposer": args.decomposer,
@@ -429,6 +445,8 @@ def main() -> int:
             "gateway": args.gateway,
             "backend": os.environ.get("SPEC_FLOW_LLM_BACKEND", "claude"),
             "workspace": "workspace", "run_dir": str(case_dir),
+            # who answered for whom — verifies the author-vs-judge split
+            "worker_models": _worker_models(),
         }, ensure_ascii=False, indent=2), encoding="utf-8")
         # fresh state per case so gate cooldowns never leak between cases
         os.environ["HERMES_HOME"] = tempfile.mkdtemp(prefix=f"specflow-{name}-")

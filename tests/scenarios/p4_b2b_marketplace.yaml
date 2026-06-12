@@ -243,10 +243,13 @@ seed_files:
     \ = 400, {\"error\": \"invalid JSON body\"}\n    else:\n        try:\n     \
     \       status, body = handler(payload, query)\n        except Exception as\
     \ exc:  # noqa: BLE001 — surface, don't crash\n            status, body = 500,\
-    \ {\"error\": str(exc)[:200]}\n    data = json.dumps(body).encode(\"utf-8\"\
-    )\n    start_response(f\"{status} X\", [(\"Content-Type\", \"application/json\"\
-    ),\n                                   (\"Content-Length\", str(len(data)))])\n\
-    \    return [data]\n"
+    \ {\"error\": str(exc)[:200]}\n    if isinstance(body, str):\n        # a handler\
+    \ may serve a PAGE: an HTML string passes through\n        data = body.encode(\"\
+    utf-8\")\n        ctype = \"text/html; charset=utf-8\"\n    else:\n        data\
+    \ = json.dumps(body).encode(\"utf-8\")\n        ctype = \"application/json\"\
+    \n    start_response(f\"{status} X\", [(\"Content-Type\", ctype),\n        \
+    \                           (\"Content-Length\", str(len(data)))])\n    return\
+    \ [data]\n"
   src/db.py: "\"\"\"SQLite plumbing. Features declare schemas; every connection\
     \ applies\nthem idempotently (CREATE TABLE IF NOT EXISTS), so import order and\
     \ the\nMARKETPLACE_DB env var never race.\"\"\"\nimport os\nimport sqlite3\n\
@@ -258,3 +261,35 @@ seed_files:
   src/registry.py: "\"\"\"Route registry — features register their endpoints here.\"\
     \"\"\nROUTES = {}\n\n\ndef route(method, path):\n    def deco(fn):\n       \
     \ ROUTES[(method.upper(), path)] = fn\n        return fn\n    return deco\n"
+
+# ---- per-role workers: the SINGLE source of provider/model truth -----------
+# Models are taken STRICTLY from this block (env vars are ignored when it
+# exists). 'providers' is the available pool WITH parameters; every model in
+# every chain must match one. Per-role 'models' is an ORDERED chain: the
+# first entry is the primary, the rest answer when its quota is exhausted.
+# Pool policy for test runs: OpenRouter ':free' + subscription CLI
+# ('claude/<model>') ONLY — paid API models are forbidden. Author \!= judge:
+# the reviewer model differs from the implementer model (defaults).
+workers:
+  providers:
+    - name: openrouter-free
+      kind: openai
+      model_prefix: "openrouter/"
+      require_suffix: ":free"
+      requests_per_day: 1000
+    - name: claude-cli
+      kind: claude
+      model_prefix: "claude/"
+      note: subscription pool — quota fallback, no API budget
+  defaults:
+    models:
+      - "openrouter/qwen/qwen3-coder:free"
+      - "claude/haiku"
+  decomposer:
+    models:
+      - "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"
+      - "claude/haiku"
+  reviewer:
+    models:
+      - "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"
+      - "claude/haiku"

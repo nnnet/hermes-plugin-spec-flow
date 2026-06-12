@@ -78,11 +78,10 @@ def load_skill_md(skill: str) -> str:
 
 
 def _model_for(role: str) -> str:
-    # the shared default is the free OpenRouter pool — paid models are
-    # forbidden for test runs (llm_backend enforces it); 'haiku' exists
-    # only as llm_backend's exhaustion fallback
-    return (os.environ.get(f"SPEC_FLOW_{role.upper().replace('-', '_')}_MODEL")
-            or llm_backend.DEFAULT_FREE_MODEL)
+    # delegates to the shared per-role resolver: the case YAML `workers:`
+    # block is the single source of truth when present (env vars apply only
+    # without it); paid models stay forbidden — llm_backend gates ':free'
+    return llm_backend.model_for(role)
 
 
 def _chat_only() -> bool:
@@ -93,10 +92,17 @@ def _chat_only() -> bool:
 
 
 def _call_model(prompt: str, *, system: str, allowed: list[str],
-                disallowed: list[str], cwd: Optional[str], model: str) -> str:
+                disallowed: list[str], cwd: Optional[str], model: str,
+                role: Optional[str] = None) -> str:
     """ONE door to the model for every role worker (free-pool rule lives in
-    llm_backend). The claude-CLI path keeps the real tool-policy flags."""
+    llm_backend). ``role`` resolves the case-configured model CHAIN — the
+    tail entries answer when the primary's quota is exhausted. The
+    claude-CLI path keeps the real tool-policy flags."""
     if _chat_only():
+        fallbacks = llm_backend.chain_for(role)[1:] if role else ()
+        if fallbacks:
+            return llm_backend.ask(prompt, model=model, system=system,
+                                   fallbacks=fallbacks)
         return llm_backend.ask(prompt, model=model, system=system)
     return _run_claude(prompt, system=system, allowed=allowed,
                        disallowed=disallowed, cwd=cwd, model=model)
@@ -186,7 +192,7 @@ def _dialog_round(prompt: str, *, role: str, node: str, system: str,
     No channel / no answer → the worker is told to proceed on its own
     judgement and state its assumption."""
     raw = _call_model(prompt, system=system, allowed=allowed,
-                      disallowed=disallowed, cwd=cwd, model=model)
+                      disallowed=disallowed, cwd=cwd, model=model, role=role)
     try:
         probe = _extract_json(raw)
     except ValueError:
@@ -205,7 +211,7 @@ def _dialog_round(prompt: str, *, role: str, node: str, system: str,
                     "No human answer arrived. Proceed on your own best "
                     "judgement, STATE the assumption you made, and produce "
                     "the normal output now (no more questions).")
-    return _call_model(followup, system=system, allowed=allowed,
+    return _call_model(followup, role=role, system=system, allowed=allowed,
                        disallowed=disallowed, cwd=cwd, model=model)
 
 
@@ -610,7 +616,7 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
                 prompt + "\n\nYour previous reply was not parseable."
                 " Reply with ONLY the JSON object, no prose, no fence.",
                 system=system, allowed=allowed, disallowed=disallowed,
-                cwd=ws_root, model=model)
+                cwd=ws_root, model=model, role="implementer")
             try:
                 parsed = _extract_json(raw)
             except ValueError as exc:
@@ -635,7 +641,7 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
                           + _REPAIR_TASK.format(output=test_out, fn=fn))
                 raw2 = _call_model(repair, system=system, allowed=allowed,
                                    disallowed=disallowed, cwd=ws_root,
-                                   model=model)
+                                   model=model, role="implementer")
                 out2 = _extract_json(raw2)
                 if _write_reply_files(ws, out2.get("files") or {}, fn):
                     passed, test_out = _leaf_bar(ws_root, fn, baseline, pv)
@@ -689,7 +695,7 @@ def make_reviewer() -> Callable[[dict], dict]:
         _log_call_start("reviewer", str(ctx.get("node", "?")), -1, model)
         raw = _call_model(prompt, system=system, allowed=allowed,
                           disallowed=disallowed, cwd=ctx.get("workspace_root"),
-                          model=model)
+                          model=model, role="reviewer")
         out = _extract_json(raw)
         llm_log.log_outcome(role="reviewer", worker=True, node=ctx.get("node", "?"),
                             depth=-1, model=model, prompt=prompt, reply=raw, ok=True)
@@ -727,7 +733,7 @@ def make_researcher() -> Callable[[dict], dict]:
         _log_call_start("researcher", str(ctx.get("node", "?")), -1, model)
         raw = _call_model(prompt, system=system, allowed=allowed,
                           disallowed=disallowed, cwd=ctx.get("workspace_root"),
-                          model=model)
+                          model=model, role="researcher")
         out = _extract_json(raw)
         llm_log.log_outcome(role="researcher", worker=True, node=ctx.get("node", "?"),
                             depth=-1, model=model, prompt=prompt, reply=raw, ok=True)

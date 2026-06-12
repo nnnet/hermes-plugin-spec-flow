@@ -55,35 +55,126 @@ FALLBACK_COOLDOWN = float(os.environ.get("SPEC_FLOW_FALLBACK_COOLDOWN", "600"))
 _free_down_until = 0.0
 last_call: dict = {}    # {"backend":…, "model":…, "fallback":bool} — for logs
 
+# per-role worker configuration — the case YAML `workers:` block.
+# Shape (all lists carry parameters; models come STRICTLY from here when
+# the block exists — env vars are ignored):
+#   workers:
+#     providers:                       # the AVAILABLE pool, with parameters
+#       - {name: openrouter-free, kind: openai, model_prefix: "openrouter/",
+#          require_suffix: ":free", requests_per_day: 1000}
+#       - {name: claude-cli, kind: claude, model_prefix: "claude/"}
+#     defaults:  {models: ["openrouter/...:free", "claude/haiku"]}
+#     <role>:    {models: [...]}       # ordered chain: first is primary,
+#                                      # the rest are quota fallbacks
+# Backward compat: a scalar `model:` is read as a one-element chain.
+WORKERS_CFG: dict = {}
+
+
+def configure_workers(cfg: dict | None) -> None:
+    WORKERS_CFG.clear()
+    WORKERS_CFG.update(cfg or {})
+
+
+def _provider_for(model: str) -> dict | None:
+    """Match a model against the case's provider registry (when present);
+    a model outside every provider is a config error caught BEFORE any
+    token is spent."""
+    provs = WORKERS_CFG.get("providers") or []
+    if not provs:
+        return None
+    for p in provs:
+        if not model.startswith(p.get("model_prefix", "")):
+            continue
+        suffix = p.get("require_suffix")
+        if suffix and suffix not in model:
+            continue
+        return p
+    raise ValueError(
+        f"model '{model}' matches no provider in the case's pool: "
+        + ", ".join(str(p.get("name")) for p in provs))
+
+
+def chain_for(role: str) -> list[str]:
+    """Ordered model chain for a role: primary first, quota fallbacks after.
+    Every entry is validated against the provider registry."""
+    role_cfg = WORKERS_CFG.get(role) or {}
+    defaults = WORKERS_CFG.get("defaults") or {}
+    chain = (role_cfg.get("models")
+             or ([role_cfg["model"]] if role_cfg.get("model") else None)
+             or defaults.get("models")
+             or ([defaults["model"]] if defaults.get("model") else None))
+    if not chain:
+        # no workers block in the case YAML — legacy env/default path
+        chain = [os.environ.get(
+            f"SPEC_FLOW_{role.upper().replace('-', '_')}_MODEL")
+            or DEFAULT_FREE_MODEL]
+    for m in chain:
+        _provider_for(m)
+    return list(chain)
+
+
+def model_for(role: str) -> str:
+    """The role's primary model (head of the chain) — for logs and meta."""
+    return chain_for(role)[0]
+
 
 class QuotaExhausted(RuntimeError):
     """The free pool kept returning 429 through every retry."""
 
 
-def ask(prompt: str, *, model: str, system: str | None = None) -> str:
-    """Send one prompt to the configured backend, return the reply text.
-
-    openai backend: free-pool-only guard + automatic one-step fallback to
-    the claude CLI (FALLBACK_MODEL) when the pool is exhausted."""
+def _ask_one(prompt: str, model: str, system: str | None,
+             fallback: bool) -> str:
+    """Route ONE model of a chain to its provider; QuotaExhausted bubbles
+    up so the caller can walk the rest of the chain."""
     global _free_down_until
+    if model.startswith("claude/"):
+        # subscription-CLI provider (e.g. 'claude/haiku') — spends no API
+        # budget, so the ':free' gate does not apply; 'direct' bypasses
+        # the gateway so a broken proxy can't take the pool down
+        cli_model = model.split("/", 1)[1]
+        last_call.update(backend="claude", model=cli_model,
+                         fallback=fallback)
+        return _ask_claude(prompt, cli_model, system=system, direct=True)
     if BACKEND != "openai":
-        last_call.update(backend="claude", model=model, fallback=False)
+        last_call.update(backend="claude", model=model, fallback=fallback)
         return _ask_claude(prompt, model, system=system)
     if ":free" not in model and not ALLOW_PAID:
         raise ValueError(
             f"paid model '{model}' is forbidden for test runs — only the"
             " OpenRouter ':free' pool is allowed (SPEC_FLOW_ALLOW_PAID=1"
             " to override deliberately)")
-    if time.time() >= _free_down_until:
+    if time.time() < _free_down_until:
+        raise QuotaExhausted("free pool inside its cooldown window")
+    try:
+        last_call.update(backend="openai", model=model, fallback=fallback)
+        return _ask_openai(prompt, model, system=system)
+    except QuotaExhausted:
+        _free_down_until = time.time() + FALLBACK_COOLDOWN
+        raise
+
+
+def ask(prompt: str, *, model: str, system: str | None = None,
+        fallbacks: tuple | list = ()) -> str:
+    """Send one prompt, return the reply text.
+
+    ``model`` + ``fallbacks`` form an ordered chain (the case YAML
+    `workers:` block supplies it via chain_for); on QuotaExhausted the
+    next entry answers. When the whole chain is exhausted the legacy
+    terminal fallback (subscription CLI, FALLBACK_MODEL) still applies
+    unless the chain already contains a 'claude/' entry."""
+    chain = [model, *fallbacks]
+    last_exc: Exception | None = None
+    for i, m in enumerate(chain):
         try:
-            last_call.update(backend="openai", model=model, fallback=False)
-            return _ask_openai(prompt, model, system=system)
-        except QuotaExhausted:
-            _free_down_until = time.time() + FALLBACK_COOLDOWN
-    if not FALLBACK_MODEL:
-        raise QuotaExhausted("free pool exhausted and no fallback configured")
-    last_call.update(backend="claude", model=FALLBACK_MODEL, fallback=True)
-    return _ask_claude(prompt, FALLBACK_MODEL, system=system, direct=True)
+            return _ask_one(prompt, m, system, fallback=i > 0)
+        except QuotaExhausted as exc:
+            last_exc = exc
+    if FALLBACK_MODEL and not any(m.startswith("claude/") for m in chain):
+        last_call.update(backend="claude", model=FALLBACK_MODEL,
+                         fallback=True)
+        return _ask_claude(prompt, FALLBACK_MODEL, system=system,
+                           direct=True)
+    raise last_exc or QuotaExhausted("no model in the chain answered")
 
 
 # ── claude CLI (fallback; gateway via ANTHROPIC_BASE_URL env) ────────────────

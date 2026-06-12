@@ -146,8 +146,14 @@ seed_files:
                 status, body = handler(payload, query)
             except Exception as exc:  # noqa: BLE001 — surface, don't crash
                 status, body = 500, {"error": str(exc)[:200]}
-        data = json.dumps(body).encode("utf-8")
-        start_response(f"{status} X", [("Content-Type", "application/json"),
+        if isinstance(body, str):
+            # a handler may serve a PAGE: an HTML string passes through
+            data = body.encode("utf-8")
+            ctype = "text/html; charset=utf-8"
+        else:
+            data = json.dumps(body).encode("utf-8")
+            ctype = "application/json"
+        start_response(f"{status} X", [("Content-Type", ctype),
                                        ("Content-Length", str(len(data)))])
         return [data]
 

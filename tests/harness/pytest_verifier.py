@@ -198,7 +198,7 @@ def _badness(passed: bool, output: str) -> int:
 def make_verifier(model: Optional[str] = None,
                   max_repair: int = MAX_REPAIR,
                   channel: Optional[object] = None) -> Callable[[dict], dict]:
-    model = model or llm_backend.DEFAULT_FREE_MODEL
+    model = model or llm_backend.model_for("verifier")
 
     def verify(ctx: dict) -> dict:
         root = ctx["workspace_root"]
