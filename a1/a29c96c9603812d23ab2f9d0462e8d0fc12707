@@ -1,0 +1,36 @@
+tests/test_memory_learning.py
+  s_a7f45290e91181::t_f86f15116c3921 1-132
+tests/harness/pytest_verifier.py
+  s_a7f45290e91181::t_b79b687f620365 26
+  s_a7f45290e91181::t_7f832924f001cd 215,218,221
+  s_a7f45290e91181::t_0a3c844c8e6724 273-287
+tests/harness/role_worker.py
+  s_a7f45290e91181::t_ec7b656b57f190 767-775,777
+  s_a7f45290e91181::t_9b046d40e75b89 692-696,698-712
+  s_a7f45290e91181::t_7510e0e3cda2a3 697
+tests/run_cases.py
+  s_a7f45290e91181::t_06cd1d3d558b8b 270-295
+tests/harness/memory.py
+  s_a7f45290e91181::t_bb970645884107 165-172
+  s_a7f45290e91181::t_8a24fa901aa78c 218-254
+  s_a7f45290e91181::t_067949f9e31b37 453-454,457-458,467-481
+  s_a7f45290e91181::t_e6dbe55ed723f5 67-78
+  s_a7f45290e91181::t_957b890be89310 340-344,357-424
+  s_a7f45290e91181::t_80bc4b1b8921b1 86,96-113
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "a1a29c96c9603812d23ab2f9d0462e8d0fc12707",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-fable-5"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
