@@ -55,3 +55,16 @@ def test_unsafe_paths_are_refused(tmp_path):
     assert not pv._safe_rel("/abs/path.py")
     assert not pv._safe_rel("src/x.txt")
     assert pv._safe_rel("src/x.py") and pv._safe_rel("tests/test_x.py")
+
+
+def test_worsening_repair_is_rolled_back(tmp_path, monkeypatch):
+    # the model "repair" breaks collection — the round must be undone
+    root = _ws(tmp_path, {"tests/test_a.py": RED})
+    monkeypatch.setattr(lb, "ask", lambda prompt, model, system=None:
+                        json.dumps({"files": {
+                            "tests/test_a.py": "import missing_module\n"}}))
+    out = pv.make_verifier(max_repair=1)({"node": "n1",
+                                          "workspace_root": root})
+    assert out["status"] == "FAIL"
+    body = (tmp_path / "tests" / "test_a.py").read_text(encoding="utf-8")
+    assert body == RED, "the worsening write must be rolled back"

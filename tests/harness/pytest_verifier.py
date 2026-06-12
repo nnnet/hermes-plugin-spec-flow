@@ -41,10 +41,14 @@ Development run. The workspace test suite FAILED. pytest output (tail):
 Current content of the implicated files:
 {files_block}
 
-Fix the code (and only if genuinely wrong, the tests). Conventions: code in
-src/, tests in tests/, standard library only, test files insert ../src into
-sys.path and import modules by name. Reply with ONLY a JSON object mapping
-EVERY file you change to its FULL new text (no prose, no fence):
+Fix the code (and only if genuinely wrong, the tests). A test that imports
+or calls an API the module no longer provides is STALE: either restore the
+API in the module or update that test to the current API — the suite must
+COLLECT and pass as a whole; an ImportError in any test file fails
+everything. Conventions: code in src/, tests in tests/, standard library
+only, test files insert ../src into sys.path and import modules by name.
+Reply with ONLY a JSON object mapping EVERY file you change to its FULL new
+text (no prose, no fence):
 {{"files": {{"src/x.py": "...", "tests/test_x.py": "..."}}}}"""
 
 
@@ -90,17 +94,52 @@ def _implicated_files(root: str, output: str) -> dict[str, str]:
     return found
 
 
-def _write_files(root: str, files: dict) -> bool:
+def _write_files(root: str, files: dict) -> tuple[bool, dict]:
+    """Write the model's files; returns (wrote_any, snapshot) where snapshot
+    maps each touched path to its previous content (None = did not exist),
+    so a round that made things WORSE can be rolled back."""
     wrote = False
+    snapshot: dict[str, Optional[str]] = {}
     for rel, body in (files or {}).items():
         if not (_safe_rel(str(rel)) and isinstance(body, str) and body.strip()):
             continue
         f = Path(root) / rel
+        snapshot[str(rel)] = (f.read_text(encoding="utf-8")
+                              if f.is_file() else None)
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(body if body.endswith("\n") else body + "\n",
                      encoding="utf-8")
         wrote = True
-    return wrote
+    return wrote, snapshot
+
+
+def _rollback(root: str, snapshot: dict) -> None:
+    for rel, old in snapshot.items():
+        f = Path(root) / rel
+        if old is None:
+            f.unlink(missing_ok=True)
+        else:
+            f.write_text(old, encoding="utf-8")
+
+
+_FAIL_RE = re.compile(r"(\d+) failed")
+_ERR_RE = re.compile(r"(\d+) error")
+
+
+def _badness(passed: bool, output: str) -> int:
+    """Comparable failure score: 0 = green; collection break is worst."""
+    if passed:
+        return 0
+    score = 1
+    m = _FAIL_RE.search(output)
+    if m:
+        score += int(m.group(1))
+    m = _ERR_RE.search(output)
+    if m:
+        score += 10 * int(m.group(1))
+    if "Interrupted" in output or "errors during collection" in output:
+        score += 100
+    return score
 
 
 def make_verifier(model: Optional[str] = None,
@@ -111,6 +150,11 @@ def make_verifier(model: Optional[str] = None,
         root = ctx["workspace_root"]
         include_smoke = str(ctx.get("node")) == "L0"
         passed, out = run_suite(root, include_smoke)
+        if not passed:
+            # the FIRST red output is the diagnosis — keep it on record
+            llm_log.log({"event": "integrate_red", "role": "verifier",
+                         "node": str(ctx.get("node")),
+                         "test_output": out[-600:]})
         rounds = 0
         while not passed and rounds < max_repair:
             rounds += 1
@@ -132,13 +176,22 @@ def make_verifier(model: Optional[str] = None,
                                     node=str(ctx.get("node")), depth=-1,
                                     model=model, ok=False, error=str(exc)[:200])
                 break
-            if not _write_files(root, reply.get("files")):
+            before = _badness(passed, out)
+            wrote, snapshot = _write_files(root, reply.get("files"))
+            if not wrote:
                 break
             passed, out = run_suite(root, include_smoke)
+            rolled_back = False
+            if _badness(passed, out) > before:
+                # the round made the suite WORSE — a repair never leaves the
+                # tree in a worse state than it found it
+                _rollback(root, snapshot)
+                passed, out = run_suite(root, include_smoke)
+                rolled_back = True
             llm_log.log_outcome(role="verifier", worker=True,
                                 node=str(ctx.get("node")), depth=-1,
                                 model=model, ok=True, tests_passed=passed,
-                                repair_round=rounds)
+                                repair_round=rounds, rolled_back=rolled_back)
         return {"status": "PASS" if passed else "FAIL",
                 "detail": ("green pytest run" if passed else out[-300:])
                 + (f" (after {rounds} repair round(s))" if rounds else "")}
