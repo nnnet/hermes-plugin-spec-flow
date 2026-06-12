@@ -1,0 +1,19 @@
+tests/live_dashboard.py
+  s_a7f45290e91181::t_5bcb73bb7c25e8 446-449,451,453,455-458,460-465,482-486,488-495,507,514,645-653,658
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "24f10ed37e684e7cdec779ad8391e8899083d548",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-fable-5"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
