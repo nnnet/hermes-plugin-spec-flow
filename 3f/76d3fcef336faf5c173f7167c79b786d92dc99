@@ -1,0 +1,20 @@
+tests/harness/role_worker.py
+  s_a7f45290e91181::t_0a5b7c9357c46b 262-265
+  s_a7f45290e91181::t_ced4a960d77987 397-400
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "3f76d3fcef336faf5c173f7167c79b786d92dc99",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-fable-5"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
