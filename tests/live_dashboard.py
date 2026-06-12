@@ -654,7 +654,7 @@ ol.tl{padding-left:18px}ol.tl li{margin:1px 0;white-space:nowrap}
 .wrap{display:grid;grid-template-columns:var(--treew,340px) 6px 1fr;gap:0;height:calc(100vh - 70px)}
 .split{cursor:col-resize;background:#21262d;position:relative}.split:hover{background:#1f6feb}
 .split .knob{position:absolute;top:8px;left:-7px;width:20px;height:20px;line-height:20px;text-align:center;cursor:pointer;background:#161b22;border:1px solid #30363d;border-radius:5px;color:#8b949e;font-size:11px;z-index:5}.split .knob:hover{color:#58a6ff}
-body.treecol .col.tree{display:none}body.treecol .split .knob{left:1px}
+body.treecol .col.tree{overflow:hidden;padding:0;min-width:0}body.treecol .split .knob{left:1px}
 body.treecol .wrap{grid-template-columns:0 6px 1fr}
 .col{overflow:auto;height:100%}
 .tree{padding:10px 8px;border-right:1px solid #21262d}
@@ -674,7 +674,7 @@ th,td{border:1px solid #30363d;padding:4px 7px;text-align:left;vertical-align:to
 th{background:#161b22}tr:nth-child(even) td{background:#0f141a}
 code{background:#161b22;padding:1px 5px;border-radius:4px;color:#ffa657}
 pre.code{background:#161b22;padding:10px;border-radius:6px;overflow:auto;white-space:pre-wrap}
-.feed{padding-left:38px;max-height:150px;overflow:auto}.feed li{margin:1px 0}
+.feed{padding-left:38px;max-height:150px;overflow:auto}.feed.full{max-height:none;overflow:visible}.feed li{margin:1px 0}
 .diff .add{background:#12361f;color:#3fb950}.diff .del{background:#3a1620;color:#f85149}
 .muted{color:#6e7681}.kv{color:#8b949e}
 .badge{font-size:9px;vertical-align:middle;letter-spacing:1px}
@@ -815,7 +815,7 @@ function renderGlobal(){
  const tabs=[['inputs','▶ Старт (цель+вход)'],['graph','🕸 Граф спеков'],['flow','🔀 Поток выполнения'],['timeline','⏱ Таймлайн'],['report','Отчёт+аудит'],['agents','🤖 Агенты сейчас'],['workflow','Воркфлоу'],['oracle','Оракул'],['commits','Версии/коммиты'],['summary','Итог']];
  let h='<div class=tabs>'+tabs.map(([k,t])=>(k==='timeline'||k==='graph'||k==='agents'||R[k])?`<span class="tab${GTAB===k?' on':''}" data-g="${k}">${t}</span>`:'').join('')+'</div>';
  let body;
- if(GTAB==='agents')body='<h3 class=muted>Что делают агенты сейчас <span class=dim>(сверху — последнее)</span></h3><ol class=feed reversed>'+(STATE.feed||[]).slice().reverse().map(f=>`<li>${esc(f)}</li>`).join('')+'</ol>';
+ if(GTAB==='agents')body='<h3 class=muted>Что делают агенты сейчас <span class=dim>(сверху — последнее)</span></h3><ol class="feed full" reversed>'+(STATE.feed||[]).slice().reverse().map(f=>`<li>${esc(f)}</li>`).join('')+'</ol>';
  else if(GTAB==='timeline')body=timelineHTML();
  else if(GTAB==='graph')body='<p class=muted>граф задач, что построил плагин — <b>дабл-клик</b> = провалиться в спеку/код/версии · <b>клик</b> = свернуть поддерево / развернуть следующий уровень. 🌿 ветка · 🍃 лист · бейджи = эпизоды</p>'+graphSVG();
  else body=R[GTAB]||'<p class=dim>нет данных</p>';
