@@ -443,18 +443,26 @@ def _build_state(run_dir: pathlib.Path) -> dict:
 
     # current activity + chronological timeline (orient: done / happening now)
     current = "✅ завершён" if done else "…"
-    last_start = None
+    # ALL open calls — under parallel children several are in flight at
+    # once; a single last-event tracker showed just one and any sibling's
+    # outcome wiped it
+    open_calls = {}
     for e in llm:
+        key = (e.get("node"), e.get("role"))
         if e.get("event") == "call_start":
-            last_start = e
+            open_calls[key] = e
         elif e.get("event") == "outcome":
-            last_start = None
+            open_calls.pop(key, None)
+    last_start = list(open_calls.values())[-1] if open_calls else None
+    _ROLE_RU = {"decomposer": "декомпозирует", "implementer": "пишет код",
+                "reviewer": "ревьюит", "researcher": "исследует"}
     if not done:
-        if last_start:
-            role_ru = {"decomposer": "декомпозирует", "implementer": "пишет код",
-                       "reviewer": "ревьюит", "researcher": "исследует"}.get(
-                last_start.get("role"), last_start.get("role"))
-            current = f"🟢 {role_ru} узел «{last_start.get('node')}» (L{last_start.get('depth')})"
+        if open_calls:
+            parts = [
+                f"{_ROLE_RU.get(e.get('role'), e.get('role'))}"
+                f" «{e.get('node')}» (L{e.get('depth')})"
+                for e in open_calls.values()]
+            current = "🟢 " + "  ⏐  ".join(parts)
         elif events:
             le = events[-1]
             current = f"🟢 {le.get('phase')}: {le.get('action')}"
@@ -471,17 +479,20 @@ def _build_state(run_dir: pathlib.Path) -> dict:
             pass
 
     active = None
-    if not done and last_start:
-        active = {"node": last_start.get("node"),
-                  "role": last_start.get("role")}
-        # REAL elapsed of the open call: llm-log t is run-relative, the
-        # first trace event carries the run-start epoch — so a page
-        # reload shows the true age, not 'since the client noticed'
+    actives = []
+    if not done and open_calls:
+        # REAL elapsed per open call: llm-log t is run-relative, the
+        # first trace event carries the run-start epoch — a page reload
+        # shows the true age, not 'since the client noticed'
         t0 = events[0].get("t") if events else None
-        rel = last_start.get("t")
-        if t0 is not None and rel is not None:
-            active["elapsed_s"] = max(
-                0.0, _time.time() - (float(t0) + float(rel)))
+        for e in open_calls.values():
+            a = {"node": e.get("node"), "role": e.get("role")}
+            rel = e.get("t")
+            if t0 is not None and rel is not None:
+                a["elapsed_s"] = max(
+                    0.0, _time.time() - (float(t0) + float(rel)))
+            actives.append(a)
+        active = actives[-1]
     elif not done and events:
         # fallback for runs whose workers do not bracket sessions with
         # call_start (older harness in a live process): the tail of the
@@ -493,12 +504,14 @@ def _build_state(run_dir: pathlib.Path) -> dict:
             if t_last is not None:
                 active["elapsed_s"] = max(0.0,
                                           _time.time() - float(t_last))
+            actives = [active]
     return {
         "name": run_dir.name,
         "status": "done" if done else "running",
         "goal": inputs_goal,
         "current": current,
         "active": active,
+        "actives": actives,
         "counts": {
             "nodes": sum(1 for e in llm if e.get("event") == "outcome"
                          and e.get("role") == "decomposer") or len(meta),
@@ -629,19 +642,20 @@ pre.code{background:#161b22;padding:10px;border-radius:6px;overflow:auto;white-s
 <script>
 if(window.mermaid)mermaid.initialize({startOnLoad:false,theme:'dark',securityLevel:'loose',flowchart:{useMaxWidth:false}});
 let STATE=null, SEL=null, EXPANDED={}, GCOLL={}, CLICKT=null, NTAB='spec', GTAB='inputs', FILECACHE={}, AUTO=true;
-let ACTIVE={node:null,role:null,since:0};
-function trackActive(){const a=STATE&&STATE.active;
- if(!a){ACTIVE={node:null,role:null,since:0};return;}
- // the server knows the call's REAL age — resync on every fetch so an
- // F5 (or a long-lived tab) never restarts the counter from zero
- const real=a.elapsed_s!=null?Date.now()-a.elapsed_s*1000:0;
- if(a.node!==ACTIVE.node||a.role!==ACTIVE.role)ACTIVE={node:a.node,role:a.role,since:real||Date.now()};
- else if(real)ACTIVE.since=real;}
+let ACTIVE=[];
+function trackActive(){
+ const arr=(STATE&&STATE.actives)||(STATE&&STATE.active?[STATE.active]:[]);
+ const now=Date.now();
+ // the server knows each call's REAL age — resync on every fetch so an
+ // F5 (or a long-lived tab) never restarts the counters from zero
+ ACTIVE=arr.map(a=>{const prev=ACTIVE.find(x=>x.node===a.node&&x.role===a.role);
+  return {node:a.node,role:a.role,
+          since:a.elapsed_s!=null?now-a.elapsed_s*1000:(prev?prev.since:now)};});}
 setInterval(()=>{const el=document.getElementById('elapsed');
  if(!el)return;
  // with auto-refresh OFF the data is frozen — a ticking counter would lie
  if(!AUTO){el.textContent='';return;}
- if(ACTIVE.since)el.textContent=' · уже '+fmtDur((Date.now()-ACTIVE.since)/1000);},1000);
+ if(ACTIVE.length)el.textContent=' · уже '+ACTIVE.map(a=>fmtDur((Date.now()-a.since)/1000)).join(' / ');},1000);
 const $=s=>document.querySelector(s);
 // one duration format everywhere: <60s -> '42s', then 'MM:SS', with hours 'H:MM:SS'
 function fmtDur(s){s=Math.max(0,Math.round(s));
