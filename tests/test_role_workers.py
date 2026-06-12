@@ -499,3 +499,14 @@ def test_chat_reviewer_inlines_spec_text(monkeypatch, tmp_path):
     assert out["verdict"] == "PASS"
     assert "UNIQUE-SPEC-MARKER-42" in seen["prompt"], \
         "chat-only reviewer must receive the spec text inline"
+
+
+def test_existing_schemas_extracted_for_prompt(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "sellers.py").write_text(
+        'import db\ndb.register_schema("""\n'
+        'CREATE TABLE IF NOT EXISTS sellers (id INTEGER PRIMARY KEY);\n'
+        '""")\n', encoding="utf-8")
+    out = rw._existing_schemas(str(tmp_path))
+    assert "CREATE TABLE IF NOT EXISTS sellers" in out
+    assert "from sellers.py" in out

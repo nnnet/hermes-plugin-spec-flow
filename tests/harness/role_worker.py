@@ -436,6 +436,24 @@ def _run_pytest(ws_root: str, test_rel: str) -> tuple[bool, str]:
     return proc.returncode == 0, out[-1500:]
 
 
+_SCHEMA_BLOCK_RE = re.compile(
+    r"register_schema\(\s*(?:\"\"\"|''')(.*?)(?:\"\"\"|''')", re.S)
+
+
+def _existing_schemas(ws_root: str) -> str:
+    """SQL schema blocks already declared by sibling features — a chat
+    worker cannot read them, yet redeclaring a table differently is a
+    silent collision (CREATE IF NOT EXISTS keeps the FIRST definition)."""
+    blocks = []
+    src = Path(ws_root or ".") / "src"
+    if src.is_dir():
+        for f in sorted(src.glob("*.py")):
+            for sql in _SCHEMA_BLOCK_RE.findall(
+                    f.read_text(encoding="utf-8")):
+                blocks.append(f"-- from {f.name}\n{sql.strip()}")
+    return "\n".join(blocks)[:INLINE_FILE_LIMIT]
+
+
 def _write_reply_files(ws: Any, files: dict, fn: str) -> bool:
     """Write the worker's files into the workspace (harness does the I/O in
     chat-only mode). Only the leaf's own src/tests paths are accepted, and
@@ -498,6 +516,14 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         prompt = _IMPLEMENT_CHAT_TASK.format(
             title=ctx["title"], id=nid, spec=ctx["spec"],
             spec_body=spec_body, fn=fn) + _ASK_RULE
+        schemas = _existing_schemas(ws_root)
+        if schemas:
+            prompt += ("\n\nTABLES ALREADY DECLARED by sibling features"
+                       " (db.connect applies every registered schema;"
+                       " CREATE IF NOT EXISTS keeps the FIRST definition —"
+                       " reference these tables AS DECLARED, never"
+                       " re-declare one with different columns):\n"
+                       + schemas)
         from . import pytest_verifier
         protected = sorted(pytest_verifier.protected_files())
         if protected:
