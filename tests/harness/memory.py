@@ -64,6 +64,18 @@ class MemoryProvider:
                 " the spec and constitution always win):\n"
                 + "\n".join(f"- {h}" for h in hits))
 
+    # -- mental models: distilled summaries the service refreshes from the
+    # bank's accumulated memories (a plain provider has none) -------------
+    def ensure_mental_model(self, bank: str, mid: str, name: str,
+                            source_query: str) -> bool:
+        return False
+
+    def refresh_mental_model(self, bank: str, mid: str) -> bool:
+        return False
+
+    def mental_models(self, bank: str) -> list[dict]:
+        return []
+
 
 class FakeMemory(MemoryProvider):
     """In-process provider for offline tests: keyword-overlap recall,
@@ -71,6 +83,7 @@ class FakeMemory(MemoryProvider):
 
     def __init__(self):
         self._banks: dict[str, list[str]] = {}
+        self._models: dict[str, dict[str, dict]] = {}   # bank -> id -> model
 
     def retain(self, bank, content, *, context="", tags=None) -> bool:
         self._banks.setdefault(bank, []).append(str(content))
@@ -79,6 +92,25 @@ class FakeMemory(MemoryProvider):
     def clear(self, bank) -> bool:
         self._banks.pop(bank, None)
         return True
+
+    # mental models: refresh distils the bank's notes that overlap the
+    # source query — a cheap offline stand-in for the service's LLM pass
+    def ensure_mental_model(self, bank, mid, name, source_query) -> bool:
+        self._models.setdefault(bank, {}).setdefault(
+            mid, {"id": mid, "name": name, "source_query": source_query,
+                  "content": ""})
+        return True
+
+    def refresh_mental_model(self, bank, mid) -> bool:
+        m = self._models.get(bank, {}).get(mid)
+        if m is None:
+            return False
+        hits = self.recall(bank, m["source_query"], limit=5)
+        m["content"] = " / ".join(hits)
+        return True
+
+    def mental_models(self, bank) -> list[dict]:
+        return [dict(m) for m in self._models.get(bank, {}).values()]
 
     def recall(self, bank, query, *, limit=RECALL_LIMIT,
                budget_chars=RECALL_BUDGET_CHARS) -> list[str]:
@@ -130,6 +162,14 @@ class HindsightMemory(MemoryProvider):
         except urllib.error.HTTPError as e:
             return e.code
 
+    def _http_get(self, url: str) -> tuple[int, str]:
+        req = urllib.request.Request(url, method="GET")
+        try:
+            with self._opener.open(req, timeout=self.timeout) as resp:
+                return resp.status, resp.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode("utf-8", "replace")
+
     def clear(self, bank) -> bool:
         try:
             status = self._http_delete(
@@ -174,6 +214,43 @@ class HindsightMemory(MemoryProvider):
             out.append(text)
             spent += len(text)
         return out
+
+    def ensure_mental_model(self, bank, mid, name, source_query) -> bool:
+        try:
+            status, body = self._http_get(
+                f"{self.base_url}/v1/default/banks/{bank}/mental-models")
+            if status == 200:
+                items = (json.loads(body) or {}).get("items") or []
+                if any(str(m.get("id")) == mid for m in items):
+                    return True
+            status, _ = self._http_post(
+                f"{self.base_url}/v1/default/banks/{bank}/mental-models",
+                {"id": mid, "name": name, "source_query": source_query})
+            return status in (200, 201, 202)
+        except Exception:            # noqa: BLE001 — memory never kills a run
+            return False
+
+    def refresh_mental_model(self, bank, mid) -> bool:
+        try:
+            status, _ = self._http_post(
+                f"{self.base_url}/v1/default/banks/{bank}/mental-models/"
+                f"{mid}/refresh", {})
+            return status in (200, 202)
+        except Exception:            # noqa: BLE001
+            return False
+
+    def mental_models(self, bank) -> list[dict]:
+        try:
+            status, body = self._http_get(
+                f"{self.base_url}/v1/default/banks/{bank}/mental-models")
+            if status != 200:
+                return []
+            items = (json.loads(body) or {}).get("items") or []
+            return [{"id": str(m.get("id")), "name": str(m.get("name") or ""),
+                     "content": str(m.get("content") or "")}
+                    for m in items]
+        except Exception:            # noqa: BLE001
+            return []
 
 
 def make_provider(cfg: Optional[dict]) -> Optional[MemoryProvider]:
@@ -260,8 +337,11 @@ class MemoryManager:
                     context: str = "", tags=None) -> bool:
         if self.roles_mode in ("off", "readonly"):
             return False
-        return self.provider.retain(role_bank(role), content,
-                                    context=context, tags=tags)
+        ok = self.provider.retain(role_bank(role), content,
+                                  context=context, tags=tags)
+        _mlog({"op": "retain", "bank": role_bank(role),
+               "context": context, "ok": ok})
+        return ok
 
     # -- project tier --------------------------------------------------------
     def recall_project(self, query: str) -> str:
@@ -274,8 +354,74 @@ class MemoryManager:
                        tags=None) -> bool:
         if self.project_mode in ("off", "readonly"):
             return False
-        return self.provider.retain(project_bank(self.case), content,
-                                    context=context, tags=tags)
+        ok = self.provider.retain(project_bank(self.case), content,
+                                  context=context, tags=tags)
+        _mlog({"op": "retain", "bank": project_bank(self.case),
+               "context": context, "ok": ok})
+        return ok
+
+    # -- mental models -----------------------------------------------------
+    # fixed topics per bank: created once, refreshed at END of run, read
+    # back into prompts at the START of the next one
+    ROLE_TOPICS: dict[str, list[tuple[str, str, str]]] = {
+        "implementer": [("good-leaf", "What makes a leaf land green",
+                         "leaf landed green tests pass module")],
+        "reviewer": [("review-breakers", "What most often breaks spec review",
+                      "spec review reject reasons")],
+        "verifier": [("integrate-failures", "Common integration failure"
+                      " classes", "integration fail repair test failure")],
+        "decomposer": [("split-failures", "What splits fail and why",
+                        "childless branch demoted split no children")],
+    }
+    PROJECT_TOPICS: list[tuple[str, str, str]] = [
+        ("product-map", "Product map: modules, routes, features",
+         "feature implemented module route endpoint"),
+    ]
+
+    def finalize_run(self) -> dict:
+        """End-of-run: distil the accumulated memories into mental
+        models (create missing, refresh all). Returns {bank: [ids]}."""
+        done: dict = {}
+        if self.roles_mode not in ("off", "readonly"):
+            for role, topics in self.ROLE_TOPICS.items():
+                bank = role_bank(role)
+                for mid, name, query in topics:
+                    if self.provider.ensure_mental_model(bank, mid, name,
+                                                         query) \
+                            and self.provider.refresh_mental_model(bank, mid):
+                        done.setdefault(bank, []).append(mid)
+                        _mlog({"op": "mental_refresh", "bank": bank,
+                               "model": mid})
+        if self.project_mode not in ("off", "readonly"):
+            bank = project_bank(self.case)
+            for mid, name, query in self.PROJECT_TOPICS:
+                if self.provider.ensure_mental_model(bank, mid, name, query) \
+                        and self.provider.refresh_mental_model(bank, mid):
+                    done.setdefault(bank, []).append(mid)
+                    _mlog({"op": "mental_refresh", "bank": bank,
+                           "model": mid})
+        return done
+
+    def mental_block(self, role: str) -> str:
+        """Prompt block with the role's + project's distilled models;
+        fetched once per run per role (cached — recall stays cheap)."""
+        if not hasattr(self, "_mental_cache"):
+            self._mental_cache: dict[str, str] = {}
+        if role in self._mental_cache:
+            return self._mental_cache[role]
+        parts = []
+        if self.roles_mode != "off":
+            parts += self.provider.mental_models(role_bank(role))
+        if self.project_mode != "off":
+            parts += self.provider.mental_models(project_bank(self.case))
+        lines = [f"- {m['name']}: {m['content']}" for m in parts
+                 if m.get("content")]
+        block = ""
+        if lines:
+            block = ("\n\nMENTAL MODELS (distilled from past runs;"
+                     " advisory):\n" + "\n".join(lines))[:self.budget]
+        self._mental_cache[role] = block
+        return block
 
 
 # the run-wide manager — set by the runner from the case YAML; workers
@@ -304,10 +450,12 @@ def configure(cfg: Optional[dict], case_name: str) -> Optional[MemoryManager]:
 
 
 def recall_block_for(role: str, query: str) -> str:
-    """Worker-facing: role craft + project decisions in one block."""
+    """Worker-facing: role craft + project decisions + distilled mental
+    models in one block."""
     if MANAGER is None:
         return ""
-    return MANAGER.recall_role(role, query) + MANAGER.recall_project(query)
+    return (MANAGER.recall_role(role, query) + MANAGER.recall_project(query)
+            + MANAGER.mental_block(role))
 
 
 def retain_role(role: str, content: str, **kw) -> bool:
@@ -316,3 +464,18 @@ def retain_role(role: str, content: str, **kw) -> bool:
 
 def retain_project(content: str, **kw) -> bool:
     return MANAGER.retain_project(content, **kw) if MANAGER else False
+
+
+def finalize_run() -> dict:
+    """End-of-run hook: distil mental models (no-op when memory off)."""
+    return MANAGER.finalize_run() if MANAGER else {}
+
+
+def _mlog(event: dict) -> None:
+    """Every memory action leaves a visible trail in llm-log.jsonl —
+    so each safeguard's firing is observable, not silent."""
+    try:
+        from . import llm_log
+        llm_log.log({"event": "memory", **event})
+    except Exception:                # noqa: BLE001 — logging never kills a run
+        pass

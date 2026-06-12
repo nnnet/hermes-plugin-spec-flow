@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 from typing import Callable, Optional
 
-from . import llm_backend, llm_log
+from . import llm_backend, llm_log, memory
 
 PYTEST_TIMEOUT = int(os.environ.get("SPEC_FLOW_PYTEST_TIMEOUT", "180"))
 MAX_REPAIR = int(os.environ.get("SPEC_FLOW_INTEGRATE_MAX_REPAIR", "2"))
@@ -212,11 +212,13 @@ def make_verifier(model: Optional[str] = None,
                              "role": "verifier", "paths": synced})
         include_smoke = str(ctx.get("node")) == "L0"
         passed, out = run_suite(root, include_smoke)
+        first_red = ""
         if not passed:
             # the FIRST red output is the diagnosis — keep it on record
+            first_red = out[-600:]
             llm_log.log({"event": "integrate_red", "role": "verifier",
                          "node": str(ctx.get("node")),
-                         "test_output": out[-600:]})
+                         "test_output": first_red})
         rounds = 0
         while not passed and rounds < max_repair:
             rounds += 1
@@ -268,6 +270,21 @@ def make_verifier(model: Optional[str] = None,
                                 node=str(ctx.get("node")), depth=-1,
                                 model=model, ok=True, tests_passed=passed,
                                 repair_round=rounds, rolled_back=rolled_back)
+        node = str(ctx.get("node"))
+        if not passed:
+            # the verifier's craft is failure CLASSES: what integration
+            # breaks look like and which ones resist repair
+            memory.retain_role(
+                "verifier",
+                f"Integration FAIL at node '{node}' after {rounds} repair"
+                f" round(s); red tail: {out[-300:]}",
+                context="integrate fail", tags=["fail"])
+        elif rounds:
+            memory.retain_role(
+                "verifier",
+                f"Integration at node '{node}' went green after {rounds}"
+                f" repair round(s); first diagnosis was: {first_red[-300:]}",
+                context="integrate repaired", tags=["repair"])
         return {"status": "PASS" if passed else "FAIL",
                 "detail": ("green pytest run" if passed else out[-300:])
                 + (f" (after {rounds} repair round(s))" if rounds else "")}

@@ -689,6 +689,27 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
                 f"Feature '{ctx.get('title', '')}' is implemented by"
                 f" src/{fn}.py (node {nid}).",
                 context="leaf landed", tags=["leaf"])
+            # a DECLARATIVE interface fact: the module's public surface,
+            # so later nodes recall real signatures, not just feature names
+            try:
+                from . import repo_map
+                surface = repo_map.map_file(
+                    Path(ws_root) / "src" / f"{fn}.py")
+                if surface:
+                    memory.retain_project(
+                        f"Public surface of src/{fn}.py:"
+                        f" {surface[:600]}",
+                        context="interface fact", tags=["interface"])
+            except Exception:        # noqa: BLE001 — facts never kill a leaf
+                pass
+        else:
+            # a RED leaf with its diagnosis teaches more than a green one:
+            # the failure tail is what recurring mistakes look like
+            memory.retain_role(
+                "implementer",
+                f"Leaf '{nid}' ({ctx.get('title', '')}) surrendered RED;"
+                f" failing output tail: {test_out[-300:]}",
+                context="red leaf", tags=["fail"])
         llm_log.log_outcome(role="implementer", worker=True, node=nid, depth=-1,
                             model=model, prompt=prompt, reply=raw, ok=True,
                             tests_passed=passed,
@@ -743,8 +764,17 @@ def make_reviewer() -> Callable[[dict], dict]:
         llm_log.log_outcome(role="reviewer", worker=True, node=ctx.get("node", "?"),
                             depth=-1, model=model, prompt=prompt, reply=raw, ok=True)
         verdict = str(out.get("verdict", "PASS")).upper()
+        reasons = [str(r) for r in out.get("reasons") or []]
+        if verdict == "REJECT" and reasons:
+            # rejection reasons are the reviewer's craft: recurring ones
+            # surface in recall and the distilled mental model
+            memory.retain_role(
+                "reviewer",
+                f"Spec review REJECT at node"
+                f" '{ctx.get('node', '?')}': " + "; ".join(reasons[:3]),
+                context="review reject", tags=["reject"])
         return {"verdict": "REJECT" if verdict == "REJECT" else "PASS",
-                "reasons": [str(r) for r in out.get("reasons") or []]}
+                "reasons": reasons}
 
     return review
 

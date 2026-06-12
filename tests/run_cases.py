@@ -267,6 +267,32 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
     (case_dir / "tree.json").write_text(
         json.dumps(res.project.get("tree", {}), ensure_ascii=False, indent=2),
         encoding="utf-8")
+    # memory learning sweep: engine-side lessons the workers can't see
+    # (demotions, crashes), then distil the banks into mental models
+    try:
+        from harness import memory as _mem
+        if _mem.MANAGER is not None:
+            for e in res.events:
+                if e.action == "childless branch demoted to leaf":
+                    _mem.retain_role(
+                        "decomposer",
+                        f"Split of '{e.task}' proposed branch-sized metrics"
+                        " but NO children — the engine demoted it to a leaf."
+                        " A split must either stay atomic or name its parts.",
+                        context="failed split", tags=["demotion"])
+            for lp in res.loops:
+                if lp.get("type") == "implementer-crash":
+                    _mem.retain_role(
+                        "implementer",
+                        f"Implementer crashed at '{lp.get('task')}':"
+                        f" {str(lp.get('detail'))[:200]}",
+                        context="crash", tags=["fail"])
+            models = _mem.finalize_run()
+            print(f"  memory: mental models refreshed: "
+                  f"{sum(len(v) for v in models.values())} across"
+                  f" {len(models)} bank(s)")
+    except Exception as exc:  # noqa: BLE001 — memory must not fail a run
+        print(f"  memory sweep failed: {exc}")
     if meter is not None:
         from harness import cost as _cost
         _cost.write_cost_md(meter, str(case_dir / "COST.md"),
