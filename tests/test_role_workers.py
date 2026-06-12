@@ -533,3 +533,21 @@ def test_repo_map_excludes_platform_and_caps_budget(tmp_path):
                              budget=500)
     assert "wsgi_app" not in out
     assert len(out) <= 530 and "truncated" in out
+
+
+def test_extract_json_survives_fences_and_leading_braces():
+    fenced = "Here it is:\n```json\n{\"a\": 1}\n```\ndone"
+    assert rw._extract_json(fenced) == {"a": 1}
+    tricky = "weights {0.3, 0.7} then the real one {\"b\": 2} trailing"
+    assert rw._extract_json(tricky) == {"b": 2}
+    with pytest.raises(ValueError):
+        rw._extract_json("no json here at all")
+
+
+def test_chat_implementer_survives_garbage_reply(monkeypatch, tmp_path):
+    from harness import llm_backend as lb
+    monkeypatch.setattr(lb, "BACKEND", "openai")
+    monkeypatch.setattr(lb, "ask", lambda prompt, model, system=None:
+                        "I cannot produce JSON today {broken")
+    impl = rw.make_implementer()
+    assert impl(_chat_ctx(tmp_path)) is None    # surrendered, not crashed

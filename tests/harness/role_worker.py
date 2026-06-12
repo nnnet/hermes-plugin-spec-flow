@@ -142,18 +142,21 @@ def _run_claude(prompt: str, *, system: str, allowed: list[str],
 
 
 def _extract_json(text: str) -> dict:
-    m = re.search(r"\{.*\}", text, re.S)
-    if not m:
-        raise ValueError(f"no JSON in worker reply: {text[-300:]}")
-    # models sometimes append prose (or a second object) after the JSON —
-    # take the FIRST complete object instead of failing with "Extra data"
-    try:
-        return json.loads(m.group(0))
-    except json.JSONDecodeError:
-        obj, _ = json.JSONDecoder().raw_decode(text, m.start())
-        if not isinstance(obj, dict):
-            raise ValueError(f"worker reply is not a JSON object: {text[:200]}")
-        return obj
+    """The first complete JSON OBJECT anywhere in the reply.
+
+    Models wrap JSON in prose, code fences, or lead with a '{' that is not
+    the object start — try every candidate position instead of trusting the
+    first brace (a single bad reply once crashed a whole run)."""
+    text = re.sub(r"```(?:json)?", "", text)
+    decoder = json.JSONDecoder()
+    for m in re.finditer(r"\{", text):
+        try:
+            obj, _ = decoder.raw_decode(text, m.start())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            return obj
+    raise ValueError(f"no JSON object in worker reply: {text[-300:]}")
 
 
 _ASK_RULE = """
@@ -534,7 +537,25 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         raw = _dialog_round(prompt, role="implementer", node=nid, system=system,
                             allowed=allowed, disallowed=disallowed,
                             cwd=ws_root, model=model, channel=channel)
-        out = _handle_operator_reply(_extract_json(raw), role="implementer",
+        try:
+            parsed = _extract_json(raw)
+        except ValueError:
+            # garbage reply: ONE strict re-ask; a second failure surrenders
+            # the leaf honestly (red artifacts) instead of crashing the run
+            raw = _call_model(
+                prompt + "\n\nYour previous reply was not parseable."
+                " Reply with ONLY the JSON object, no prose, no fence.",
+                system=system, allowed=allowed, disallowed=disallowed,
+                cwd=ws_root, model=model)
+            try:
+                parsed = _extract_json(raw)
+            except ValueError as exc:
+                llm_log.log_outcome(role="implementer", worker=True, node=nid,
+                                    depth=-1, model=model, ok=False,
+                                    error=f"unparseable reply: {str(exc)[:150]}",
+                                    tests_passed=False)
+                return None
+        out = _handle_operator_reply(parsed, role="implementer",
                                      node=nid, note=note, channel=channel)
         passed, test_out = False, "(no files written)"
         if _write_reply_files(ws, out.get("files") or {}, fn):
