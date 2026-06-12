@@ -211,6 +211,12 @@ review:
   on_reject: rework
   max_rework: 2
 
+# Integrate-fail policy (plan P11): rework re-invokes the verifier with a
+# FRESH repair budget (one extra round on top of the verifier's internal
+# repair ladder) instead of carrying the red straight to the root.
+on_integrate_fail: rework
+integrate_max_rework: 1
+
 # Platform conventions (the seeded skeleton; same school as p5): features
 # build INTO it, late human requirements arrive as standing requirements
 # with acceptance tests that gate the root integrate.

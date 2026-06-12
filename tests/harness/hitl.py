@@ -133,15 +133,23 @@ class HumanChannel:
                      f"**operator:** {note}\n**worker:** {response}\n")
 
     # -- standing requirements (artifact-based, enforceable) ----------------
-    def standing_requirements(self) -> list[tuple[str, str]]:
-        """[(name, statement)] of every registered requirement. Shown to
-        branch decomposers so late requirements enter the tree as leaves."""
+    def standing_requirements(self) -> list[tuple[str, str, Optional[str]]]:
+        """[(name, statement, scope)] of every registered requirement.
+
+        ``scope`` comes from an optional ``@scope: <node_id>`` line in
+        REQUIREMENT.md: the ENGINE places a scoped requirement as a child
+        of that branch while it is still open, anything else (or a missed
+        scope) lands as a direct root child — the level whose integrate
+        sees the assembled product."""
+        import re as _re
         out = []
         if self.requirements_dir.is_dir():
             for d in sorted(self.requirements_dir.iterdir()):
                 f = d / "REQUIREMENT.md"
                 if d.is_dir() and f.is_file():
-                    out.append((d.name, f.read_text(encoding="utf-8").strip()))
+                    text = f.read_text(encoding="utf-8").strip()
+                    m = _re.search(r"^@scope:\s*(\S+)", text, _re.M)
+                    out.append((d.name, text, m.group(1) if m else None))
         return out
 
     def sync_requirements(self, ws_root: str | Path) -> list[str]:

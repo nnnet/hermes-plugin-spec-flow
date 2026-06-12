@@ -41,6 +41,21 @@ from datetime import datetime
 from pathlib import Path
 
 
+def _next_run_no(case_name: str) -> int:
+    """Sequential run number for the case: one more than anything seen in
+    runs-out — both v-numbered dirs and legacy unnumbered ones count."""
+    import re as _re
+    total, max_v = 0, 0
+    for d in OUT_DIR.glob(f"*__{case_name}"):
+        total += 1
+    for d in OUT_DIR.glob(f"*__v*__{case_name}"):
+        total += 1
+        m = _re.search(r"__v(\d+)__", d.name)
+        if m:
+            max_v = max(max_v, int(m.group(1)))
+    return max(total, max_v) + 1
+
+
 def _worker_models() -> dict:
     """Resolved role -> model map for the run's meta.json."""
     from harness import llm_backend
@@ -233,7 +248,9 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
                           tools=tools, agents=agents or None,
                           contracts_dir=str(eng.CONTRACTS), sink=sink,
                           max_decompose_calls=max_calls, node_engine=node_engine,
-                          review_policy=review_policy, seed_files=seeds)
+                          review_policy=review_policy, seed_files=seeds,
+                          standing_requirements=getattr(
+                              channel, "standing_requirements", None))
     # persist the REALIZED task tree the plugin built (parent->children), so the
     # dashboard / offline review can walk the exact structure node by node
     (case_dir / "tree.json").write_text(
@@ -424,7 +441,7 @@ def main() -> int:
             continue
         case = yaml.safe_load(path.read_text(encoding="utf-8"))
         name = case.get("name", path.stem)
-        case_dir = OUT_DIR / f"{stamp}__{name}"
+        case_dir = OUT_DIR / f"{stamp}__v{_next_run_no(name):03d}__{name}"
         case_dir.mkdir(parents=True, exist_ok=True)
         # persist the readable STARTING inputs (goal + givens) so the dashboard /
         # offline review shows what the plugin was asked to build — no hints

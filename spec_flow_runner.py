@@ -723,9 +723,15 @@ class Engine:
                  node_engine: str = "inline", runtime_guard: bool = False,
                  resume: bool = False, git_provenance: bool = False,
                  review_policy: Optional[dict] = None,
-                 seed_files: Optional[dict] = None):
+                 seed_files: Optional[dict] = None,
+                 standing_requirements: Optional[Any] = None):
         if not workspace:
             raise ValueError("Workspace is mandatory — pass a path or a Workspace")
+        # () -> [(name, statement)] — standing HUMAN requirements (possibly
+        # added MID-RUN). The ENGINE owns their placement: a requirement whose
+        # acceptance runs on the assembled product is a ROOT-LEVEL concern,
+        # never a child of whatever branch happened to decompose next.
+        self._standing_requirements = standing_requirements
         self.review_policy = {**DEFAULT_REVIEW_POLICY, **(review_policy or {})}
         self._seed_files = seed_files
         # tools (gate provider) is injectable; default to the bundled gates so
@@ -868,6 +874,34 @@ class Engine:
             self.loops.append({"type": "hitl-reject", "kind": kind,
                                "task": task, "detail": reason or detail})
         return approved
+
+    def _requirement_nodes(self, scope: "Optional[str]" = None) -> list:
+        """Uncovered standing requirements as ready-to-visit node dicts.
+
+        ``scope=<nid>``: only requirements explicitly scoped to that node.
+        ``scope=None``:  every uncovered requirement (the root fallback —
+        the last placement chance, scope missed or absent)."""
+        fn = self._standing_requirements
+        if fn is None:
+            return []
+        out = []
+        for item in (fn() or []):
+            name, statement = item[0], item[1]
+            req_scope = item[2] if len(item) > 2 else None
+            if name in self.tasks:
+                continue            # already covered by an existing node
+            if scope is not None and req_scope != scope:
+                continue
+            title = " ".join(str(statement).split())[:120]
+            out.append({"id": name, "title": title,
+                        "requirement": str(statement),
+                        "_scoped": scope is not None,
+                        "metrics": {"modules": 1, "tasks": 3,
+                                    "interfaces": 2, "estimated_loc": 150,
+                                    "open_decisions": 0,
+                                    "single_concern": True,
+                                    "testable_criteria": True}})
+        return out
 
     def _node_driver(self, node: dict, kind: str) -> _NodeDriver:
         """Build the lifecycle guard for one node under the active engine."""
@@ -1340,6 +1374,32 @@ class Engine:
                 self._visit(child, depth + 1, child_contract_ctx, phase,
                             parent=title, ancestors=ancestors + ((nid, title),))
                 child_ids.append(child["id"])
+
+            # standing requirements, two placement rules (the ENGINE owns
+            # placement, never a worker's whim):
+            #  * scoped (@scope: <node>) — a child of THAT branch, valid
+            #    only while the branch is still open (we are here, before
+            #    its integrate);
+            #  * unscoped, or the scoped branch was already missed — a
+            #    direct ROOT child: the level whose integrate sees the
+            #    assembled product the acceptance exercises.
+            placements = list(self._requirement_nodes(scope=nid))
+            if depth == 0:
+                placements += [x for x in self._requirement_nodes()
+                               if x["id"] not in {p["id"] for p in placements}]
+            for extra in placements:
+                where = ("inside its scoped branch" if extra.pop("_scoped",
+                                                                 False)
+                         else "at root level")
+                self.emit("decompose", "engine", "", extra["id"],
+                          f"late requirement materialized {where}",
+                          extra["title"], "requirement", "ATTACHED",
+                          level=L_MILESTONE)
+                node.setdefault("children", []).append(extra)
+                self._visit(extra, depth + 1, child_contract_ctx, phase,
+                            parent=title,
+                            ancestors=ancestors + ((nid, title),))
+                child_ids.append(extra["id"])
 
             # a branch delegates impl to its children, then integrates them
             drv.go(EV_BRANCH_INTEGRATE)
@@ -1834,7 +1894,8 @@ def run_project(project: dict, *, workspace, depth: Any = DEPTH_SPEC,
                 runtime_guard: bool = False, resume: bool = False,
                 git_provenance: bool = False,
                 review_policy: Optional[dict] = None,
-                seed_files: Optional[dict] = None) -> RunResult:
+                seed_files: Optional[dict] = None,
+                standing_requirements: Optional[Any] = None) -> RunResult:
     """Public entry: run a project to completion. ``workspace`` is mandatory.
 
     ``depth`` is one of spec|scaffold|verify|execute|product (or 1..5).
@@ -1850,7 +1911,8 @@ def run_project(project: dict, *, workspace, depth: Any = DEPTH_SPEC,
                   max_decompose_calls=max_decompose_calls,
                   review_policy=review_policy, seed_files=seed_files,
                   node_engine=node_engine, runtime_guard=runtime_guard,
-                  resume=resume, git_provenance=git_provenance).run(project)
+                  resume=resume, git_provenance=git_provenance,
+                  standing_requirements=standing_requirements).run(project)
 
 
 def render_log(res: RunResult, level: int = None) -> str:

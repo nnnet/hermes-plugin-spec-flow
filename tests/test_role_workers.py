@@ -622,16 +622,20 @@ def test_branch_decomposer_sees_standing_requirements(tmp_path, monkeypatch):
     assert "web_ui" in seen["prompt"]
 
 
-def test_branch_decomposer_auto_attaches_uncovered_requirement(
+def test_branch_decomposer_never_attaches_requirements(
         tmp_path, monkeypatch):
-    # the prompt block is advisory; the ATTACH is the gate — a branch that
-    # ignores the standing requirement still gets it as a child
+    # placement belongs to the ENGINE (root level / scoped branch) — a
+    # branch decomposer must NOT grow requirement children on its own:
+    # v11 proved an obedient branch swallows cross-cutting scope into the
+    # wrong subtree (web_ui under buyer_discovery)
     import json as _json
     from harness import llm_backend as lb
     monkeypatch.setattr(lb, "BACKEND", "openai")
     ch = _req_channel(tmp_path)
+    seen = {}
 
     def fake_ask(prompt, model, system=None):
+        seen["prompt"] = prompt
         return _json.dumps({"atomic": False, "metrics": dict(SMALL),
                             "children": [{"id": "catalog", "title": "C"}],
                             "spec_markdown": "## Requirements\n- x"})
@@ -642,11 +646,10 @@ def test_branch_decomposer_auto_attaches_uncovered_requirement(
                "node": {"id": "L0", "title": "Root"}, "parent": None,
                "depth": 0, "ancestors": [], "parent_id": None,
                "existing_nodes": []})
-    ids = [c["id"] for c in out["children"]]
-    assert ids == ["catalog", "web_ui"], \
-        "an uncovered standing requirement must be attached as a child"
-    attached = out["children"][-1]
-    assert "web interface" in attached["title"].lower()
+    assert [c["id"] for c in out["children"]] == ["catalog"]
+    # awareness text instructs the branch to stay OUT of the requirement
+    assert "materialized by the ENGINE" in seen["prompt"]
+    assert "do NOT create a child" in seen["prompt"]
 
 
 def test_requirement_already_in_tree_not_attached_twice(
