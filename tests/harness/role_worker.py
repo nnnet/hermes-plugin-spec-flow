@@ -263,6 +263,10 @@ Decompose by product FEATURE, never by test phase: do NOT create nodes for
 end-to-end scenarios, smoke harnesses, test fixtures or 'integration
 testing' — the platform already owns the assembled-product check, and a
 duplicate of it among regular leaves fails every partial build.
+COVERAGE IS BINDING: when the constitution freezes an API contract, EVERY
+endpoint of it must be owned by exactly one leaf in your decomposition —
+a missing endpoint means the assembled product fails its acceptance and
+nobody else will add it later.
 
 "spec_markdown" is REQUIRED — you AUTHOR this level's specification (the
 engine only adds its deterministic header). It must contain exactly these

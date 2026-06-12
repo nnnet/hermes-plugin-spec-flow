@@ -88,3 +88,12 @@ def test_implicated_falls_back_to_all_src_when_only_protected(tmp_path, monkeypa
     files = pv._implicated_files(str(tmp_path), out)
     assert "src/feature.py" in files
     assert "tests/smoke/test_mvp_smoke.py" not in files
+
+
+def test_readonly_context_inlines_protected_smoke(tmp_path, monkeypatch):
+    monkeypatch.setenv("SPEC_FLOW_PROTECTED_FILES",
+                       json.dumps(["tests/smoke/test_mvp_smoke.py"]))
+    _ws(tmp_path, {"tests/smoke/test_mvp_smoke.py": "EXPECTED-API-MARKER"})
+    out = "FAILED tests/smoke/test_mvp_smoke.py::test_x - AssertionError"
+    ro = pv._readonly_context(str(tmp_path), out)
+    assert "EXPECTED-API-MARKER" in ro and "READ-ONLY" in ro

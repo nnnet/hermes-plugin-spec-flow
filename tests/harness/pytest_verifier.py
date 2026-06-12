@@ -115,6 +115,23 @@ def _implicated_files(root: str, output: str) -> dict[str, str]:
     return found
 
 
+def _readonly_context(root: str, output: str) -> str:
+    """Protected files named by the failure (e.g. the smoke suite) — the
+    repair model must SEE the expected API even though it cannot write it."""
+    blocks = []
+    budget = INLINE_LIMIT
+    for rel in dict.fromkeys(_FILE_RE.findall(output)):
+        if rel not in protected_files():
+            continue
+        f = Path(root) / rel
+        if f.is_file() and budget > 0:
+            text = f.read_text(encoding="utf-8")[:INLINE_LIMIT // 2]
+            budget -= len(text)
+            blocks.append(f"--- {rel} (READ-ONLY platform file — satisfy it,"
+                          f" never edit it) ---\n{text}")
+    return "\n".join(blocks)
+
+
 def _write_files(root: str, files: dict) -> tuple[bool, dict]:
     """Write the model's files; returns (wrote_any, snapshot) where snapshot
     maps each touched path to its previous content (None = did not exist),
@@ -186,6 +203,13 @@ def make_verifier(model: Optional[str] = None,
             files_block = "\n".join(
                 f"--- {rel} ---\n{text}" for rel, text in files.items()) \
                 or "(none located)"
+            ro = _readonly_context(root, out)
+            if ro:
+                files_block += "\n" + ro
+                files_block += ("\nIf the failure says 'no route METHOD"
+                                " /path', the FEATURE IS MISSING — author a"
+                                " NEW src module registering that route per"
+                                " the platform conventions.")
             try:
                 raw = llm_backend.ask(
                     _REPAIR_TASK.format(output=out, files_block=files_block),
