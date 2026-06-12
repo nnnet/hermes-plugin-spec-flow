@@ -109,6 +109,10 @@ _EVENT_GATE = {
 
 NODE_ENGINES = ("inline", "fsm")
 
+
+class IntegrateFailHalt(RuntimeError):
+    """on_integrate_fail='halt': a FAILed integrate stops the run."""
+
 # Event verbosity levels — what each emit() is worth. Lower = more important.
 L_MILESTONE = 1   # gate verdicts, loops (clarify/critique/drift/respec), phase signals
 L_STEP = 2        # routine worker steps (read handoff, design, integrate)
@@ -649,14 +653,27 @@ class _NodeDriver:
     pre-FSM behaviour.
     """
 
-    def __init__(self, kind: str, *, fsm_mode: bool, skip_gate: Optional[str] = None):
+    def __init__(self, kind: str, *, fsm_mode: bool, skip_gate: Optional[str] = None,
+                 on_event: Optional[Any] = None, node: str = ""):
         self.kind = kind
         self.active = _NODE_FSM_OK
         self._skip = skip_gate
         self._fired: set[str] = set()
         self._lc = None
+        # lifecycle observer — makes the state machine VISIBLE in run
+        # reports (without it an fsm run is indistinguishable from inline
+        # in the trace; only meta.json knew)
+        self._on_event = on_event
+        self.node = node
         if fsm_mode and _NODE_FSM_OK:
             self._lc = _NodeLifecycle().start(kind)
+
+    def _observe(self, event: str) -> None:
+        if self._on_event is None:
+            return
+        state = getattr(self._lc, "phase", None) if self._lc is not None else None
+        self._on_event(self.node, self.kind, str(event), state,
+                       sorted(self._fired))
 
     def go(self, event) -> None:
         """Advance the lifecycle by one event, recording any gate it satisfies."""
@@ -666,6 +683,7 @@ class _NodeDriver:
             self._lc.advance(event)
         for gate in _EVENT_GATE.get(event, ()):
             self._fired.add(gate)
+        self._observe(event)
 
     def clarify(self) -> None:
         """Replay the clarify self-loop (open decision → resolve) on the FSM."""
@@ -673,6 +691,7 @@ class _NodeDriver:
             self._lc.open_decision()
             self._lc.advance(EV_CLARIFY)
             self._lc.resolve_decision()
+        self._observe(EV_CLARIFY)
 
     def done(self) -> None:
         """Close the node — runs the gate-completeness guard for both engines."""
@@ -684,6 +703,7 @@ class _NodeDriver:
                 self._lc._gates.fired.discard(self._skip)
         if self._lc is not None:
             self._lc.advance(EV_DONE)  # FSM guard raises GateViolation on a gap
+            self._observe(EV_DONE)
             return
         required = GATES_BRANCH if self.kind == "branch" else GATES_LEAF
         missing = [g for g in required if g not in self._fired]
@@ -691,6 +711,7 @@ class _NodeDriver:
             raise GateViolation(
                 f"cannot reach DONE: mandatory gate(s) skipped for "
                 f"{self.kind}: {', '.join(missing)}")
+        self._observe(EV_DONE)
 
 
 class Engine:
@@ -850,11 +871,33 @@ class Engine:
 
     def _node_driver(self, node: dict, kind: str) -> _NodeDriver:
         """Build the lifecycle guard for one node under the active engine."""
+        nid = str(node.get("id", "?"))
+
+        def observe(node_id, node_kind, event, state, gates):
+            self.emit("lifecycle", "engine", "", node_id, event,
+                      detail=(f"state={state} gates={','.join(gates) or '-'}"
+                              if state is not None
+                              else f"gates={','.join(gates) or '-'}"),
+                      gate="lifecycle", level=L_STEP)
+
         return _NodeDriver(kind, fsm_mode=(self.node_engine == "fsm"),
-                           skip_gate=node.get("_skip_gate"))
+                           skip_gate=node.get("_skip_gate"),
+                           on_event=observe, node=nid)
 
     # -- run ---------------------------------------------------------------
     def run(self, project: dict) -> RunResult:
+        # integrate-fail policy (plan P11): 'record' keeps today's behaviour
+        # (loop entry, run continues), 'rework' re-invokes the verifier with
+        # a fresh repair budget up to integrate_max_rework times, 'halt'
+        # stops the run on the spot (IntegrateFailHalt).
+        self._on_integrate_fail = str(
+            project.get("on_integrate_fail", "record")).lower()
+        if self._on_integrate_fail not in ("record", "rework", "halt"):
+            raise ValueError(
+                "on_integrate_fail must be record|rework|halt, got "
+                + repr(self._on_integrate_fail))
+        self._integrate_max_rework = int(
+            project.get("integrate_max_rework", 2))
         try:
             if self.sink is not None:
                 self.sink.open()
@@ -1314,21 +1357,43 @@ class Engine:
             verifier = self.agents.get("verifier")
             if verifier is not None:
                 # Real verifier worker: its verdict replaces the simulated
-                # PASS. FAIL is recorded like other rework episodes.
-                try:
-                    vout = verifier({"node": nid, "title": title,
-                                     "children": child_ids,
-                                     "workspace_root": self.workspace.root}) or {}
-                    vstatus = "FAIL" if str(vout.get("status", "PASS")).upper() == "FAIL" else "PASS"
-                    vdetail = str(vout.get("detail", ""))[:300]
-                except Exception as exc:  # noqa: BLE001
-                    vstatus, vdetail = "ERROR", str(exc)[:200]
+                # PASS. What a FAIL does next is the case's choice
+                # (on_integrate_fail: record | rework | halt).
+                def _verify_once():
+                    try:
+                        vout = verifier({"node": nid, "title": title,
+                                         "children": child_ids,
+                                         "workspace_root": self.workspace.root}) or {}
+                        st = "FAIL" if str(vout.get("status", "PASS")).upper() == "FAIL" else "PASS"
+                        return st, str(vout.get("detail", ""))[:300]
+                    except Exception as exc:  # noqa: BLE001
+                        return "ERROR", str(exc)[:200]
+
+                vstatus, vdetail = _verify_once()
                 self.emit("integrate", "verifier", "spec-integrate", integ,
                           "end-to-end acceptance criteria (real worker)", vdetail,
                           "integrate_verify", vstatus, level=L_MILESTONE)
+                policy = getattr(self, "_on_integrate_fail", "record")
+                if vstatus != "PASS" and policy == "rework":
+                    # rework: the verifier carries the repair machinery —
+                    # re-invoking it grants a fresh repair budget per round
+                    for round_no in range(1, getattr(self, "_integrate_max_rework", 2) + 1):
+                        self.loops.append({"type": "integrate-rework",
+                                           "task": nid, "round": round_no,
+                                           "detail": vdetail})
+                        vstatus, vdetail = _verify_once()
+                        self.emit("integrate", "verifier", "spec-integrate", integ,
+                                  "integrate rework round " + str(round_no), vdetail,
+                                  "integrate_verify", vstatus, level=L_MILESTONE)
+                        if vstatus == "PASS":
+                            break
                 if vstatus != "PASS":
                     self.loops.append({"type": "integrate-fail", "task": nid,
                                        "detail": vdetail})
+                    if policy == "halt":
+                        raise IntegrateFailHalt(
+                            "integrate FAIL at " + nid + " - the case demands"
+                            " a halt: " + vdetail)
             else:
                 self.emit("integrate", "verifier", "spec-integrate", integ,
                           "end-to-end acceptance criteria", "verification-before-completion", "", "PASS",

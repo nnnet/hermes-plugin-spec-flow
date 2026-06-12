@@ -160,3 +160,22 @@ def test_clean_project_does_not_raise(plugin, tmp_path):
                               workspace=str(tmp_path / f"wk_ok_{engine}"),
                               tools=plugin.tools, node_engine=engine)
         assert res.tasks["broken"].status == "done"
+
+
+# ─── the state machine must be VISIBLE in the run trace ──────────────
+
+def test_fsm_lifecycle_transitions_traced(plugin, tmp_path, monkeypatch):
+    res = _run(plugin, tmp_path, monkeypatch, CASES[0], "fsm")
+    life = [e for e in res.events if e.phase == "lifecycle"]
+    assert life, "fsm run must trace node lifecycle transitions"
+    # fsm mode shows the machine's actual state after each event
+    assert all("state=" in e.detail for e in life)
+    assert any(e.action == "done" or "done" in e.action.lower()
+               for e in life), [e.action for e in life][:10]
+
+
+def test_inline_lifecycle_traced_without_state(plugin, tmp_path, monkeypatch):
+    res = _run(plugin, tmp_path, monkeypatch, CASES[0], "inline")
+    life = [e for e in res.events if e.phase == "lifecycle"]
+    assert life, "inline run traces the same lifecycle events (gates only)"
+    assert all("state=" not in e.detail for e in life)

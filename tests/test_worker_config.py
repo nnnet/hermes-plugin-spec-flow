@@ -112,3 +112,62 @@ def test_paid_model_still_forbidden(monkeypatch):
     monkeypatch.setattr(lb, "BACKEND", "openai")
     with pytest.raises(ValueError, match="forbidden"):
         lb.ask("q", model="openrouter/gpt-4o")
+
+
+# ─── run-wide LLM-call budget (quota limiter, off by default) ─────────
+
+def _stub_ok(monkeypatch):
+    monkeypatch.setattr(lb, "BACKEND", "openai")
+    monkeypatch.setattr(lb, "_free_down_until", 0.0)
+    monkeypatch.setattr(lb, "_ask_openai",
+                        lambda prompt, model, system=None: "ok")
+
+
+def test_budget_off_by_default(monkeypatch):
+    _stub_ok(monkeypatch)
+    for _ in range(5):
+        assert lb.ask("q", model="openrouter/a:free") == "ok"
+    assert lb.calls_made() == 5
+
+
+def test_budget_from_workers_block(monkeypatch):
+    _stub_ok(monkeypatch)
+    lb.configure_workers({"budget": 2})
+    lb.ask("q", model="openrouter/a:free")
+    lb.ask("q", model="openrouter/a:free")
+    with pytest.raises(lb.BudgetExhausted):
+        lb.ask("q", model="openrouter/a:free")
+
+
+def test_budget_from_env_without_block(monkeypatch):
+    _stub_ok(monkeypatch)
+    monkeypatch.setenv("SPEC_FLOW_LLM_BUDGET", "1")
+    lb.ask("q", model="openrouter/a:free")
+    with pytest.raises(lb.BudgetExhausted):
+        lb.ask("q", model="openrouter/a:free")
+
+
+def test_chain_attempts_each_spend_budget(monkeypatch):
+    monkeypatch.setattr(lb, "BACKEND", "openai")
+    monkeypatch.setattr(lb, "_free_down_until", 0.0)
+
+    def exhausted(prompt, model, system=None):
+        raise lb.QuotaExhausted("429")
+
+    monkeypatch.setattr(lb, "_ask_openai", exhausted)
+    monkeypatch.setattr(
+        lb, "_ask_claude",
+        lambda prompt, model, system=None, direct=False: "ok")
+    lb.configure_workers({"budget": 10})
+    lb.ask("q", model="openrouter/a:free", fallbacks=["claude/haiku"])
+    monkeypatch.setattr(lb, "_free_down_until", 0.0)
+    assert lb.calls_made() == 2          # one free attempt + one fallback
+
+
+def test_configure_resets_budget_counter(monkeypatch):
+    _stub_ok(monkeypatch)
+    lb.configure_workers({"budget": 3})
+    lb.ask("q", model="openrouter/a:free")
+    assert lb.calls_made() == 1
+    lb.configure_workers({"budget": 3})
+    assert lb.calls_made() == 0

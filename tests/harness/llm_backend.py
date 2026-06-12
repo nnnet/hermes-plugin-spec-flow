@@ -71,8 +71,39 @@ WORKERS_CFG: dict = {}
 
 
 def configure_workers(cfg: dict | None) -> None:
+    global _calls_made
     WORKERS_CFG.clear()
     WORKERS_CFG.update(cfg or {})
+    _calls_made = 0          # a fresh case starts with a fresh budget
+
+
+class BudgetExhausted(RuntimeError):
+    """The run's total LLM-call budget is spent (quota limiter)."""
+
+
+# run-wide call budget — OFF by default (0). The case YAML 'workers.budget'
+# wins over the env knob, consistent with the models rule. Every provider
+# attempt counts (a chain that walks 3 models on quota spends 3).
+_calls_made = 0
+
+
+def _budget() -> int:
+    if WORKERS_CFG.get("budget") is not None:
+        return int(WORKERS_CFG["budget"])
+    return int(os.environ.get("SPEC_FLOW_LLM_BUDGET", "0"))
+
+
+def calls_made() -> int:
+    return _calls_made
+
+
+def _spend_call() -> None:
+    global _calls_made
+    limit = _budget()
+    if limit and _calls_made >= limit:
+        raise BudgetExhausted(
+            f"run budget of {limit} LLM calls is spent — refusing the call")
+    _calls_made += 1
 
 
 def _provider_for(model: str) -> dict | None:
@@ -165,11 +196,13 @@ def ask(prompt: str, *, model: str, system: str | None = None,
     chain = [model, *fallbacks]
     last_exc: Exception | None = None
     for i, m in enumerate(chain):
+        _spend_call()
         try:
             return _ask_one(prompt, m, system, fallback=i > 0)
         except QuotaExhausted as exc:
             last_exc = exc
     if FALLBACK_MODEL and not any(m.startswith("claude/") for m in chain):
+        _spend_call()
         last_call.update(backend="claude", model=FALLBACK_MODEL,
                          fallback=True)
         return _ask_claude(prompt, FALLBACK_MODEL, system=system,
