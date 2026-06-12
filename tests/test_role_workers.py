@@ -405,7 +405,7 @@ def test_quota_exhaustion_falls_back_to_haiku(monkeypatch):
     def boom(prompt, model, system=None):
         raise lb.QuotaExhausted("429 x3")
 
-    def claude(prompt, model, system=None):
+    def claude(prompt, model, system=None, direct=False):
         calls.append(model)
         return "fallback reply"
 
