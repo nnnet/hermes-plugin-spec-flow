@@ -339,6 +339,13 @@ def make_decomposer(workspace_dir: Optional[str] = None,
         if ctx["depth"] >= LEAF_DEPTH:
             prompt += (f"\n\nHARD CONSTRAINT: depth {ctx['depth']} >= "
                        f"{LEAF_DEPTH} — this node MUST be atomic (no children).")
+        from . import repo_map
+        rmap = repo_map.build_map(workspace_dir, subdirs=("src",))
+        if rmap:
+            prompt += ("\n\nREPOSITORY MAP — modules that ALREADY exist"
+                       " (routes, schemas, signatures). Plan children that"
+                       " complement this surface; never plan a node that"
+                       " duplicates an existing route or table:\n" + rmap)
         note = channel.poll_note() if channel is not None else None
         if note:
             prompt += _NOTE_RULE.format(note=note)
@@ -436,24 +443,6 @@ def _run_pytest(ws_root: str, test_rel: str) -> tuple[bool, str]:
     return proc.returncode == 0, out[-1500:]
 
 
-_SCHEMA_BLOCK_RE = re.compile(
-    r"register_schema\(\s*(?:\"\"\"|''')(.*?)(?:\"\"\"|''')", re.S)
-
-
-def _existing_schemas(ws_root: str) -> str:
-    """SQL schema blocks already declared by sibling features — a chat
-    worker cannot read them, yet redeclaring a table differently is a
-    silent collision (CREATE IF NOT EXISTS keeps the FIRST definition)."""
-    blocks = []
-    src = Path(ws_root or ".") / "src"
-    if src.is_dir():
-        for f in sorted(src.glob("*.py")):
-            for sql in _SCHEMA_BLOCK_RE.findall(
-                    f.read_text(encoding="utf-8")):
-                blocks.append(f"-- from {f.name}\n{sql.strip()}")
-    return "\n".join(blocks)[:INLINE_FILE_LIMIT]
-
-
 def _write_reply_files(ws: Any, files: dict, fn: str) -> bool:
     """Write the worker's files into the workspace (harness does the I/O in
     chat-only mode). Only the leaf's own src/tests paths are accepted, and
@@ -516,16 +505,17 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         prompt = _IMPLEMENT_CHAT_TASK.format(
             title=ctx["title"], id=nid, spec=ctx["spec"],
             spec_body=spec_body, fn=fn) + _ASK_RULE
-        schemas = _existing_schemas(ws_root)
-        if schemas:
-            prompt += ("\n\nTABLES ALREADY DECLARED by sibling features"
-                       " (db.connect applies every registered schema;"
-                       " CREATE IF NOT EXISTS keeps the FIRST definition —"
-                       " reference these tables AS DECLARED, never"
-                       " re-declare one with different columns):\n"
-                       + schemas)
-        from . import pytest_verifier
+        from . import pytest_verifier, repo_map
         protected = sorted(pytest_verifier.protected_files())
+        rmap = repo_map.build_map(ws_root, exclude=set(protected))
+        if rmap:
+            prompt += ("\n\nREPOSITORY MAP — every existing module's public"
+                       " surface (routes, schemas, signatures). Build"
+                       " CONSISTENTLY with it: reference declared tables AS"
+                       " DECLARED (db.connect applies every registered"
+                       " schema; CREATE IF NOT EXISTS keeps the FIRST"
+                       " definition), reuse existing signatures, never"
+                       " duplicate a sibling's route or table:\n" + rmap)
         if protected:
             # a chat worker cannot list the workspace — show it the seeded
             # platform API instead of bare file names, or it doubts they exist

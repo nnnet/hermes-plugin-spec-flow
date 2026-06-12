@@ -501,12 +501,35 @@ def test_chat_reviewer_inlines_spec_text(monkeypatch, tmp_path):
         "chat-only reviewer must receive the spec text inline"
 
 
-def test_existing_schemas_extracted_for_prompt(tmp_path):
+def test_repo_map_shows_schemas_routes_signatures(tmp_path):
+    from harness import repo_map
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "sellers.py").write_text(
-        'import db\ndb.register_schema("""\n'
+        '"""Seller onboarding feature."""\n'
+        'import db\nimport registry\n'
+        'db.register_schema("""\n'
         'CREATE TABLE IF NOT EXISTS sellers (id INTEGER PRIMARY KEY);\n'
-        '""")\n', encoding="utf-8")
-    out = rw._existing_schemas(str(tmp_path))
+        '""")\n\n'
+        '@registry.route("POST", "/sellers")\n'
+        'def create_seller(payload, query):\n'
+        '    """Register a seller (KYC stub)."""\n'
+        '    return 201, {}\n', encoding="utf-8")
+    out = repo_map.build_map(str(tmp_path))
     assert "CREATE TABLE IF NOT EXISTS sellers" in out
-    assert "from sellers.py" in out
+    assert "registry.route('POST', '/sellers')" in out
+    assert "def create_seller(payload, query)" in out
+    assert "Seller onboarding feature" in out
+
+
+def test_repo_map_excludes_platform_and_caps_budget(tmp_path):
+    from harness import repo_map
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("def wsgi_app(e, s):\n    pass\n",
+                                             encoding="utf-8")
+    (tmp_path / "src" / "big.py").write_text(
+        "\n".join(f"def fn_{i}(a, b):\n    pass" for i in range(400)),
+        encoding="utf-8")
+    out = repo_map.build_map(str(tmp_path), exclude={"src/app.py"},
+                             budget=500)
+    assert "wsgi_app" not in out
+    assert len(out) <= 530 and "truncated" in out

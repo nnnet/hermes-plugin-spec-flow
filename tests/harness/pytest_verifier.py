@@ -210,6 +210,12 @@ def make_verifier(model: Optional[str] = None,
                                 " /path', the FEATURE IS MISSING — author a"
                                 " NEW src module registering that route per"
                                 " the platform conventions.")
+            from . import repo_map
+            rmap = repo_map.build_map(root, budget=repo_map.MAP_BUDGET // 2)
+            if rmap:
+                files_block += ("\n\nREPOSITORY MAP (public surface of every"
+                                " module — keep your fix consistent with"
+                                " it):\n" + rmap)
             try:
                 raw = llm_backend.ask(
                     _REPAIR_TASK.format(output=out, files_block=files_block),
