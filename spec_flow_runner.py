@@ -406,14 +406,25 @@ class Workspace:
     def from_env(cls) -> "Workspace":
         return cls()
 
-    def open(self, preserve: bool = False) -> "Workspace":
+    def open(self, preserve: bool = False,
+             seed_files: Optional[dict] = None) -> "Workspace":
         """Create the workspace dir. ``preserve=True`` keeps an existing one
-        (resume mode — persisted artifacts and the journal survive)."""
+        (resume mode — persisted artifacts and the journal survive).
+
+        ``seed_files`` ({relative path: content}) is the platform-provided
+        skeleton the run builds INTO (app entry point, plumbing, acceptance
+        suites). It is written AFTER the fresh-run wipe — seeding the dir
+        beforehand is futile by design — and lands in the manifest."""
         if self.enabled and self.root:
             p = Path(self.root)
             if p.exists() and not preserve:
                 shutil.rmtree(p)
             p.mkdir(parents=True, exist_ok=True)
+            for rel, body in (seed_files or {}).items():
+                target = (p / rel).resolve()
+                if not str(target).startswith(str(p.resolve())):
+                    continue
+                self._write(rel, body, "seed")
         return self
 
     # -- run journal (C4: a restartable run) --------------------------------
@@ -690,10 +701,12 @@ class Engine:
                  max_decompose_calls: int = MAX_DECOMPOSE_CALLS,
                  node_engine: str = "inline", runtime_guard: bool = False,
                  resume: bool = False, git_provenance: bool = False,
-                 review_policy: Optional[dict] = None):
+                 review_policy: Optional[dict] = None,
+                 seed_files: Optional[dict] = None):
         if not workspace:
             raise ValueError("Workspace is mandatory — pass a path or a Workspace")
         self.review_policy = {**DEFAULT_REVIEW_POLICY, **(review_policy or {})}
+        self._seed_files = seed_files
         # tools (gate provider) is injectable; default to the bundled gates so
         # the runner works standalone without Hermes.
         self.tools = tools if tools is not None else _gates
@@ -845,7 +858,8 @@ class Engine:
         try:
             if self.sink is not None:
                 self.sink.open()
-            self.workspace.open(preserve=self.resume)
+            self.workspace.open(preserve=self.resume,
+                                seed_files=self._seed_files)
             if self.resume:
                 self._journal_done = self.workspace.journal_nodes()
             return self._run(project)
@@ -1754,7 +1768,8 @@ def run_project(project: dict, *, workspace, depth: Any = DEPTH_SPEC,
                 node_engine: str = "inline",
                 runtime_guard: bool = False, resume: bool = False,
                 git_provenance: bool = False,
-                review_policy: Optional[dict] = None) -> RunResult:
+                review_policy: Optional[dict] = None,
+                seed_files: Optional[dict] = None) -> RunResult:
     """Public entry: run a project to completion. ``workspace`` is mandatory.
 
     ``depth`` is one of spec|scaffold|verify|execute|product (or 1..5).
@@ -1768,7 +1783,7 @@ def run_project(project: dict, *, workspace, depth: Any = DEPTH_SPEC,
     return Engine(tools=tools, workspace=workspace, depth=depth, agents=agents,
                   contracts_dir=contracts_dir, sink=sink, verbosity=verbosity,
                   max_decompose_calls=max_decompose_calls,
-                  review_policy=review_policy,
+                  review_policy=review_policy, seed_files=seed_files,
                   node_engine=node_engine, runtime_guard=runtime_guard,
                   resume=resume, git_provenance=git_provenance).run(project)
 

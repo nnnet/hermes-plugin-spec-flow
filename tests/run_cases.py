@@ -203,19 +203,16 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
     review_policy = case.get("review") or None
     exec_case.pop("review", None)
     # seed files: the case may ship a deterministic skeleton (app entry,
-    # router/db plumbing, the end-to-end smoke suite) the workers build INTO
-    seeds = case.get("seed_files") or {}
+    # router/db plumbing, the end-to-end smoke suite) the workers build INTO.
+    # Passed to the ENGINE — Workspace.open wipes the dir on a fresh run, so
+    # seeding it beforehand is futile by design.
+    seeds = case.get("seed_files") or None
     exec_case.pop("seed_files", None)
-    for rel, body in seeds.items():
-        p = Path(case_dir / "workspace" / rel)
-        if p.resolve().is_relative_to((case_dir / "workspace").resolve()):
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(body, encoding="utf-8")
     res = eng.run_project(exec_case, workspace=str(case_dir / "workspace"), depth=depth,
                           tools=tools, agents=agents or None,
                           contracts_dir=str(eng.CONTRACTS), sink=sink,
                           max_decompose_calls=max_calls, node_engine=node_engine,
-                          review_policy=review_policy)
+                          review_policy=review_policy, seed_files=seeds)
     # persist the REALIZED task tree the plugin built (parent->children), so the
     # dashboard / offline review can walk the exact structure node by node
     (case_dir / "tree.json").write_text(
