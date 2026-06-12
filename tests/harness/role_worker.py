@@ -259,6 +259,10 @@ Reply with ONLY a JSON object (no prose, no fence):
 Omit "children"/"depends_on"/"spike" when not applicable; atomic=true means
 NO children and metrics within: modules<=1, tasks<=5, interfaces<=2,
 estimated_loc<=100, open_decisions==0.
+Decompose by product FEATURE, never by test phase: do NOT create nodes for
+end-to-end scenarios, smoke harnesses, test fixtures or 'integration
+testing' — the platform already owns the assembled-product check, and a
+duplicate of it among regular leaves fails every partial build.
 
 "spec_markdown" is REQUIRED — you AUTHOR this level's specification (the
 engine only adds its deterministic header). It must contain exactly these
@@ -390,6 +394,10 @@ positional arguments (payload, query) and return (status_code, dict) — the
 platform dispatcher calls handler(payload, query); your tests MUST invoke
 handlers through that exact signature, or the assembled app dies at the
 smoke gate while your leaf stays green.
+Test ONLY your own module in isolation. NEVER author whole-product or
+cross-feature end-to-end tests — the platform smoke suite (tests/smoke/)
+owns the assembled-product check and runs at the root integrate; a copy of
+it among regular tests fails every partial build it reaches first.
 
 Reply with ONLY a JSON object (no prose, no fence):
 {{"files": {{"src/{fn}.py": "<full file text>",
