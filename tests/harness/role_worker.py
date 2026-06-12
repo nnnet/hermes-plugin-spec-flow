@@ -476,9 +476,16 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         from . import pytest_verifier
         protected = sorted(pytest_verifier.protected_files())
         if protected:
-            prompt += ("\n\nPLATFORM FILES (read-only, already provided —"
-                       " import and build INTO them, NEVER rewrite): "
-                       + ", ".join(protected))
+            # a chat worker cannot list the workspace — show it the seeded
+            # platform API instead of bare file names, or it doubts they exist
+            shown = [rel for rel in protected if rel.startswith("src/")]
+            blocks = "\n".join(
+                f"--- {rel} (read-only) ---\n{_inline_file(ws_root, rel)}"
+                for rel in shown)
+            prompt += ("\n\nPLATFORM FILES (already present in the workspace,"
+                       " IMMUTABLE — import and build INTO them, NEVER"
+                       " rewrite): " + ", ".join(protected)
+                       + ("\n" + blocks if blocks else ""))
         note = channel.poll_note() if channel is not None else None
         if note:
             prompt += _NOTE_RULE.format(note=note)
