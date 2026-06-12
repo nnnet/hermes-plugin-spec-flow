@@ -1,0 +1,22 @@
+spec_flow_runner.py
+  s_a7f45290e91181::t_0bdc68b2a2c1e6 1015-1018,1547-1553,1557-1573,1575-1585
+tests/test_parallel_children.py
+  s_a7f45290e91181::t_829a4f3f2e7dc3 222-225,240
+  s_a7f45290e91181::t_d323855ea7409f 215-221,226-239,241-263
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "9e324f71db2ef966fe63efef879888fc94d87a5c",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-fable-5"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
