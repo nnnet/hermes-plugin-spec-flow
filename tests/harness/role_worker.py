@@ -385,6 +385,11 @@ inserts ../src into sys.path and imports the module by name:
 TDD discipline: the tests must cover every acceptance criterion of the spec;
 the implementation must be the MINIMUM that makes them pass. Standard library
 only — no third-party imports. Keep to the spec's scope; no extra features.
+If the leaf registers HTTP routes: every handler MUST accept EXACTLY two
+positional arguments (payload, query) and return (status_code, dict) — the
+platform dispatcher calls handler(payload, query); your tests MUST invoke
+handlers through that exact signature, or the assembled app dies at the
+smoke gate while your leaf stays green.
 
 Reply with ONLY a JSON object (no prose, no fence):
 {{"files": {{"src/{fn}.py": "<full file text>",

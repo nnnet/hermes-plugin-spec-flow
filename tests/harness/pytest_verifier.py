@@ -87,13 +87,22 @@ def _safe_rel(rel: str) -> bool:
 
 
 def _implicated_files(root: str, output: str) -> dict[str, str]:
-    """The failing files (from the pytest output) and their src counterparts."""
+    """The failing files (from the pytest output) and their src counterparts.
+
+    When the failure names no WRITABLE file (e.g. the protected smoke suite
+    dies on a feature handler — the traceback shows no module path), fall
+    back to ALL writable src modules: the bug lives in one of them and the
+    repair model needs their text to find it."""
     found: dict[str, str] = {}
     rels = list(dict.fromkeys(_FILE_RE.findall(output)))
     for rel in rels:
         m = re.match(r"tests/test_(\w+)\.py$", rel)
         if m:
             rels.append(f"src/{m.group(1)}.py")
+    if not any(_safe_rel(r) for r in rels):
+        rels += sorted(
+            str(p.relative_to(root)) for p in (Path(root) / "src").glob("*.py")
+        ) if (Path(root) / "src").is_dir() else []
     budget = INLINE_LIMIT * 2
     for rel in dict.fromkeys(rels):
         if not _safe_rel(rel):

@@ -75,3 +75,16 @@ def test_protected_seed_files_refuse_writes(monkeypatch):
                        json.dumps(["src/app.py", "tests/smoke/test_mvp_smoke.py"]))
     assert not pv._safe_rel("src/app.py"), "seeded skeleton must be immutable"
     assert pv._safe_rel("src/feature.py")
+
+
+def test_implicated_falls_back_to_all_src_when_only_protected(tmp_path, monkeypatch):
+    # the smoke (protected) fails on a feature handler; the traceback names
+    # no writable file — repair must still receive the src modules
+    monkeypatch.setenv("SPEC_FLOW_PROTECTED_FILES",
+                       json.dumps(["tests/smoke/test_mvp_smoke.py"]))
+    _ws(tmp_path, {"src/feature.py": "def h(payload):\n    return 201, {}\n",
+                   "tests/smoke/test_mvp_smoke.py": SMOKE_RED})
+    out = "FAILED tests/smoke/test_mvp_smoke.py::test_x - TypeError: h()..."
+    files = pv._implicated_files(str(tmp_path), out)
+    assert "src/feature.py" in files
+    assert "tests/smoke/test_mvp_smoke.py" not in files
