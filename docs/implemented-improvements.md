@@ -23,12 +23,11 @@ covers it). Lesson recorded: **a prompt is not a gate.**
 2. *Standing requirements in branch prompts.* Every branch decomposer gets
    the full list as a binding block (`harness/role_worker.py`). Advisory —
    kept because it sometimes works and costs nothing.
-3. *Deterministic attach.* After a branch decomposer replies, every
-   requirement not yet covered by any tree node is attached as a child
-   leaf by the ENGINE — idempotent via the tree registry, allowed to
-   exceed `MAX_CHILDREN`. The attached node's own decompose pass receives
-   the FULL requirement statement, so its spec is authored from the source
-   text, not a truncated title. Logged as `requirement_attached`.
+3. *Deterministic materialization.* SUPERSEDED by section 8: the engine
+   places every uncovered requirement itself (root level, or the
+   `@scope:` branch) — the original branch-level attach is removed. The
+   requirement node's own decompose pass still receives the FULL
+   statement, so its spec is authored from the source text.
 4. *Addressed notes.* A note prefixed `@branch` is only consumed by a
    branch-capable node — atomic leaves can no longer eat instructions
    meant for decomposition (`harness/hitl.py poll_note`).
