@@ -208,6 +208,9 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
     # seeding it beforehand is futile by design.
     seeds = case.get("seed_files") or None
     exec_case.pop("seed_files", None)
+    if seeds:
+        # the seeded skeleton is immutable for workers and repair rounds
+        os.environ["SPEC_FLOW_PROTECTED_FILES"] = json.dumps(sorted(seeds))
     res = eng.run_project(exec_case, workspace=str(case_dir / "workspace"), depth=depth,
                           tools=tools, agents=agents or None,
                           contracts_dir=str(eng.CONTRACTS), sink=sink,

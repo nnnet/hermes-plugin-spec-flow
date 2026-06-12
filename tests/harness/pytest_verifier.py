@@ -67,11 +67,23 @@ def run_suite(root: str, include_smoke: bool) -> tuple[bool, str]:
     return proc.returncode in (0, 5), out[-2000:]
 
 
+def protected_files() -> set[str]:
+    """The platform-seeded skeleton is IMMUTABLE for workers — features are
+    built INTO it, never over it (a worker once rewrote src/app.py as its
+    own monolith and broke the assembled product)."""
+    raw = os.environ.get("SPEC_FLOW_PROTECTED_FILES", "")
+    try:
+        return set(json.loads(raw)) if raw else set()
+    except json.JSONDecodeError:
+        return set()
+
+
 def _safe_rel(rel: str) -> bool:
     p = Path(rel)
     return (not p.is_absolute() and ".." not in p.parts
             and p.suffix == ".py"
-            and p.parts and p.parts[0] in ("src", "tests"))
+            and p.parts and p.parts[0] in ("src", "tests")
+            and rel not in protected_files())
 
 
 def _implicated_files(root: str, output: str) -> dict[str, str]:

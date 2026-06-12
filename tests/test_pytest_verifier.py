@@ -68,3 +68,10 @@ def test_worsening_repair_is_rolled_back(tmp_path, monkeypatch):
     assert out["status"] == "FAIL"
     body = (tmp_path / "tests" / "test_a.py").read_text(encoding="utf-8")
     assert body == RED, "the worsening write must be rolled back"
+
+
+def test_protected_seed_files_refuse_writes(monkeypatch):
+    monkeypatch.setenv("SPEC_FLOW_PROTECTED_FILES",
+                       json.dumps(["src/app.py", "tests/smoke/test_mvp_smoke.py"]))
+    assert not pv._safe_rel("src/app.py"), "seeded skeleton must be immutable"
+    assert pv._safe_rel("src/feature.py")

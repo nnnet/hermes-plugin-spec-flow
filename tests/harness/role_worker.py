@@ -413,10 +413,18 @@ def _run_pytest(ws_root: str, test_rel: str) -> tuple[bool, str]:
 
 def _write_reply_files(ws: Any, files: dict, fn: str) -> bool:
     """Write the worker's files into the workspace (harness does the I/O in
-    chat-only mode). Only the leaf's own src/tests paths are accepted."""
+    chat-only mode). Only the leaf's own src/tests paths are accepted, and
+    the platform-seeded skeleton is immutable."""
+    from . import pytest_verifier
+    protected = pytest_verifier.protected_files()
     wrote = False
     safe = {f"src/{fn}.py": "code", f"tests/test_{fn}.py": "test"}
     for rel, kind in safe.items():
+        if rel in protected:
+            llm_log.log({"event": "write_refused", "role": "implementer",
+                         "node": fn, "path": rel,
+                         "reason": "platform-seeded skeleton is immutable"})
+            continue
         body = files.get(rel)
         if isinstance(body, str) and body.strip():
             ws._write(rel, body if body.endswith("\n") else body + "\n", kind)
@@ -465,6 +473,12 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         prompt = _IMPLEMENT_CHAT_TASK.format(
             title=ctx["title"], id=nid, spec=ctx["spec"],
             spec_body=spec_body, fn=fn) + _ASK_RULE
+        from . import pytest_verifier
+        protected = sorted(pytest_verifier.protected_files())
+        if protected:
+            prompt += ("\n\nPLATFORM FILES (read-only, already provided —"
+                       " import and build INTO them, NEVER rewrite): "
+                       + ", ".join(protected))
         note = channel.poll_note() if channel is not None else None
         if note:
             prompt += _NOTE_RULE.format(note=note)
