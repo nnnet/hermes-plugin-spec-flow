@@ -172,3 +172,26 @@ def test_channel_parses_scope_line(tmp_path):
     reqs = ch.standing_requirements()
     assert ("beta_audit",) == tuple(r[0] for r in reqs if r[2] == "beta")
     assert [r for r in reqs if r[0] == "web_ui"][0][2] is None
+
+
+def test_childless_branch_is_demoted_to_leaf(tmp_path):
+    # v15: the requirement node's metrics tripped the branch guardrail,
+    # it proposed no children and integrated EMPTY-green — zero code,
+    # green verdict. A branch without children must become a LEAF.
+    def dec(ctx):
+        if ctx["depth"] == 0:
+            return {"metrics": dict(_BRANCH),
+                    "children": [{"id": "big", "title": "Big feature"}]}
+        # branch-sized metrics, NO children proposed
+        return {"metrics": dict(_BRANCH)}
+
+    res = eng.run_project(
+        {"name": "empty-branch-case", "goal": "g", "target": "x",
+         "policy": dict(PROJECT["policy"])},
+        workspace=str(tmp_path / "wk"), depth="spec",
+        agents={"decomposer": dec})
+    demos = [e for e in res.events
+             if e.action == "childless branch demoted to leaf"]
+    assert demos and demos[0].task == "big"
+    # a leaf has NO integrate task of its own
+    assert "big:integrate" not in res.tasks

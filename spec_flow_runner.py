@@ -933,8 +933,11 @@ class Engine:
             out.append({"id": name, "title": title,
                         "requirement": str(statement),
                         "_scoped": scope is not None,
+                        # SAFELY atomic: estimated_loc 150 once tripped the
+                        # branch guardrail and the node sailed through as an
+                        # EMPTY branch — zero implementation, green integrate
                         "metrics": {"modules": 1, "tasks": 3,
-                                    "interfaces": 2, "estimated_loc": 150,
+                                    "interfaces": 1, "estimated_loc": 80,
                                     "open_decisions": 0,
                                     "single_concern": True,
                                     "testable_criteria": True}})
@@ -1478,6 +1481,15 @@ class Engine:
         # children so the realized tree honestly shows what was built.
         if verdict == "leaf" and node.get("children"):
             node.pop("children", None)
+        if verdict == "branch" and not node.get("children"):
+            # a branch with ZERO children would fall through its empty
+            # child loop and integrate trivially green — nothing was ever
+            # implemented. A childless branch IS a leaf: it must build.
+            verdict = "leaf"
+            self.emit("decompose", "engine", "", nid,
+                      "childless branch demoted to leaf",
+                      "a branch without children would integrate empty",
+                      "leaf_check", "leaf", level=L_MILESTONE)
         self.emit("decompose", "spec-decomposer", "spec-flow-decompose", nid,
                   "leaf_check", leaf_out.get("basis", "; ".join(reasons) or "within all thresholds"),
                   "leaf_check", verdict, level=L_MILESTONE)

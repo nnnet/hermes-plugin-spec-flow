@@ -167,7 +167,12 @@ class HumanChannel:
             if not d.is_dir():
                 continue
             for t in sorted(d.glob("test_*.py")):
-                rel = f"tests/smoke/acceptance_{d.name}_{t.name}"
+                stem = t.name[len("test_"):] if t.name.startswith("test_") \
+                    else t.name
+                # MUST match pytest collection (test_*.py) — the original
+                # acceptance_* naming was never collected: the root gate
+                # passed without running a single acceptance test
+                rel = f"tests/smoke/test_acceptance_{d.name}_{stem}"
                 target = Path(ws_root) / rel
                 body = t.read_text(encoding="utf-8")
                 if not target.exists() or \

@@ -595,7 +595,7 @@ def test_requirements_sync_into_smoke_and_protect(tmp_path, monkeypatch):
     ws = tmp_path / "ws"
     ws.mkdir()
     synced = ch.sync_requirements(ws)
-    rel = "tests/smoke/acceptance_web_ui_test_web_ui.py"
+    rel = "tests/smoke/test_acceptance_web_ui_web_ui.py"
     assert synced == [rel]
     assert (ws / rel).exists()
     from harness import pytest_verifier as pv
@@ -781,3 +781,19 @@ def test_implementer_crash_surrenders_leaf_not_run(plugin, tmp_path):
     crashes = [l for l in res.loops if l["type"] == "implementer-crash"]
     assert crashes, "the crash must be recorded as a loop"
     assert "editor" in res.tasks      # the run carried on to the end
+
+
+def test_synced_acceptance_is_pytest_collectable(tmp_path, monkeypatch):
+    # the original acceptance_* naming matched NO collection pattern —
+    # the root gate passed without running a single acceptance test
+    import subprocess, sys
+    monkeypatch.delenv("SPEC_FLOW_PROTECTED_FILES", raising=False)
+    ch = _req_channel(tmp_path)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    ch.sync_requirements(ws)
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/smoke", "--collect-only",
+         "-q", "--no-header", "-p", "no:cacheprovider"],
+        capture_output=True, text=True, cwd=ws, timeout=60)
+    assert "test_catalog_page" in proc.stdout, proc.stdout[-300:]
