@@ -210,3 +210,51 @@ hitl:
 review:
   on_reject: rework
   max_rework: 2
+
+# Platform conventions (the seeded skeleton; same school as p5): features
+# build INTO it, late human requirements arrive as standing requirements
+# with acceptance tests that gate the root integrate.
+constitution_platform:
+  - "Standard library ONLY; every feature is one module src/<feature>.py
+     registering endpoints with @registry.route(METHOD, PATH); a handler
+     takes (payload, query) and returns (status_code, json_serialisable
+     OR an HTML string when the route serves a page)."
+  - "Tables via db.register_schema(SQL); tests set MARKETPLACE_DB to a
+     fresh temp path before connecting; never touch platform internals."
+
+seed_files:
+  src/app.py: "\"\"\"WSGI entry point. Features live in src/<feature>.py: importing\
+    \ the\npackage registers their routes; this module only dispatches.\"\"\"\n\
+    import importlib\nimport json\nimport sys\nfrom pathlib import Path\nfrom urllib.parse\
+    \ import parse_qs\n\n_SRC = Path(__file__).resolve().parent\nif str(_SRC) not\
+    \ in sys.path:\n    sys.path.insert(0, str(_SRC))\n\nimport registry\n\n\ndef\
+    \ _load_features():\n    for f in sorted(_SRC.glob(\"*.py\")):\n        if f.stem\
+    \ not in (\"app\", \"registry\", \"db\"):\n            importlib.import_module(f.stem)\n\
+    \n\n_load_features()\n\n\ndef wsgi_app(environ, start_response):\n    method\
+    \ = environ[\"REQUEST_METHOD\"].upper()\n    path = environ.get(\"PATH_INFO\"\
+    , \"/\")\n    query = {k: v[0] for k, v in\n             parse_qs(environ.get(\"\
+    QUERY_STRING\", \"\")).items()}\n    try:\n        length = int(environ.get(\"\
+    CONTENT_LENGTH\") or 0)\n    except ValueError:\n        length = 0\n    raw\
+    \ = environ[\"wsgi.input\"].read(length) if length else b\"\"\n    try:\n  \
+    \      payload = json.loads(raw.decode(\"utf-8\")) if raw else {}\n    except\
+    \ json.JSONDecodeError:\n        payload = None\n    handler = registry.ROUTES.get((method,\
+    \ path))\n    if handler is None:\n        status, body = 404, {\"error\": f\"\
+    no route {method} {path}\"}\n    elif payload is None:\n        status, body\
+    \ = 400, {\"error\": \"invalid JSON body\"}\n    else:\n        try:\n     \
+    \       status, body = handler(payload, query)\n        except Exception as\
+    \ exc:  # noqa: BLE001 — surface, don't crash\n            status, body = 500,\
+    \ {\"error\": str(exc)[:200]}\n    data = json.dumps(body).encode(\"utf-8\"\
+    )\n    start_response(f\"{status} X\", [(\"Content-Type\", \"application/json\"\
+    ),\n                                   (\"Content-Length\", str(len(data)))])\n\
+    \    return [data]\n"
+  src/db.py: "\"\"\"SQLite plumbing. Features declare schemas; every connection\
+    \ applies\nthem idempotently (CREATE TABLE IF NOT EXISTS), so import order and\
+    \ the\nMARKETPLACE_DB env var never race.\"\"\"\nimport os\nimport sqlite3\n\
+    \n_SCHEMAS = []\n\n\ndef register_schema(sql):\n    if sql not in _SCHEMAS:\n\
+    \        _SCHEMAS.append(sql)\n\n\ndef connect():\n    conn = sqlite3.connect(os.environ.get(\"\
+    MARKETPLACE_DB\",\n                                          \"marketplace.db\"\
+    ))\n    conn.row_factory = sqlite3.Row\n    for sql in _SCHEMAS:\n        conn.executescript(sql)\n\
+    \    return conn\n"
+  src/registry.py: "\"\"\"Route registry — features register their endpoints here.\"\
+    \"\"\nROUTES = {}\n\n\ndef route(method, path):\n    def deco(fn):\n       \
+    \ ROUTES[(method.upper(), path)] = fn\n        return fn\n    return deco\n"

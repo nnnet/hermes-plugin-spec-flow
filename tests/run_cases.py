@@ -208,6 +208,12 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
     # seeding it beforehand is futile by design.
     seeds = case.get("seed_files") or None
     exec_case.pop("seed_files", None)
+    # platform conventions live in their own block (keeps the case's domain
+    # constitution readable) and merge into the constitution for execution
+    plat = exec_case.pop("constitution_platform", None)
+    if plat:
+        exec_case["constitution"] = list(exec_case.get("constitution") or []) \
+            + list(plat)
     if seeds:
         # the seeded skeleton is immutable for workers and repair rounds
         os.environ["SPEC_FLOW_PROTECTED_FILES"] = json.dumps(sorted(seeds))
