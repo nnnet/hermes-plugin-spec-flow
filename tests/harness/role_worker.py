@@ -398,6 +398,9 @@ Test ONLY your own module in isolation. NEVER author whole-product or
 cross-feature end-to-end tests — the platform smoke suite (tests/smoke/)
 owns the assembled-product check and runs at the root integrate; a copy of
 it among regular tests fails every partial build it reaches first.
+NEVER import app from a feature module: the platform loader imports every
+src/*.py FROM app, so importing it back is a circular import that kills
+the whole assembly. A feature imports only registry, db and the stdlib.
 
 Reply with ONLY a JSON object (no prose, no fence):
 {{"files": {{"src/{fn}.py": "<full file text>",
