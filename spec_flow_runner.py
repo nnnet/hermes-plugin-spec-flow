@@ -1550,6 +1550,7 @@ class Engine:
                     try:
                         vout = verifier({"node": nid, "title": title,
                                          "children": child_ids,
+                                         "depth": depth,
                                          "workspace_root": self.workspace.root}) or {}
                         st = "FAIL" if str(vout.get("status", "PASS")).upper() == "FAIL" else "PASS"
                         return st, str(vout.get("detail", ""))[:300]

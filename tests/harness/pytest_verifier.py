@@ -222,7 +222,8 @@ def make_verifier(model: Optional[str] = None,
             rounds += 1
             llm_log.log({"event": "call_start", "role": "verifier",
                          "worker": True, "node": str(ctx.get("node")),
-                         "depth": -1, "model": model})
+                         "depth": int(ctx.get("depth", -1)),
+                         "model": model})
             files = _implicated_files(root, out)
             files_block = "\n".join(
                 f"--- {rel} ---\n{text}" for rel, text in files.items()) \
