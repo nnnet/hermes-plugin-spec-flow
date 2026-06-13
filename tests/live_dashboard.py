@@ -617,6 +617,19 @@ class _H(BaseHTTPRequestHandler):
             payload = json.dumps(_build_state(rd) if rd else {"empty": True},
                                  ensure_ascii=False).encode("utf-8")
             return self._send(200, "application/json; charset=utf-8", payload)
+        if parsed.path == "/api/compare":
+            # run-comparison table (П5): every run's metrics as JSON for
+            # the Сравнение tab — the frontend filters/sorts client-side
+            try:
+                import compare_runs as cr
+                runs = sorted((d for d in cr.RUNS.iterdir()
+                               if d.is_dir() and "__" in d.name),
+                              key=lambda d: d.name)
+                rows = [cr.metrics(d) for d in runs]
+            except Exception as exc:            # noqa: BLE001
+                rows = [{"error": str(exc)}]
+            payload = json.dumps(rows, ensure_ascii=False).encode("utf-8")
+            return self._send(200, "application/json; charset=utf-8", payload)
         if parsed.path == "/api/file":
             rd = self._run_dir()
             rel = urllib.parse.parse_qs(parsed.query).get("path", [""])[0]
@@ -819,12 +832,49 @@ function timelineHTML(){
   '<table><thead><tr><th>время</th><th title="номер события в полном журнале прогона">соб.№</th><th>фаза</th><th>действие</th><th>вердикт</th></tr></thead><tbody>'+rows+'</tbody></table>';
 }
 
+// run comparison (П5): lazy-load /api/compare once, filter+sort client-side
+let CMP=null, CMP_CASE='', CMP_SORT='run', CMP_DESC=false;
+const CMP_COLS=[['run','прогон'],['duration','время'],['ticks','тиков'],
+ ['tree_nodes','узлов'],['llm_calls','LLM'],['reviews_rejected','реворк'],
+ ['demotions','демоц'],['crashes','краш'],['leaf_timeouts','таймаут'],
+ ['integrate_pass','интегр✓'],['integrate_red','интегрR'],
+ ['quota_waits','квота'],['auto_answers','авто'],['reqs_attached','требов'],
+ ['root_red','корень']];
+function loadCompare(){
+ fetch('/api/compare').then(r=>r.json()).then(d=>{CMP=d;render();})
+  .catch(()=>{CMP=[{error:'не удалось загрузить'}];render();});
+}
+function compareHTML(){
+ if(CMP===null){loadCompare();return '<p class=dim>загружаю сравнение…</p>';}
+ if(CMP.length&&CMP[0].error)return '<p class=dim>ошибка: '+esc(CMP[0].error)+'</p>';
+ const cases=[...new Set(CMP.map(r=>(r.dir||'').split('__').pop()))].sort();
+ let rows=CMP.filter(r=>!CMP_CASE||(r.dir||'').endsWith(CMP_CASE));
+ rows.sort((a,b)=>{let x=a[CMP_SORT],y=b[CMP_SORT];
+  if(typeof x==='boolean'){x=x?1:0;y=y?1:0;}
+  if(x<y)return CMP_DESC?1:-1;if(x>y)return CMP_DESC?-1:1;return 0;});
+ const opts=['<option value="">все кейсы</option>'].concat(
+  cases.map(c=>`<option value="${esc(c)}"${CMP_CASE===c?' selected':''}>${esc(c)}</option>`)).join('');
+ let h='<p class=muted>сравнение прогонов — фильтр по кейсу, клик по заголовку = сортировка. '+
+  '«~» у времени = прогон не финиширован. Данные из tests/compare_runs.py</p>';
+ h+='<div style="margin:8px 0"><label>кейс: <select id=cmpcase>'+opts+'</select></label> '+
+  '<span class="tab" id=cmpreload style="margin-left:8px">↻ обновить</span> '+
+  '<span class=dim>'+rows.length+' прогон(ов)</span></div>';
+ h+='<table class=cmp><thead><tr>'+CMP_COLS.map(([k,t])=>
+  `<th data-sort="${k}" style="cursor:pointer">${t}${CMP_SORT===k?(CMP_DESC?' ▾':' ▴'):''}</th>`).join('')+'</tr></thead><tbody>';
+ rows.forEach(r=>{h+='<tr>'+CMP_COLS.map(([k])=>{
+  let v=r[k];if(typeof v==='boolean')v=v?'<b style="color:#f85149">RED</b>':'—';
+  return `<td>${v===undefined?'':v}</td>`;}).join('')+'</tr>';});
+ h+='</tbody></table>';
+ return h;
+}
+
 function renderGlobal(){
  const R=STATE.reports;
- const tabs=[['inputs','▶ Старт (цель+вход)'],['graph','🕸 Граф спеков'],['flow','🔀 Поток выполнения'],['timeline','⏱ Таймлайн'],['report','Отчёт+аудит'],['agents','🤖 Агенты сейчас'],['workflow','Воркфлоу'],['oracle','Оракул'],['commits','Версии/коммиты'],['summary','Итог']];
- let h='<div class=tabs>'+tabs.map(([k,t])=>(k==='timeline'||k==='graph'||k==='agents'||R[k])?`<span class="tab${GTAB===k?' on':''}" data-g="${k}">${t}</span>`:'').join('')+'</div>';
+ const tabs=[['inputs','▶ Старт (цель+вход)'],['graph','🕸 Граф спеков'],['flow','🔀 Поток выполнения'],['timeline','⏱ Таймлайн'],['report','Отчёт+аудит'],['agents','🤖 Агенты сейчас'],['compare','📊 Сравнение прогонов'],['workflow','Воркфлоу'],['oracle','Оракул'],['commits','Версии/коммиты'],['summary','Итог']];
+ let h='<div class=tabs>'+tabs.map(([k,t])=>(k==='timeline'||k==='graph'||k==='agents'||k==='compare'||R[k])?`<span class="tab${GTAB===k?' on':''}" data-g="${k}">${t}</span>`:'').join('')+'</div>';
  let body;
  if(GTAB==='agents')body='<h3 class=muted>Что делают агенты сейчас <span class=dim>(сверху — последнее)</span></h3><ol class="feed full" reversed>'+(STATE.feed||[]).slice().reverse().map(f=>`<li>${esc(f)}</li>`).join('')+'</ol>';
+ else if(GTAB==='compare')body=compareHTML();
  else if(GTAB==='timeline')body=timelineHTML();
  else if(GTAB==='graph')body='<p class=muted>граф задач, что построил плагин — <b>дабл-клик</b> = провалиться в спеку/код/версии · <b>клик</b> = свернуть поддерево / развернуть следующий уровень. 🌿 ветка · 🍃 лист · бейджи = эпизоды</p>'+graphSVG();
  else body=R[GTAB]||'<p class=dim>нет данных</p>';
@@ -942,7 +992,10 @@ document.addEventListener('click',e=>{
  if(nodeEl){SEL=nodeEl.dataset.id;NTAB='spec';render();return;}
  const gn=e.target.closest('.gnode[data-id]');
  if(gn){const id=gn.dataset.id;clearTimeout(CLICKT);CLICKT=setTimeout(()=>toggleGraph(id),260);return;}
+ const sorth=e.target.closest('th[data-sort]');
+ if(sorth){const k=sorth.dataset.sort;if(CMP_SORT===k)CMP_DESC=!CMP_DESC;else{CMP_SORT=k;CMP_DESC=false;}renderGlobal();return;}
  const g=e.target.closest('[data-g]');if(g){GTAB=g.dataset.g;renderGlobal();return;}
+ const rl=e.target.closest('#cmpreload');if(rl){CMP=null;renderGlobal();return;}
  const nt=e.target.closest('[data-n]');if(nt){if(nt.dataset.n==='__back'){SEL=null;render();}else{NTAB=nt.dataset.n;renderNode();}return;}
 });
 
@@ -959,6 +1012,9 @@ function toggleGraph(id){
  }
  renderGlobal();
 }
+document.addEventListener('change',e=>{
+ if(e.target.id==='cmpcase'){CMP_CASE=e.target.value;renderGlobal();}
+});
 document.addEventListener('dblclick',e=>{
  const gn=e.target.closest('.gnode[data-id]');
  if(gn){clearTimeout(CLICKT);SEL=gn.dataset.id;NTAB='spec';render();}

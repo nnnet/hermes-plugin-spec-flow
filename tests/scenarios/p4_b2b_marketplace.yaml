@@ -331,6 +331,11 @@ workers:
       - "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"
       - "claude/haiku"
   reviewer:
+    # MULTI-PROVIDER on purpose: the reviewer LEADS with the subscription
+    # claude/haiku (a different provider/model than the free decomposer/
+    # implementer) so a run genuinely exercises more than one provider
+    # and the role->model map shows the spread; the free model is the
+    # quota fallback so a weekly cap can't stall the run.
     models:
-      - "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"
       - "claude/haiku"
+      - "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"

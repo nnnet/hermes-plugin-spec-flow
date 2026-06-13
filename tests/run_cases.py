@@ -254,14 +254,28 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
     if seeds:
         # the seeded skeleton is immutable for workers and repair rounds
         os.environ["SPEC_FLOW_PROTECTED_FILES"] = json.dumps(sorted(seeds))
-    res = eng.run_project(exec_case, workspace=str(case_dir / "workspace"), depth=depth,
-                          tools=tools, agents=agents or None,
-                          contracts_dir=str(eng.CONTRACTS), sink=sink,
-                          max_decompose_calls=max_calls, node_engine=node_engine,
-                          review_policy=review_policy, seed_files=seeds,
-                          standing_requirements=getattr(
-                              channel, "standing_requirements", None),
-                          human_ask=getattr(channel, "ask", None))
+    try:
+        res = eng.run_project(exec_case, workspace=str(case_dir / "workspace"), depth=depth,
+                              tools=tools, agents=agents or None,
+                              contracts_dir=str(eng.CONTRACTS), sink=sink,
+                              max_decompose_calls=max_calls, node_engine=node_engine,
+                              review_policy=review_policy, seed_files=seeds,
+                              standing_requirements=getattr(
+                                  channel, "standing_requirements", None),
+                              human_ask=getattr(channel, "ask", None))
+    except BaseException:
+        # an aborted run (crash, kill via KeyboardInterrupt) still distils
+        # whatever the workers retained DURING the run into mental models —
+        # otherwise a run that never reaches the post-run sweep leaves the
+        # banks with raw experience and zero models (the live gap the user
+        # spotted in Hindsight)
+        try:
+            from harness import memory as _mem
+            if _mem.MANAGER is not None:
+                _mem.finalize_run()
+        except Exception:        # noqa: BLE001 — memory never masks the abort
+            pass
+        raise
     # persist the REALIZED task tree the plugin built (parent->children), so the
     # dashboard / offline review can walk the exact structure node by node
     (case_dir / "tree.json").write_text(
