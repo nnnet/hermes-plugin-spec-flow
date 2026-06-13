@@ -1588,6 +1588,40 @@ class Engine:
                     f"{out.get('reason', '')}")
         # mode == record (or ask_human approved): episode already recorded
 
+    def _topo_order(self, kids: list) -> list:
+        """#2: order sibling children so each child's ``depends_on`` siblings
+        precede it. Stable (keeps declared order where deps allow), tolerant
+        of unknown ids (an external/typo dep is ignored), and cycle-safe (a
+        dependency cycle falls back to declared order for the stuck nodes).
+        Pure — returns a new list, never mutates the tree."""
+        if not kids:
+            return kids
+        ids = {c.get("id") for c in kids}
+        deps = {c.get("id"): [d for d in (c.get("depends_on") or [])
+                              if d in ids and d != c.get("id")]
+                for c in kids}
+        order, placed, remaining = [], set(), list(kids)
+        progressed = True
+        while remaining and progressed:
+            progressed, rest = False, []
+            for c in remaining:
+                if all(d in placed for d in deps[c.get("id")]):
+                    order.append(c)
+                    placed.add(c.get("id"))
+                    progressed = True
+                else:
+                    rest.append(c)
+            remaining = rest
+        order.extend(remaining)        # cycle / unresolved → declared order
+        return order
+
+    def _has_sibling_deps(self, kids: list) -> bool:
+        """True when some child declares a depends_on on ANOTHER sibling —
+        the signal that forces sequential (topo) execution for correctness."""
+        ids = {c.get("id") for c in kids}
+        return any(d in ids and d != c.get("id")
+                   for c in kids for d in (c.get("depends_on") or []))
+
     def _dedup_children(self, node: dict, nid: str, title: str,
                         ancestors: tuple) -> None:
         """Dedup gate: prune proposed children that duplicate an existing
@@ -1759,10 +1793,17 @@ class Engine:
                               {"verdict": verdict, "reasons": "; ".join(reasons),
                                "plan": plan}, ancestors)
             child_ids = []
-            kids = node.get("children", [])
+            # #2: order siblings so a child's depends_on siblings run FIRST —
+            # a leaf that consumes another's module sees it already present at
+            # integrate, cutting rework rounds. Execution order only; the tree
+            # keeps its declared order for display.
+            kids = self._topo_order(node.get("children", []))
             if (self._parallel_children > 1
                     and depth <= self._parallel_depth_limit
-                    and len(kids) >= self._parallel_min_siblings):
+                    and len(kids) >= self._parallel_min_siblings
+                    # intra-sibling deps force sequential (topo) order — a
+                    # dependent must not start before its dependency commits
+                    and not self._has_sibling_deps(kids)):
                 # stage 1: each child's WHOLE subtree runs in its own
                 # thread; the branch integrate below is the join barrier.
                 # Trade-off (why opt-in): parallel siblings see the node

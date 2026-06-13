@@ -327,7 +327,7 @@ Reply with ONLY a JSON object (no prose, no fence):
 {{"atomic": true|false,
   "metrics": {{"modules": n, "tasks": n, "interfaces": n, "estimated_loc": n,
               "open_decisions": n, "single_concern": bool, "testable_criteria": bool}},
-  "children": [{{"id": "snake_case", "title": "short"}}],
+  "children": [{{"id": "snake_case", "title": "short", "depends_on": ["sibling_id"]}}],
   "depends_on": ["existing-node-id"],
   "spike": {{"question": "...", "recommendation": "..."}},
   "spec_markdown": "<markdown, see below>"}}
