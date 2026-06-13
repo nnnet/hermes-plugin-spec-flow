@@ -1,0 +1,24 @@
+tests/test_review_artifacts.py
+  s_a7f45290e91181::t_aae2085211a751 1-102
+tests/harness/llm_log.py
+  s_a7f45290e91181::t_6ae0a0fb7a7172 39-69
+tests/harness/role_worker.py
+  s_a7f45290e91181::t_00258884e49332 892-894
+  s_a7f45290e91181::t_e12938e7f97d9f 833,837-875
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "32375da03c4f9f9930584bd99d75f88154844836",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
