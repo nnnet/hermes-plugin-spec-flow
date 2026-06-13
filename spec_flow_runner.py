@@ -59,6 +59,45 @@ except Exception:  # noqa: BLE001
     except Exception:  # noqa: BLE001
         _journal_mod = None  # type: ignore
 
+
+def _load_ws_tx():
+    """Lazy import of the workspace-transaction helper (axis F). It lives in
+    the test harness; load it however the runner was imported, None if absent."""
+    for spec in ("tests.harness.ws_tx", "harness.ws_tx", "ws_tx"):
+        try:
+            import importlib
+            return importlib.import_module(spec)
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
+class _LeafWorkspaceView:
+    """A per-leaf view of the workspace rooted at an isolated worktree
+    (axis F). The implementer writes here; a clean merge lands the files
+    in the shared workspace. Everything else delegates to the real
+    workspace, so artifacts are still recorded centrally."""
+
+    def __init__(self, base: Any, root: str):
+        self._base = base
+        self.root = root
+        self.enabled = True
+
+    def _write(self, rel: str, content: str, kind: str) -> str:
+        path = Path(self.root) / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        try:
+            self._base.artifacts.append(
+                {"path": rel, "type": kind,
+                 "bytes": len(content.encode("utf-8"))})
+        except Exception:  # noqa: BLE001
+            pass
+        return rel
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._base, name)
+
 # Optional per-node lifecycle FSM (the roadmap's node_engine='fsm' option).
 # Imported guardedly: if the FSM module/deps are absent the runner still works
 # with node_engine='inline'. The mandatory-gate constants are SHARED, so the
@@ -811,6 +850,8 @@ class Engine:
         # workspace has a root; None means the trail is off (optional).
         self._wave_journal = None
         self._wave_lock = threading.RLock()
+        # axis F: leaf isolation mode, set in run() from the project dict
+        self._isolation = "none"
         self.agents = {**DEFAULT_AGENTS, **(agents or {})}
         self.contracts_dir = Path(contracts_dir) if contracts_dir else None
         self.events: list[Event] = []
@@ -1081,6 +1122,15 @@ class Engine:
         # a single wedged leaf must never silently stall the whole run
         self._leaf_seconds = float(
             (project.get("limits") or {}).get("leaf_seconds", 0))
+        # axis F (physical isolation): `isolation: worktree` builds each leaf
+        # in its OWN git worktree and merges back with a merge-tree pre-flight.
+        # Default 'none' — back-compat: the leaf writes straight into the
+        # shared workspace. Worktree isolation implies git provenance.
+        self._isolation = str(project.get("isolation", "none")).lower()
+        if self._isolation not in ("none", "worktree"):
+            raise ValueError("isolation must be none|worktree")
+        if self._isolation == "worktree":
+            self.workspace.git_provenance = True
         try:
             if self.sink is not None:
                 self.sink.open()
@@ -1831,6 +1881,46 @@ class Engine:
         # returning up a level — check both revision methods at this moment
         self._research_tick(node, depth)
 
+    def _invoke_implementer(self, ictx: dict, nid: str, fn: str) -> None:
+        """Run the implementer for one leaf. Under `isolation: worktree`
+        (axis F) the leaf builds in its OWN git worktree and merges back
+        with a merge-tree pre-flight; otherwise it writes straight into the
+        shared workspace (default)."""
+        impl = self.agents["implementer"]
+        ws = self.workspace
+        isolated = (self._isolation == "worktree"
+                    and getattr(ws, "enabled", False) and getattr(ws, "root", None))
+        if not isolated:
+            impl(ictx)
+            return
+        _ws_tx = _load_ws_tx()
+        if _ws_tx is None:
+            impl(ictx)
+            return
+        _ws_tx.ensure_repo(ws.root)
+        with _ws_tx.leaf_worktree(ws.root, fn, f"leaf:{nid}") as wt:
+            # seed the leaf's spec into the worktree so it is self-contained
+            # (the worktree branches off HEAD; an uncommitted spec is absent)
+            self._seed_worktree_file(wt.path, ictx.get("spec"))
+            view = _LeafWorkspaceView(ws, wt.path)
+            impl({**ictx, "workspace": view})
+        if getattr(wt, "conflicts", None):
+            self.emit("implement", "implementer", "spec-implement",
+                      f"{nid}:merge", "worktree merge refused — workspace kept",
+                      str(wt.conflicts), verdict="CONFLICT", level=L_MILESTONE)
+
+    def _seed_worktree_file(self, wt_path: str, rel: Optional[str]) -> None:
+        """Copy one workspace-relative file (e.g. the leaf's spec) into the
+        isolated worktree so the implementer reads it the same as a shared run."""
+        if not rel or wt_path == self.workspace.root:
+            return
+        src = Path(self.workspace.root) / rel
+        if not src.is_file():
+            return
+        dst = Path(wt_path) / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+
     def _leaf_pipeline(self, node: dict, contract_ctx: Optional[dict],
                        depth: int = 0, parent: Optional[str] = None,
                        drv: Optional["_NodeDriver"] = None,
@@ -1870,7 +1960,7 @@ class Engine:
                 if self._leaf_seconds:
                     ictx["deadline"] = time.time() + self._leaf_seconds
                 try:
-                    self.agents["implementer"](ictx)
+                    self._invoke_implementer(ictx, nid, fn)
                 except NotImplementedError:
                     raise   # missing agent is a CONFIG error, not a crash
                 except TimeoutError as exc:
