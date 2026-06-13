@@ -38,10 +38,15 @@ subtree's tests; the ROOT integrate still runs the whole corpus (the honest
 full check stays). Removes the growing cost of every non-root gate (the 27%
 sink). Risk: LOW (root unchanged). Effort: bounded.
 
-### 5. Parallel integration of independent branches
-**Time.** Integration is fully serialized today; independent subtrees could
-integrate concurrently. Attacks the integration tail directly. Risk: higher
-(concurrency + merge ordering, ties to axis F). Effort: medium-high.
+### 5. Parallel integration of independent branches — DONE (measure-only)
+**Already delivered by #28.** Measured on v023: peak 3 concurrent integrates,
+5 overlapping branch-integrate pairs (e.g. payout_approval ∩
+payout_calculation = 66.5s). Parallel sibling subtrees (#28) already run
+independent branches' integrations concurrently. The remaining
+serialization is STRUCTURAL — a parent integrate must wait for its children,
+and the root is single — not removable without breaking dependency
+semantics. A separate concurrency mechanism would duplicate #28 at high
+risk. Closed without new code.
 
 ### 6. Token / cost accounting per role+model
 **Observability → cost.** Record real token counts (not just call counts)
@@ -75,7 +80,31 @@ Risk: low. Effort: medium. (Speculative without measurement.)
 shared board across distributed runners. Low immediate value (single-host
 today). Risk: low. Effort: medium.
 
+## Convergence hardening (emerged from the live p4+web cycle, #21)
+
+Each item is a real root-cause fix found by running p4 to completion and
+diagnosing why the assembled corpus stayed RED. All shipped (tests + push).
+
+- **CV1 — portable DB layer in the seed skeleton.** Features describe tables
+  with `db.define_table(name, columns, indexes=, foreign_keys=)` and use
+  `insert/select/update/delete/execute`; a swappable adapter generates dialect
+  SQL. Cured the cascade where a worker's `ALTER TABLE ... ADD COLUMN IF NOT
+  EXISTS` (illegal in SQLite) aborted the shared `connect()` and reddened
+  127/160 tests. Column spec carries `not null`/`unique`/`primary key`;
+  indexes + FKs are portable too.
+- **CV2 — cascade root-cause detector in the verifier.** Clusters failures by
+  exception signature (weighting real exceptions over assert symptoms); when
+  one cause dominates, tells repair it is ONE shared bug and surfaces the
+  schema-registering modules. Handles class-based & reason-less pytest output.
+- **CV3 — duplicate `define_table` owner detector (deterministic).** Two/three
+  worker modules defining the same table is pervasive and kills convergence
+  (registry keeps the last → other modules lose columns → green alone, red
+  together). Verifier names the conflict + owning modules for repair;
+  constitution mandates one owner per table. No LLM needed.
+
 ## Execution
-Top-down, each = tests + commit + push, separate commits. Start with #1
-(П3 diff-based repair). Re-measure via the ⏱ idle tab + compare_runs after
-the integration-tail items (#4, #5) land.
+Top-down, each = tests + commit + push, separate commits. #1–#10 landed;
+CV1–CV3 landed from the live cycle. Remaining: #11 (multiple smoke
+scenarios) and #12 (pluggable beads/redis board) — both low immediate value
+versus convergence, deferred until a p4 corpus goes fully green. Re-measure
+via the ⏱ idle tab + compare_runs.
