@@ -1,0 +1,26 @@
+tests/live_dashboard.py
+  s_a7f45290e91181::t_a395930c35f6a4 1120-1126
+  s_a7f45290e91181::t_c0f5422a7a24ee 823-825
+  s_a7f45290e91181::t_ea130677901d5d 29
+  s_a7f45290e91181::t_9ed4a734d53065 874-876
+  s_a7f45290e91181::t_80d25f624ddec8 1264-1268
+  s_a7f45290e91181::t_1fb9779acddbaa 726-784
+tests/test_dashboard_hitl.py
+  s_a7f45290e91181::t_c570375bf2aa4d 110-135
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "43753947add01cf27a12ad3c31b2e3e04a128725",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
