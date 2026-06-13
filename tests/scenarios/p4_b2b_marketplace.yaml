@@ -256,6 +256,13 @@ constitution_platform:
      write CREATE INDEX / FOREIGN KEY. db.register_schema(SQL) survives as a
      legacy escape hatch only. Tests set MARKETPLACE_DB to a fresh temp path
      before connecting; never touch platform internals."
+  - "ONE module owns each table: exactly one module calls db.define_table for a
+     given table name and declares its FULL schema (all columns/constraints/
+     indexes). Other modules that need that table only read/write it via
+     db.insert/select/update/delete — they must NOT call define_table on a table
+     another module owns. Two modules defining the same table with different
+     columns is a conflict that breaks the integrated corpus even though each
+     passes alone."
 
 seed_files:
   src/app.py: "\"\"\"WSGI entry point. Features live in src/<feature>.py: importing\
@@ -375,6 +382,10 @@ seed_files:
                        CREATE INDEX so 'queried by X' specs are satisfiable.
           foreign_keys optional {col: 'other_table(col)'} referential constraints.
         """
+        # ONE module owns each table's schema. If two modules define the same
+        # table with different columns, that is a design conflict (the second
+        # silently winning would over- or under-constrain the first) — the owning
+        # module should define it and the others read/write via insert/select.
         _TABLES[name] = {"columns": dict(columns),
                          "indexes": list(indexes or []),
                          "fks": dict(foreign_keys or {})}
