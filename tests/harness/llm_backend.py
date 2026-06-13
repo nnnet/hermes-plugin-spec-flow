@@ -87,7 +87,32 @@ class BudgetExhausted(RuntimeError):
 # wins over the env knob, consistent with the models rule. Every provider
 # attempt counts (a chain that walks 3 models on quota spends 3).
 _calls_made = 0
+# cyclic primary rotation (#40): a monotonic call counter so successive
+# calls START at different models in the chain — spreads load across the
+# free pool instead of hammering chain[0] until it 429s. Opt-in via
+# workers.cycle_models; off → every call starts at the primary (legacy).
+_cycle_n = 0
 _counters_lock = threading.Lock()
+
+
+def _next_cycle() -> int:
+    global _cycle_n
+    with _counters_lock:
+        n = _cycle_n
+        _cycle_n += 1
+    return n
+
+
+def _cycled(chain: list, cfg: dict) -> list:
+    """Rotate the chain's START position by a round-robin counter when the
+    case opts into workers.cycle_models. The SET of models (and their
+    relative order) is unchanged — only which one is tried first — so a
+    capped primary stops being every call's first victim. Single-entry
+    chains are returned as-is."""
+    if not cfg.get("cycle_models") or len(chain) < 2:
+        return chain
+    s = _next_cycle() % len(chain)
+    return chain[s:] + chain[:s]
 # ONE pytest at a time: under parallel children every worker thread
 # shells out into the SAME workspace — concurrent runs corrupt
 # __pycache__ and sqlite fixtures. Lives here because llm_backend is the
@@ -221,9 +246,12 @@ def ask(prompt: str, *, model: str, system: str | None = None,
     next entry answers. When the whole chain is exhausted the legacy
     terminal fallback (subscription CLI, FALLBACK_MODEL) still applies
     unless the chain already contains a 'claude/' entry."""
-    chain = [model, *fallbacks]
-    gate = _concurrency_gate()
     cfg = WORKERS_CFG or {}
+    # cyclic primary rotation (#40): spread successive calls across the free
+    # chain so one capped model isn't every call's first hit. No-op unless
+    # the case sets workers.cycle_models; the model SET is unchanged.
+    chain = _cycled([model, *fallbacks], cfg)
+    gate = _concurrency_gate()
     # exhausted chain = WAIT, not death: a burst of 429s (8/min window)
     # or the nightly free-pool reset is hours away at most — a paused
     # run beats a dead one (v18 died exactly here)
@@ -237,18 +265,44 @@ def ask(prompt: str, *, model: str, system: str | None = None,
     # very same request. Default keeps the legacy single haiku fallback.
     rotation = _fallback_rotation(cfg, chain)
     last_exc: Exception | None = None
+    # ENDLESS-ROTATION GUARD (#40). Two kinds of full-chain failure must be
+    # treated differently:
+    #   * QUOTA exhaustion — transient: the pool refills, so waiting and
+    #     retrying is correct and may repeat MANY times (quota_retries). It
+    #     is NOT bounded by this guard.
+    #   * an ERROR round — a full pass of the chain where every model failed
+    #     for a NON-quota reason (dead endpoint, malformed response, hard
+    #     refusal). Waiting cannot heal this, so we never sleep on it and we
+    #     cap how many CONSECUTIVE error rounds we tolerate before
+    #     surrendering red. A quota round in between resets the counter (the
+    #     system is alive, just throttled). Without this a persistently
+    #     erroring model would spin all `rounds` (~55 min) for nothing.
+    max_error_rounds = max(1, int(cfg.get("max_error_rounds", 3)))
+    consecutive_error_rounds = 0
     for attempt in range(rounds):
         if attempt:
             from . import llm_log
-            # jitter breaks the THUNDERING HERD: with concurrency>1 every
-            # worker hits the 8/min wall at once, sleeps the same wait_s,
-            # and wakes together to hit it again — a random spread lets
-            # them retry staggered so some get through each minute
-            slept = _jittered(wait_s, cfg)
-            llm_log.log({"event": "quota_wait", "attempt": attempt,
-                         "wait_s": round(slept, 1),
-                         "detail": str(last_exc)[:160]})
-            time.sleep(slept)
+            if isinstance(last_exc, QuotaExhausted):
+                consecutive_error_rounds = 0   # throttled, not broken — reset
+                # jitter breaks the THUNDERING HERD: with concurrency>1 every
+                # worker hits the 8/min wall at once, sleeps the same wait_s,
+                # and wakes together to hit it again — a random spread lets
+                # them retry staggered so some get through each minute
+                slept = _jittered(wait_s, cfg)
+                llm_log.log({"event": "quota_wait", "attempt": attempt,
+                             "wait_s": round(slept, 1),
+                             "detail": str(last_exc)[:160]})
+                time.sleep(slept)
+            else:
+                # an ERROR round — don't wait; count CONSECUTIVE error rounds
+                # and surrender once they reach max_error_rounds
+                consecutive_error_rounds += 1
+                llm_log.log({"event": "error_round", "attempt": attempt,
+                             "consecutive": consecutive_error_rounds,
+                             "cap": max_error_rounds,
+                             "detail": str(last_exc)[:160]})
+                if consecutive_error_rounds >= max_error_rounds:
+                    break
         for i, m in enumerate(chain):
             _spend_call()
             try:

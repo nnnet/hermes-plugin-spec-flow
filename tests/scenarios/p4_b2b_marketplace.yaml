@@ -314,6 +314,17 @@ workers:
   # jitter spreads concurrent workers' retries so they don't hammer the
   # 8/min window in lockstep (thundering herd seen in v20)
   quota_wait_jitter: 0.25
+  # cyclic primary rotation (#40): successive calls START at different models
+  # in a role's chain (round-robin), so concurrent workers don't all hit the
+  # same free model first and 429 in lockstep — load spreads across the chain.
+  # The model SET is unchanged; only the first-tried position rotates.
+  cycle_models: true
+  # GUARD against an endless rotation on errors/rejects. Quota waiting is
+  # unbounded (the pool refills), but an ERROR round — a full chain pass where
+  # every model failed for a NON-quota reason — cannot heal by waiting. After
+  # this many CONSECUTIVE error rounds the call surrenders red instead of
+  # spinning on the same failing models. A quota round in between resets it.
+  max_error_rounds: 3
   # terminal-fallback ROTATION across providers: when one is capped the
   # call rolls to the next instead of dying. Free-models policy holds —
   # only the subscription haiku as last resort here; a case may add more
