@@ -108,6 +108,53 @@ def _tree_from_llm(llm: list[dict]) -> dict:
     return build(roots[0])
 
 
+def _node_ids(tree: dict) -> set:
+    out: set = set()
+
+    def w(n):
+        out.add(n.get("id"))
+        for c in n.get("children") or []:
+            w(c)
+    w(tree)
+    return out
+
+
+# trace phases that prove a task id is a REAL lifecycle node (not structural
+# noise) — used to attach late-injected nodes the decompose tree never knew.
+_NODE_PHASES = {"implement", "review", "integrate", "lifecycle", "contract",
+                "respec"}
+
+
+def _attach_orphan_nodes(tree: dict, events: list) -> list:
+    """Late requirements (web_ui, seller_directory) are added by the engine
+    at root integrate, NOT as decomposer children — so the decompose-based
+    live tree never contains them and they vanish from the left panel + the
+    spec graph even while the status bar shows them being worked. Attach any
+    node that ran (has lifecycle events) but is missing from the tree under
+    the root, marked 'attached' so the UI badges it as a late injection.
+    Returns the attached ids."""
+    have = _node_ids(tree)
+    order, evidence = [], set()
+    for e in events:
+        t = str(e.get("task") or "")
+        if not t:
+            continue
+        base = t.split(":")[0]
+        if not base or base in have or base == tree.get("id"):
+            continue
+        if str(e.get("phase")) in _NODE_PHASES or e.get("gate"):
+            if base not in evidence:
+                evidence.add(base)
+                order.append(base)
+    if not order:
+        return []
+    tree.setdefault("children", [])
+    for base in order:
+        tree["children"].append({"id": base, "children": [],
+                                 "attached": True})
+    return order
+
+
 def _flatten(node: dict, depth: int, out: dict, parent: str | None) -> None:
     nid = node.get("id", "?")
     eps = [k for k in _EPISODE_BADGE if k in node]
@@ -125,11 +172,14 @@ def _tree_view(node: dict, meta: dict) -> dict:
     """Slim nested tree for the client (id, verdict, episodes, children)."""
     nid = node.get("id", "?")
     m = meta.get(nid, {})
-    return {
+    view = {
         "id": nid, "verdict": m.get("verdict", "leaf"),
         "episodes": m.get("episodes", []),
         "children": [_tree_view(c, meta) for c in node.get("children", []) or []],
     }
+    if node.get("attached"):
+        view["attached"] = True       # late-injected requirement node
+    return view
 
 
 # ── per-node files + events ──────────────────────────────────────────────────
@@ -416,6 +466,9 @@ def _build_state(run_dir: pathlib.Path) -> dict:
     done = (run_dir / "SUMMARY.md").exists()
 
     tree = _tree_from_file(run_dir) or _tree_from_llm(llm)
+    # surface late-injected requirement nodes (web_ui, seller_directory) that
+    # the decompose tree never knew — otherwise they run but stay invisible
+    _attach_orphan_nodes(tree, events)
     meta: dict = {}
     _flatten(tree, 0, meta, None)
     files = {nid: _node_files(ws, nid) for nid in meta} if ws.exists() else {}
@@ -1072,7 +1125,8 @@ function treeHTML(n){
  const sel=SEL===n.id?' sel':'';
  const act=isActive(n.id);
  const ico=act?'⏳':(has?'🌿':'🍃');
- let h=`<li>${tw}<span class="node${sel}${act?' actv':''}" data-id="${n.id}">${ico} ${n.id} <span class=badge>${badgeHTML(n.episodes)}</span></span>`;
+ const pin=n.attached?'<span title="позднее требование, вброшено в прогон">📌</span> ':'';
+ let h=`<li>${tw}<span class="node${sel}${act?' actv':''}" data-id="${n.id}">${ico} ${pin}${n.id} <span class=badge>${badgeHTML(n.episodes)}</span></span>`;
  if(has&&open){h+='<ul>'+n.children.map(treeHTML).join('')+'</ul>';}
  h+='</li>';return h;
 }
@@ -1329,7 +1383,7 @@ function graphSVG(){
   s+=`<g class=gnode data-id="${n.id}" transform="translate(${X(n)},${Y(n)})" style="cursor:pointer">`+
      (tip?`<title>${esc(tip)}</title>`:'')+
      `<rect width="${BW}" height="${BH}" rx="5" fill="${act?'#3a2a1255':(sel?'#1f6feb55':(leaf?'#161b22':'#13251a'))}" stroke="${act?'#e3b341':(sel?'#1f6feb':(leaf?'#30363d':'#3fb950'))}"${act?' stroke-dasharray="4 3"':''}/>`+
-     `<text x="7" y="15" fill="#c9d1d9" font-size="11">${ico} ${esc(n.id).slice(0,14)}${tail}</text>`+
+     `<text x="7" y="15" fill="#c9d1d9" font-size="11">${ico} ${n.attached?'📌':''}${esc(n.id).slice(0,14)}${tail}</text>`+
      (bdg?`<text x="${BW-5}" y="14" text-anchor="end" font-size="8">${bdg}</text>`:'')+`</g>`;});
  s+='</svg>';return '<div style="overflow:auto;border:1px solid #21262d;border-radius:6px;padding:6px">'+s+'</div>'+legendHTML();
 }
