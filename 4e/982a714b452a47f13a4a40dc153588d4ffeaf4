@@ -1,0 +1,22 @@
+tests/scenarios/p4_b2b_marketplace.yaml
+  s_a7f45290e91181::t_084928bcc53e8f 301,304-312,326,329-353,366-380,389-394,398-402
+  s_a7f45290e91181::t_77ee0319d30e8d 248,250-258
+tests/test_portable_db.py
+  s_a7f45290e91181::t_33ce56f0952fc3 65-92
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "4e982a714b452a47f13a4a40dc153588d4ffeaf4",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
