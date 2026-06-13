@@ -33,7 +33,7 @@ from typing import Any, Callable, Optional
 
 import yaml
 
-from . import claude_cli, llm_backend, llm_log, memory
+from . import claims, claude_cli, llm_backend, llm_log, memory
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 SKILLS_DIR = PLUGIN_ROOT / "skills"
@@ -562,6 +562,22 @@ def _run_pytest(ws_root: str, test_rel: str) -> tuple[bool, str]:
     return proc.returncode == 0, out[-1500:]
 
 
+def _write_reexport(ws: Any, fn: str, owner_module: str, owner: str) -> None:
+    """Variant B cache-hit: instead of re-implementing a duplicate intent,
+    write a thin module that re-exports the owner's public surface plus a
+    trivial green test — the feature exists once, this leaf reuses it."""
+    src = (f'"""De-duplicated: same intent as node \'{owner}\'.\n'
+           f'Re-exports {owner_module} instead of a second implementation."""\n'
+           f'from {owner_module} import *  # noqa: F401,F403\n')
+    test = (f'def test_{fn}_reexports_{owner_module}():\n'
+            f'    import {fn}  # the de-duplicated module imports cleanly\n'
+            f'    assert {fn} is not None\n')
+    ws._write(f"src/{fn}.py", src, "code")
+    ws._write(f"tests/test_{fn}.py", test, "test")
+    llm_log.log({"event": "ws_write", "writer": "dedup", "node": fn,
+                 "paths": [f"src/{fn}.py", f"tests/test_{fn}.py"]})
+
+
 def _write_reply_files(ws: Any, files: dict, fn: str) -> bool:
     """Write the worker's files into the workspace (harness does the I/O in
     chat-only mode). Only the leaf's own src/tests paths are accepted, and
@@ -600,9 +616,29 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
     def implement(ctx: dict) -> Any:
         ws_root = _ws_root(ctx.get("workspace"))
         nid = ctx["node"]
-        fn = re.sub(r"\W+", "_", nid).strip("_").lower()
-        if _chat_only():
-            return _implement_chat(ctx, ws_root, nid, fn)
+        # variant A: prefer the engine-resolved collision-free module name;
+        # fall back to the legacy local derivation only if absent
+        fn = ctx.get("module") or re.sub(r"\W+", "_", nid).strip("_").lower()
+        # variants B+C: claim this leaf's INTENT before doing the work. If
+        # an earlier leaf already finished the SAME intent, re-export it
+        # instead of paying a second implementation (cache-hit).
+        claim = None
+        if claims.BOARD is not None:
+            intent = _inline_file(ws_root, ctx.get("spec", "")) or ctx["title"]
+            claim = claims.BOARD.claim(nid, fn, ctx["title"], intent)
+            if claim["verdict"] == "duplicate":
+                _write_reexport(ctx["workspace"], fn, claim["owner_module"],
+                                claim["owner"])
+                llm_log.log({"event": "dedup", "node": nid,
+                             "reused": claim["owner_module"]})
+                return None     # no implementer call — the work already exists
+        out = (_implement_chat(ctx, ws_root, nid, fn) if _chat_only()
+               else _implement_claude(ctx, ws_root, nid, fn))
+        if claim is not None:
+            claims.BOARD.complete(nid, claim["hash"])
+        return out
+
+    def _implement_claude(ctx: dict, ws_root: str, nid: str, fn: str) -> Any:
         prompt = _IMPLEMENT_TASK.format(title=ctx["title"], id=nid,
                                         spec=ctx["spec"], fn=fn) \
             + memory.recall_block_for("implementer", ctx["title"]) \

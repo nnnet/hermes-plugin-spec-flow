@@ -1802,7 +1802,11 @@ class Engine:
                           level=L_DETAIL)
             else:
                 ictx = {"node": nid, "title": title, "depth": depth,
-                        "workspace": self.workspace, "spec": f"specs/{fn}.md"}
+                        "workspace": self.workspace, "spec": f"specs/{fn}.md",
+                        # variant A: the engine-resolved collision-free
+                        # module — the worker must write THIS file, not
+                        # recompute its own name from the node id
+                        "module": fn}
                 if self._leaf_seconds:
                     ictx["deadline"] = time.time() + self._leaf_seconds
                 try:

@@ -168,6 +168,10 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
         # memory tiers (role craft / project decisions) + start-of-run
         # modes (fresh/resume/readonly/off) from the case YAML
         memory_mod.configure(case.get("memory"), case.get("name", ""))
+        # intent board (anti-duplication B+C): on unless the case opts out
+        # with `dedup: false`
+        from harness import claims as claims_mod
+        claims_mod.configure(case.get("dedup", True) is not False)
         ws_dir = str(case_dir / "workspace")
         q_chan = channel if hitl_questions or hitl_notes else None
         dec_fn = role_worker.make_decomposer(workspace_dir=ws_dir, channel=q_chan)
