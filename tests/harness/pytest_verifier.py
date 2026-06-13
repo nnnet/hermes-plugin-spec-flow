@@ -330,6 +330,75 @@ def bisect_poisoners(root: str, include_smoke: bool) -> dict:
             "victims": red_alone}
 
 
+# a pytest one-line summary: "FAILED tests/x.py::t - sqlite3.OperationalError: ..."
+_SUMMARY_RE = re.compile(r"^(?:FAILED|ERROR)\s+\S+\s+-\s+(.+)$", re.M)
+# a traceback exception line: "E   sqlite3.OperationalError: near \"EXISTS\": ..."
+_EXC_RE = re.compile(r"^E\s+([\w.]*(?:Error|Exception)\b[^\n]*)$", re.M)
+_DB_HINT_RE = re.compile(
+    r"OperationalError|no such table|no such column|syntax error|EXISTS", re.I)
+
+
+def _norm_error(msg: str) -> str:
+    """Normalize a failure message to a signature for clustering: keep the
+    exception type + a short, value-stripped head so '500 == 201' and
+    '500 == 200' fall in one bucket but distinct exception types stay apart."""
+    s = re.sub(r"\d+", "N", msg.strip())
+    return s[:80]
+
+
+def _dominant_error(output: str) -> Optional[tuple]:
+    """The single error signature shared by many failures — the cascade
+    poisoner an exception in ONE shared module (DB schema/bootstrap, a common
+    import, a shared fixture) produces. Bisection misses this class: when a
+    shared module breaks EVERY test, no file is 'green alone', so there is
+    nothing to bisect. Prefer real exception signatures over assertion
+    mismatches (the assert is usually a downstream symptom of the exception).
+
+    Returns (signature, count, total_failures, looks_db) or None when no
+    single cause dominates (genuine independent per-file bugs)."""
+    summary = _SUMMARY_RE.findall(output)
+    total = len(summary)
+    if total < 3:
+        return None
+    exc_sigs: dict[str, int] = {}
+    for m in summary + _EXC_RE.findall(output):
+        sig = _norm_error(m)
+        is_exc = bool(re.search(r"(?:Error|Exception)\b", sig))
+        # weight true exceptions over bare asserts so the root, not the
+        # symptom, wins the bucket
+        exc_sigs[sig] = exc_sigs.get(sig, 0) + (3 if is_exc else 1)
+    if not exc_sigs:
+        return None
+    sig, score = max(exc_sigs.items(), key=lambda kv: kv[1])
+    # a real cascade: the top signature is an exception covering many failures
+    if "Error" not in sig and "Exception" not in sig:
+        return None
+    count = min(max(1, score // 3), total)
+    if count < 3 or count < max(2, total // 3):
+        return None
+    return (sig, count, total, bool(_DB_HINT_RE.search(sig)))
+
+
+def _schema_module_paths(root: str) -> list:
+    """Writable src modules that register a DB schema — when a schema error
+    cascades, the culprit DDL lives in one of these, not in the victim tests
+    the pytest output names."""
+    out = []
+    sdir = Path(root) / "src"
+    if not sdir.is_dir():
+        return out
+    for p in sorted(sdir.glob("*.py")):
+        rel = str(p.relative_to(root))
+        if not _safe_rel(rel):
+            continue
+        try:
+            if "register_schema" in p.read_text(encoding="utf-8"):
+                out.append(rel)
+        except OSError:
+            continue
+    return out
+
+
 def make_verifier(model: Optional[str] = None,
                   max_repair: int = MAX_REPAIR,
                   channel: Optional[object] = None) -> Callable[[dict], dict]:
@@ -380,6 +449,42 @@ def make_verifier(model: Optional[str] = None,
                                  "node": str(ctx.get("node")),
                                  "poisoners": diag["poisoners"],
                                  "green_alone": diag.get("green_alone", [])})
+            # CASCADE ROOT-CAUSE: one exception in a SHARED module (DB schema /
+            # bootstrap, a common import, a shared fixture) reddens many tests
+            # at once. Bisection can't catch it — when the shared break hits
+            # EVERY file, none is 'green alone'. Detect the dominant error
+            # signature and tell the repair it is ONE shared bug, not N — and,
+            # for a DB-schema error, surface the schema-registering modules
+            # (the culprit DDL lives there, not in the victim tests the output
+            # names). Observed live: a single 'ALTER TABLE ... ADD COLUMN IF
+            # NOT EXISTS' (unsupported by SQLite) aborted connect() and broke
+            # 127 of 160 corpus tests through 6 fruitless per-test repairs.
+            dom = _dominant_error(out)
+            if dom:
+                sig, cnt, tot, looks_db = dom
+                note = (f"\n\nROOT-CAUSE HINT: {cnt} of {tot} failures share ONE "
+                        f"error signature: `{sig}`. This is almost certainly a "
+                        "SINGLE shared-cause bug (a common module — DB schema/"
+                        "bootstrap, a shared import, or a fixture) breaking many "
+                        "tests at once, NOT independent bugs. Find the one shared "
+                        "origin and fix it THERE; do not rewrite the victim "
+                        "modules.")
+                if looks_db:
+                    mods = _schema_module_paths(root)
+                    note += ("\nThis is a DB-schema error. SQLite does NOT support "
+                             "`ALTER TABLE ... ADD COLUMN IF NOT EXISTS` nor "
+                             "`CREATE INDEX IF NOT EXISTS ... IF NOT EXISTS`; a bad "
+                             "statement in one schema aborts the shared connect() "
+                             "and leaves every later table uncreated. Put new "
+                             "columns in the CREATE TABLE, or add them "
+                             "unconditionally once. The culprit DDL is registered "
+                             "in one of: " + (", ".join(mods) or "(none found)")
+                             + ".")
+                    out += "\n" + "\n".join(mods)   # _FILE_RE picks these up
+                out += note
+                llm_log.log({"event": "cascade_root_cause", "role": "verifier",
+                             "node": str(ctx.get("node")), "signature": sig,
+                             "count": cnt, "total": tot, "db": looks_db})
             # #3: a FLAKY acceptance test (proven non-deterministic) must not
             # redden the root. Re-run each red file FLAKY_RERUNS times; a file
             # that flips green↔red is quarantined — recorded, never silent —
