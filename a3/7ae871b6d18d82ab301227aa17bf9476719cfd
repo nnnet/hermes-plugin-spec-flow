@@ -1,0 +1,22 @@
+tests/harness/pytest_verifier.py
+  s_a7f45290e91181::t_44c92a1e8aeb59 409-436
+  s_a7f45290e91181::t_82a72767eb0653 523-544
+tests/test_cascade_root_cause.py
+  s_a7f45290e91181::t_f04cb116ae969f 86-113
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "a37ae871b6d18d82ab301227aa17bf9476719cfd",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
