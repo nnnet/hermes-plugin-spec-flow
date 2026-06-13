@@ -1396,43 +1396,67 @@ function hitlHTML(){
  if(HITL.error)return '<p class=dim>ошибка: '+esc(HITL.error)+'</p>';
  if(HITL.empty)return '<p class=dim>нет активного прогона</p>';
  const asks=HITL.asks||[],ans=HITL.answered||[],reqs=HITL.requirements||[];
+ const open=asks.filter(a=>a&&typeof a==='object'&&!a.answered).length;
  let h='<h3 class=muted>✋ HITL — двусторонний канал с прогоном '+
   '<span class="tab" id=hitlreload style="margin-left:8px">↻ обновить</span></h3>';
- // worker → human: pending state + recent asks
  h+='<div class='+(HITL.pending?'errbox':'fixbox')+'>'+
   (HITL.pending?'⏳ <b>ответ записан, воркер ещё не забрал</b> (answer.md ждёт потребления)'
-   :'✓ <b>нет неотправленного ответа</b> — можно отвечать на новый вопрос')+'</div>';
- const open=asks.filter(a=>a&&typeof a==='object'&&!a.answered).length;
- h+='<h4>Вопросы воркеров (worker → человек)'+(open?' — <span style="color:#c0392b">без ответа: '+open+'</span>':'')+'</h4>';
- const askItem=a=>{
-   if(typeof a==='string')return `<li>${esc(a)}</li>`;
-   const cls=a.answered?'fixbox':'errbox';
-   let s=`<li class="${cls}" style="margin:6px 0;padding:6px 8px;border-radius:4px">`+
-     `<div><b>${esc(a.header||'')}</b></div>`+
-     `<div style="white-space:pre-wrap;margin:4px 0">${esc(a.body||'')}</div>`;
-   if(a.answer)s+=`<div class=dim style="white-space:pre-wrap;border-left:2px solid #888;padding-left:6px">${esc(a.answer)}</div>`;
-   else s+=`<div style="color:#c0392b">⏳ без ответа</div>`;
-   return s+'</li>';
- };
- h+= asks.length? '<ul class="feed full" style="list-style:none;padding-left:0">'+asks.map(askItem).join('')+'</ul>'
-   : '<p class=dim>пока вопросов нет</p>';
- // human → worker: answer box
+   :'✓ <b>нет неотправленного ответа</b> — можно отвечать на новый вопрос')+
+  (open?' · <span style="color:#c0392b">без ответа: '+open+'</span>':'')+'</div>';
+ // ── INPUT FIELDS (top) ───────────────────────────────────────────────
  h+='<h4>Ответить воркеру (человек → worker)</h4>'+
-  '<textarea id=hitlans rows=4 style="width:100%" placeholder="Текст ответа — попадёт в hitl/answer.md, воркер заберёт его из своего цикла ожидания"></textarea>'+
+  '<textarea id=hitlans rows=3 style="width:100%" placeholder="Текст ответа — попадёт в hitl/answer.md, воркер заберёт его из своего цикла ожидания"></textarea>'+
   '<div style="margin:6px 0"><span class="tab" id=hitlsend>➤ отправить ответ</span> '+
   '<span class=dim id=hitlmsg></span></div>';
- // human → engine: inject a late requirement
  h+='<h4>Вбросить позднее требование (человек → движок)</h4>'+
   '<div class=dim>имя = папка под hitl/requirements/; первая строка тела может быть «@scope: &lt;узел&gt;»</div>'+
   '<input id=hitlname placeholder="имя требования (web_ui)" style="width:240px;margin:4px 0">'+
-  '<textarea id=hitlreq rows=4 style="width:100%" placeholder="Текст требования (REQUIREMENT.md)"></textarea>'+
+  '<textarea id=hitlreq rows=3 style="width:100%" placeholder="Текст требования (REQUIREMENT.md)"></textarea>'+
   '<div style="margin:6px 0"><span class="tab" id=hitlinject>➤ вбросить</span> '+
   '<span class=dim id=hitlimsg></span></div>';
- // already-injected requirements
- if(reqs.length){h+='<h4>Уже вброшено ('+reqs.length+')</h4><ul>'+
-  reqs.map(r=>`<li><b>${esc(r.name)}</b> <span class=dim>(${(r.body||'').length} симв.)</span></li>`).join('')+'</ul>';}
- if(ans.length){h+='<h4 class=dim>Записанные ответы (история)</h4><ol class="feed">'+
-  ans.slice(-10).map(a=>`<li>${esc(a)}</li>`).join('')+'</ol>';}
+ // ── CHAT (below inputs, messenger-style, scrollable) ─────────────────
+ // incoming (worker→human) on the left, outgoing (human→worker/engine) on
+ // the right; meta header (time/sender/node) atop each bubble; unanswered
+ // questions flagged red + ⏳.
+ const chatCss=
+   '.chat{max-height:60vh;overflow-y:auto;padding:8px;margin-top:4px;'+
+   'background:#0e1117;border:1px solid #222;border-radius:8px;display:flex;flex-direction:column}'+
+   '.bub{max-width:78%;margin:4px 0;padding:6px 9px;border-radius:12px;'+
+   'white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.35}'+
+   '.bin{align-self:flex-start;background:#23303a;border:1px solid #2d4150;'+
+   'border-bottom-left-radius:3px}'+
+   '.bout{align-self:flex-end;background:#1f3b2a;border:1px solid #2f5d40;'+
+   'border-bottom-right-radius:3px}'+
+   '.bun{align-self:flex-start;background:#3a2326;border:1px solid #7a2b30;'+
+   'border-bottom-left-radius:3px}'+
+   '.bmeta{font-size:11px;opacity:.7;margin-bottom:3px;font-weight:600}'+
+   '.bun .bmeta{color:#ff6b6b;opacity:1}';
+ h+='<style>'+chatCss+'</style>';
+ const meta=t=>`<div class=bmeta>${esc(t)}</div>`;
+ const bub=(side,m,txt)=>`<div class="bub ${side}">${meta(m)}${esc(txt)}</div>`;
+ // build a chronological-ish post list: each ask = incoming question
+ // (+ outgoing answer when present); then injected requirements as outgoing
+ // human→engine posts.
+ let chat='';
+ asks.forEach(a=>{
+   if(typeof a==='string'){chat+=bub('bin','воркер',a);return;}
+   const unans=!a.answered;
+   chat+=`<div class="bub ${unans?'bun':'bin'}">`+
+     meta((unans?'⏳ без ответа · ':'')+'👷 '+(a.header||'воркер'))+
+     esc(a.body||'')+'</div>';
+   if(a.answer)chat+=bub('bout','🧑 человек / авто',a.answer.replace(/^\*\*answer[^:]*:\*\*\s*/i,''));
+ });
+ reqs.forEach(r=>{chat+=bub('bout','📌 вброшено требование · '+(r.name||''),
+   (r.body||'').slice(0,400));});
+ // standalone recorded answers not already shown
+ (ans||[]).slice(-10).forEach(a=>{
+   const txt=String(a).replace(/^\*\*answer[^:]*:\*\*\s*/i,'');
+   if(!asks.some(x=>x&&x.answer&&x.answer.indexOf(txt)>=0))
+     chat+=bub('bout','🧑 ответ (история)',txt);
+ });
+ h+='<h4>История переписки ('+(asks.length+reqs.length)+')</h4>';
+ h+= chat? '<div class=chat id=hitlchat>'+chat+'</div>'
+   : '<p class=dim>пока сообщений нет</p>';
  return h;
 }
 function runCtl(path,payload){
