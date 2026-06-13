@@ -119,6 +119,41 @@ def _chat_only() -> bool:
     return llm_backend.BACKEND == "openai"
 
 
+def _granular_commits() -> bool:
+    """Opt-in (default OFF): commit the workspace after the leaf's CREATE and
+    after each REPAIR, not only once at leaf close. Gives a fine-grained git
+    history of how a leaf converged. Enabled by env SPEC_FLOW_GRANULAR_COMMITS
+    (1/true) or workers.granular_commits in the case YAML."""
+    env = os.environ.get("SPEC_FLOW_GRANULAR_COMMITS")
+    if env is not None:
+        return str(env).strip().lower() in ("1", "true", "yes", "on")
+    cfg = getattr(llm_backend, "WORKERS_CFG", None) or {}
+    return bool(cfg.get("granular_commits"))
+
+
+def _granular_commit(ws_root: str, fn: str, stage: str) -> None:
+    """Stage + commit the leaf's files when granular commits are on. Best
+    effort: a commit failure (nothing staged, no git) never breaks the leaf.
+    Commits whatever ws_root is — under axis F that is the leaf's worktree,
+    so the granular history rides the leaf branch and merges with it."""
+    if not _granular_commits():
+        return
+    try:
+        from . import ws_tx
+        if not ws_tx.ensure_repo(ws_root):
+            return
+        ws_tx._git(ws_root, "add", "-A")
+        rc, _ = ws_tx._git(ws_root, "diff", "--cached", "--quiet")
+        if rc == 0:
+            return                       # nothing staged — skip an empty commit
+        ws_tx._git(ws_root, "-c", "user.name=spec-flow",
+                   "-c", "user.email=tx@spec.flow",
+                   "commit", "-qm", f"{stage}: {fn}")
+        llm_log.log({"event": "granular_commit", "node": fn, "stage": stage})
+    except Exception:                    # noqa: BLE001 — never breaks the leaf
+        pass
+
+
 def _call_model(prompt: str, *, system: str, allowed: list[str],
                 disallowed: list[str], cwd: Optional[str], model: str,
                 role: Optional[str] = None) -> str:
@@ -819,6 +854,8 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
             wrote = _write_reply_files(ws, out.get("files") or {}, fn)
             if wrote:
                 passed, test_out = _leaf_bar(ws_root, fn, baseline, pv)
+        if wrote:
+            _granular_commit(ws_root, fn, "create")   # opt-in fine-grained history
         if wrote and not passed:
             _round_gate(2, "repair round")
             # #1 / П3: prefer a SURGICAL diff repair (SEARCH/REPLACE against
@@ -846,6 +883,7 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
                         out2 = {}
                     if _write_reply_files(ws, out2.get("files") or {}, fn):
                         passed, test_out = _leaf_bar(ws_root, fn, baseline, pv)
+            _granular_commit(ws_root, fn, "repair")    # opt-in fine-grained history
             raw = raw2
         if passed:
             # a GREEN leaf is worth remembering: craft for the role,
