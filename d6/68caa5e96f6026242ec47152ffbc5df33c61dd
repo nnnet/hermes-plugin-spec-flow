@@ -1,0 +1,28 @@
+tests/test_worker_config.py
+  s_a7f45290e91181::t_c65637c8a898f8 257-306
+  s_a7f45290e91181::t_1e6b210514c83e 85,104
+tests/test_role_workers.py
+  s_a7f45290e91181::t_259130bf2d4cb8 408
+  s_a7f45290e91181::t_1e6b210514c83e 566
+tests/harness/llm_backend.py
+  s_a7f45290e91181::t_5bbbd0cb8cff81 268-270
+  s_a7f45290e91181::t_493888af09c77a 278
+  s_a7f45290e91181::t_7aae3d2dec2121 289,291-307
+  s_a7f45290e91181::t_ff2776386eb4dc 247-248,250-252,254-261,266,271
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "d668caa5e96f6026242ec47152ffbc5df33c61dd",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
