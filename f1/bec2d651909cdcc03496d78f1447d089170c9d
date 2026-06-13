@@ -1,0 +1,33 @@
+tests/test_stop_resume.py
+  s_a7f45290e91181::t_d27102044d2721 27-34,38
+  s_a7f45290e91181::t_6c48006c40fb59 1-26,35-37,39-108
+spec_flow_runner.py
+  s_a7f45290e91181::t_4d5e0ef8ace1c4 1171-1174,1176-1185,1192-1198
+  s_a7f45290e91181::t_feb38b1f5c9743 1332-1337
+  s_a7f45290e91181::t_6037a7998abd85 1644-1647
+  s_a7f45290e91181::t_c6d79053c1a39e 183-210
+  s_a7f45290e91181::t_988039608feaed 883-884
+tests/run_cases.py
+  s_a7f45290e91181::t_d1d9329a73d4bd 141
+  s_a7f45290e91181::t_51d74677f00958 44-66
+  s_a7f45290e91181::t_7593c2190cf5c9 514-520,522-525
+  s_a7f45290e91181::t_bce4908a0dfa1a 556-560,562-563
+  s_a7f45290e91181::t_b12398b20e3504 294
+  s_a7f45290e91181::t_efbf4c0d78f67a 598
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "f1bec2d651909cdcc03496d78f1447d089170c9d",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
