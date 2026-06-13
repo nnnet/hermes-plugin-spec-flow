@@ -1,0 +1,23 @@
+tests/test_claims_store.py
+  s_a7f45290e91181::t_a7b093533f8f61 1-92
+tests/harness/claims.py
+  s_a7f45290e91181::t_839b21dc72fffe 20-25,31,33-34,48-145,149-151,172,184-185,192,195,200-203,212-213,215-220
+tests/run_cases.py
+  s_a7f45290e91181::t_88dbc127bf7c5e 172-174,177-180
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "6577125617eb5866477d8736911ede6e551b617d",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
