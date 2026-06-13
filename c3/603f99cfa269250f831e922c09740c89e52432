@@ -1,0 +1,33 @@
+tests/test_dashboard_hitl.py
+  s_a7f45290e91181::t_402e3162c43957 1-109
+tests/test_compare_efficiency.py
+  s_a7f45290e91181::t_c04fc84b7b3485 1-62
+tests/compare_runs.py
+  s_a7f45290e91181::t_a94b6c91a03e7b 111-129,139-140,143-144,146-147,155-163
+tests/live_dashboard.py
+  s_a7f45290e91181::t_7986345056fb62 994-1004,1006,1009-1010
+  s_a7f45290e91181::t_30df2d888b2630 699-744
+  s_a7f45290e91181::t_a151317057c262 1015-1061
+  s_a7f45290e91181::t_c7078b0f9f9bc6 966-972
+  s_a7f45290e91181::t_eaf876f4568598 604-643
+  s_a7f45290e91181::t_94d2dc2a8aa382 940-949
+  s_a7f45290e91181::t_6bbe6ecade9ed9 1064-1065,1068
+  s_a7f45290e91181::t_dd1adf9d95a32f 1191-1198
+  s_a7f45290e91181::t_ddf769bec8622d 673-680
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "c3603f99cfa269250f831e922c09740c89e52432",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
