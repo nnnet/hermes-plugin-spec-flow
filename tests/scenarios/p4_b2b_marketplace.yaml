@@ -303,6 +303,10 @@ workers:
   # fallback): up to 11 retries x 300s covers the nightly free reset
   quota_wait_s: 300
   quota_retries: 11
+  # after 2 free-pool wait-rounds still failing, start trying the
+  # claude/haiku rotation each round instead of waiting all 11 — a hard
+  # free-pool cooldown wedged v21 ~55 min before haiku was even tried
+  fallback_after_rounds: 2
   # jitter spreads concurrent workers' retries so they don't hammer the
   # 8/min window in lockstep (thundering herd seen in v20)
   quota_wait_jitter: 0.25

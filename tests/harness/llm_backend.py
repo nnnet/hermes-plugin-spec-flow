@@ -263,13 +263,16 @@ def ask(prompt: str, *, model: str, system: str | None = None,
                 # config errors (ValueError: paid gate, unknown
                 # provider) abort the call
                 last_exc = exc
-        # terminal-fallback ROTATION is the LAST resort (free-models
-        # policy: subscription/extra providers only when the free pool
-        # is truly down). Try it only on the FINAL round — earlier
-        # rounds prefer to wait and re-try the healthy free chain. The
-        # rotation start advances each round so a capped provider is not
-        # retried first every time (claude weekly cap killed v18).
-        if rotation and attempt == rounds - 1:
+        # terminal-fallback ROTATION: subscription/extra providers are a
+        # last resort (free-models policy), so the first few wait-rounds
+        # prefer to re-try the healthy free chain. But waiting ALL rounds
+        # before touching the rotation wedged v21 for ~55 min while the
+        # free pool sat in a hard cooldown — so the rotation kicks in
+        # after `fallback_after_rounds` (default = last round only; a
+        # case lowers it to recover from a dead pool fast). The start
+        # advances each round so a capped provider isn't retried first.
+        fb_after = int(cfg.get("fallback_after_rounds", rounds - 1))
+        if rotation and attempt >= fb_after:
             start = attempt % len(rotation)
             order = rotation[start:] + rotation[:start]
             leash = int(cfg.get("fallback_timeout_s", 90))

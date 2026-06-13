@@ -371,3 +371,35 @@ def test_jitter_spreads_the_wait(monkeypatch):
     assert all(80 <= v <= 120 for v in seen), "jitter stays within +/-20%"
     # jitter 0 is deterministic (tests rely on this)
     assert lb._jittered(100.0, {"quota_wait_jitter": 0}) == 100.0
+
+
+def test_rotation_kicks_in_after_fallback_after_rounds(monkeypatch):
+    # v21 wedge: waiting ALL 11 rounds before trying the haiku rotation
+    # left the run stuck ~55 min on a hard free-pool cooldown. With
+    # fallback_after_rounds=1 the rotation must fire from round 1, not
+    # only the last round.
+    lb.configure_workers({
+        "quota_wait_s": 0.001, "quota_retries": 3, "quota_wait_jitter": 0,
+        "fallback_after_rounds": 1,
+        "fallback_models": ["claude/haiku"],
+        "providers": [{"name": "openrouter-free", "kind": "openai",
+                       "model_prefix": "openrouter/",
+                       "require_suffix": ":free"}]})
+    fb_rounds = []
+    state = {"round": -1}
+
+    def router(prompt, m, system, fallback=False, timeout=None):
+        if not fallback:
+            state["round"] += 1
+            raise lb.QuotaExhausted("free pool out")
+        fb_rounds.append(state["round"])
+        return "haiku saved it"
+
+    monkeypatch.setattr(lb, "_ask_one", router)
+    try:
+        out = lb.ask("q", model="openrouter/a:free")
+        assert out == "haiku saved it"
+        # rotation fired on round 1 (the second round), not waiting for 3
+        assert fb_rounds and fb_rounds[0] == 1
+    finally:
+        lb.configure_workers(None)
