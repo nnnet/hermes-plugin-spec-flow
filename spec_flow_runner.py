@@ -48,6 +48,17 @@ try:
 except Exception:  # noqa: BLE001
     import spec_flow_tools as _gates  # type: ignore
 
+# Wave journal (parallelization stage 0): a single-writer, append-only record
+# of node commits. Optional — if it can't be imported or opened the run still
+# proceeds; the journal only ADDS a restartable trail, it never gates work.
+try:
+    from . import spec_flow_journal as _journal_mod
+except Exception:  # noqa: BLE001
+    try:
+        import spec_flow_journal as _journal_mod  # type: ignore
+    except Exception:  # noqa: BLE001
+        _journal_mod = None  # type: ignore
+
 # Optional per-node lifecycle FSM (the roadmap's node_engine='fsm' option).
 # Imported guardedly: if the FSM module/deps are absent the runner still works
 # with node_engine='inline'. The mandatory-gate constants are SHARED, so the
@@ -795,6 +806,11 @@ class Engine:
         # leaves keep their persisted artifacts, the implementer is not re-run.
         self.resume = resume
         self._journal_done: set = set()
+        # П2: wave journal — a single-writer, append-only trail of node
+        # commits (one wave per committed node). Opened in run() when the
+        # workspace has a root; None means the trail is off (optional).
+        self._wave_journal = None
+        self._wave_lock = threading.RLock()
         self.agents = {**DEFAULT_AGENTS, **(agents or {})}
         self.contracts_dir = Path(contracts_dir) if contracts_dir else None
         self.events: list[Event] = []
@@ -840,6 +856,42 @@ class Engine:
             t = Task(tid, title, kind, profile, skill, parents or [])
             self.tasks[tid] = t
             return t
+
+    # -- wave journal (П2) -------------------------------------------------
+    def _journal_open(self) -> None:
+        """Become the wave journal's writer for this run. Optional: a missing
+        module, no workspace root, or a second writer (JournalLocked) just
+        leaves the trail off — the run proceeds either way."""
+        self._wave_journal = None
+        if _journal_mod is None:
+            return
+        if not (self.workspace.enabled and self.workspace.root):
+            return
+        path = Path(self.workspace.root) / ".spec-flow" / "waves.jsonl"
+        try:
+            self._wave_journal = _journal_mod.RunJournal(path).open()
+        except Exception:  # noqa: BLE001 — the trail never gates the run
+            self._wave_journal = None
+
+    def _journal_close(self) -> None:
+        j, self._wave_journal = self._wave_journal, None
+        if j is not None:
+            try:
+                j.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _wave(self, entries: list, **meta) -> None:
+        """Commit one wave of journal entries under the writer lock. Never
+        raises into the run — a journal write failure is non-fatal."""
+        j = self._wave_journal
+        if j is None or not entries:
+            return
+        try:
+            with self._wave_lock:
+                j.commit_wave(entries, meta or None)
+        except Exception:  # noqa: BLE001 — the trail never gates the run
+            pass
 
     # -- real tool wrappers ------------------------------------------------
     def _policy(self, policy):
@@ -1036,8 +1088,10 @@ class Engine:
                                 seed_files=self._seed_files)
             if self.resume:
                 self._journal_done = self.workspace.journal_nodes()
+            self._journal_open()
             return self._run(project)
         finally:
+            self._journal_close()
             if self.sink is not None:
                 self.sink.close()
             self.workspace.finalize()
@@ -1768,6 +1822,12 @@ class Engine:
         # (resume=True) reuses its persisted artifact instead of re-implementing
         if verdict == "leaf":
             self.workspace.journal_mark(nid, self.tasks[nid].version)
+        # П2: one wave per committed node — the restartable trail. A leaf is
+        # the unit a resume can skip; a branch commit marks its subtree closed.
+        self._wave([{"kind": "node_commit", "node": nid, "verdict": verdict,
+                     "version": self.tasks[nid].version, "depth": depth,
+                     "completed": self._completed}],
+                   parent=parent)
         # returning up a level — check both revision methods at this moment
         self._research_tick(node, depth)
 
