@@ -2137,9 +2137,13 @@ class Engine:
             # run from the workspace root: paths stay short (tests/test_x.py),
             # confcutdir isolates the run from any host-project conftest.py;
             # -v lists every single test with its verdict, not just the total
+            # --import-mode=importlib: tolerate same-basename test files across
+            # tests/ and tests/smoke/ (a late requirement's leaf test and its
+            # seeded smoke acceptance share a name) — the legacy prepend mode
+            # errors the WHOLE collection on a duplicate basename, a false red.
             proc = subprocess.run(["python3", "-m", "pytest", "-v", "--no-header",
                                    f"--confcutdir={ws.root}", "-p", "no:cacheprovider",
-                                   "tests"],
+                                   "--import-mode=importlib", "tests"],
                                   capture_output=True, text=True, timeout=300,
                                   cwd=str(ws.root))
             passed = proc.returncode == 0

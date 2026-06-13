@@ -57,7 +57,7 @@ def run_suite(root: str, include_smoke: bool) -> tuple[bool, str]:
     if not (Path(root) / "tests").is_dir():
         return True, "(no tests yet)"
     cmd = [sys.executable, "-m", "pytest", "tests", "-q", "--no-header",
-           "-p", "no:cacheprovider"]
+           "-p", "no:cacheprovider", "--import-mode=importlib"]
     if not include_smoke and (Path(root) / SMOKE_DIR).is_dir():
         cmd += ["--ignore", SMOKE_DIR]
     with llm_backend.PYTEST_LOCK:
@@ -204,7 +204,7 @@ def _run_one(root: str, rel: str) -> bool:
     with llm_backend.PYTEST_LOCK:
         proc = subprocess.run(
             [sys.executable, "-m", "pytest", rel, "-q", "--no-header",
-             "-p", "no:cacheprovider"],
+             "-p", "no:cacheprovider", "--import-mode=importlib"],
             capture_output=True, text=True, timeout=PYTEST_TIMEOUT, cwd=root)
     return proc.returncode in (0, 5)
 
@@ -212,7 +212,7 @@ def _run_one(root: str, rel: str) -> bool:
 def _run_suite_green(root: str, include_smoke: bool) -> bool:
     """Run the whole tests/ suite. True = green (exit 0 or 'no tests')."""
     cmd = [sys.executable, "-m", "pytest", "tests", "-q", "--no-header",
-           "-p", "no:cacheprovider"]
+           "-p", "no:cacheprovider", "--import-mode=importlib"]
     if not include_smoke and (Path(root) / SMOKE_DIR).is_dir():
         cmd += ["--ignore", SMOKE_DIR]
     with llm_backend.PYTEST_LOCK:
@@ -224,7 +224,7 @@ def _run_suite_green(root: str, include_smoke: bool) -> bool:
 def _run_without(root: str, rels: list, drop: str, include_smoke: bool) -> bool:
     """Run the suite with one file ignored. True = green without it."""
     cmd = [sys.executable, "-m", "pytest", "tests", "-q", "--no-header",
-           "-p", "no:cacheprovider", "--ignore", str(Path(root) / drop)]
+           "-p", "no:cacheprovider", "--import-mode=importlib", "--ignore", str(Path(root) / drop)]
     if not include_smoke and (Path(root) / SMOKE_DIR).is_dir():
         cmd += ["--ignore", SMOKE_DIR]
     with llm_backend.PYTEST_LOCK:
