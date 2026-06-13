@@ -1,0 +1,28 @@
+tests/harness/llm_backend.py
+  s_a7f45290e91181::t_1026f28726dbe0 268-281,286,297-302,304
+  s_a7f45290e91181::t_7e3f105dba25f5 285,287-296,303,305
+  s_a7f45290e91181::t_3bbad0de04f225 90-94,96-115
+  s_a7f45290e91181::t_2391d2ed13e4e5 250-254
+tests/scenarios/p4_b2b_marketplace.yaml
+  s_a7f45290e91181::t_30b9f0433e9eb8 322-327
+  s_a7f45290e91181::t_d193c1e0f0302b 317-321
+tests/test_cycle_fallbacks.py
+  s_a7f45290e91181::t_f98b73db975a4a 68,70,85,94
+  s_a7f45290e91181::t_6e4efdba239ca8 1-67,69,71-84,86-93,95-111
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "69eb9c537ce60f05a4a0eef5ab6e8556bb544249",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
