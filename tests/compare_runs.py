@@ -70,7 +70,10 @@ def metrics(run_dir: pathlib.Path) -> dict:
     def count_event(name: str) -> int:
         return sum(1 for e in llm if e.get("event") == name)
 
-    # the realized tree size
+    # the realized tree size: tree.json is written only at run END, so a
+    # LIVE/aborted run has none — fall back to the distinct base nodes
+    # seen in the trace (the dashboard reconstructs the tree the same way,
+    # which is why it shows many nodes while tree.json says 0)
     tree_nodes = 0
     if (run_dir / "tree.json").exists():
         try:
@@ -81,6 +84,15 @@ def metrics(run_dir: pathlib.Path) -> dict:
             tree_nodes = _n(tj)
         except (json.JSONDecodeError, AttributeError):
             pass
+    if not tree_nodes:
+        seen = set()
+        for e in trace:
+            t = str(e.get("task") or "")
+            # base node id only (drop :integrate / :req / :contract suffixes)
+            base = t.split(":", 1)[0]
+            if base and not base.endswith("req"):
+                seen.add(base)
+        tree_nodes = len(seen)
 
     integ_pass = sum(1 for e in trace
                      if e.get("gate") == "integrate_verify"
