@@ -196,6 +196,87 @@ def _badness(passed: bool, output: str) -> int:
     return score
 
 
+BISECT_MAX_FILES = int(os.environ.get("SPEC_FLOW_BISECT_MAX_FILES", "16"))
+
+
+def _run_one(root: str, rel: str) -> bool:
+    """Run a SINGLE test file in its own pytest process. True = green."""
+    with llm_backend.PYTEST_LOCK:
+        proc = subprocess.run(
+            [sys.executable, "-m", "pytest", rel, "-q", "--no-header",
+             "-p", "no:cacheprovider"],
+            capture_output=True, text=True, timeout=PYTEST_TIMEOUT, cwd=root)
+    return proc.returncode in (0, 5)
+
+
+def _run_suite_green(root: str, include_smoke: bool) -> bool:
+    """Run the whole tests/ suite. True = green (exit 0 or 'no tests')."""
+    cmd = [sys.executable, "-m", "pytest", "tests", "-q", "--no-header",
+           "-p", "no:cacheprovider"]
+    if not include_smoke and (Path(root) / SMOKE_DIR).is_dir():
+        cmd += ["--ignore", SMOKE_DIR]
+    with llm_backend.PYTEST_LOCK:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=PYTEST_TIMEOUT, cwd=root)
+    return proc.returncode in (0, 5)
+
+
+def _run_without(root: str, rels: list, drop: str, include_smoke: bool) -> bool:
+    """Run the suite with one file ignored. True = green without it."""
+    cmd = [sys.executable, "-m", "pytest", "tests", "-q", "--no-header",
+           "-p", "no:cacheprovider", "--ignore", str(Path(root) / drop)]
+    if not include_smoke and (Path(root) / SMOKE_DIR).is_dir():
+        cmd += ["--ignore", SMOKE_DIR]
+    with llm_backend.PYTEST_LOCK:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=PYTEST_TIMEOUT, cwd=root)
+    return proc.returncode in (0, 5)
+
+
+def bisect_poisoners(root: str, include_smoke: bool) -> dict:
+    """П4-bis: diagnose the 'green alone, red together' class. When the whole
+    suite is red but individual test files pass on their own, one file is
+    POISONING shared state for the others. Find it by elimination: for each
+    file that is green alone, re-run the suite WITHOUT it — if that turns the
+    suite green, that file is the poisoner. Returns
+    {poisoners: [rel], green_alone: [rel], victims: [rel]} (empty when the
+    failure is genuine per-file bugs, not cross-test interference).
+
+    Cost is bounded: skipped entirely above BISECT_MAX_FILES test files, and
+    it only runs once per red integrate, never on a green suite."""
+    tdir = Path(root) / "tests"
+    if not tdir.is_dir():
+        return {}
+    files = sorted(str(p.relative_to(root)) for p in tdir.glob("test_*.py"))
+    if not (2 <= len(files) <= BISECT_MAX_FILES):
+        return {}
+    # only a RED suite has a poisoner — a green suite has nothing to bisect
+    try:
+        if _run_suite_green(root, include_smoke):
+            return {"poisoners": [], "green_alone": files, "victims": []}
+    except Exception:  # noqa: BLE001
+        return {}
+    green_alone, red_alone = [], []
+    for rel in files:
+        (green_alone if _run_one(root, rel) else red_alone).append(rel)
+    # interference requires victims: files green alone but red in the suite
+    if not green_alone or not red_alone and len(green_alone) == len(files):
+        # everyone green alone but suite red → a green file poisons the rest;
+        # fall through. If some are red alone, those are genuine bugs.
+        pass
+    if not green_alone:
+        return {"poisoners": [], "green_alone": [], "victims": red_alone}
+    poisoners = []
+    for cand in green_alone:
+        try:
+            if _run_without(root, files, cand, include_smoke):
+                poisoners.append(cand)
+        except Exception:  # noqa: BLE001 — bisection never breaks the verdict
+            continue
+    return {"poisoners": poisoners, "green_alone": green_alone,
+            "victims": red_alone}
+
+
 def make_verifier(model: Optional[str] = None,
                   max_repair: int = MAX_REPAIR,
                   channel: Optional[object] = None) -> Callable[[dict], dict]:
@@ -219,6 +300,29 @@ def make_verifier(model: Optional[str] = None,
             llm_log.log({"event": "integrate_red", "role": "verifier",
                          "node": str(ctx.get("node")),
                          "test_output": first_red})
+            # П4-bis: 'green alone, red together' is a poisoning class the
+            # repair worker cannot see from the suite output. Bisect once and
+            # name the poisoner so the repair gets a PRECISE target instead of
+            # blindly rewriting innocent files.
+            if str(os.environ.get("SPEC_FLOW_BISECT", "1")) != "0":
+                try:
+                    diag = bisect_poisoners(root, include_smoke)
+                except Exception:  # noqa: BLE001 — never breaks the verdict
+                    diag = {}
+                if diag.get("poisoners"):
+                    note = ("\n\nPOISONER DIAGNOSIS (bisection): the suite is "
+                            "red but these files PASS alone — removing them "
+                            "turns the suite green, so they corrupt shared "
+                            "state for the others: "
+                            + ", ".join(diag["poisoners"])
+                            + ". Fix the poisoner's test isolation (teardown / "
+                            "fixture scope / global state), do NOT rewrite the "
+                            "victims.")
+                    out += note
+                    llm_log.log({"event": "poisoner_found", "role": "verifier",
+                                 "node": str(ctx.get("node")),
+                                 "poisoners": diag["poisoners"],
+                                 "green_alone": diag.get("green_alone", [])})
         rounds = 0
         while not passed and rounds < max_repair:
             rounds += 1
