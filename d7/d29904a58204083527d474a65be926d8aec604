@@ -1,0 +1,38 @@
+tests/harness/llm_backend.py
+  s_a7f45290e91181::t_999dade7b32741 210-213
+  s_a7f45290e91181::t_308f3ee3bbdcc6 180,182-187,190-196
+tests/test_specialty.py
+  s_a7f45290e91181::t_dff26e1ed04c4b 1-84
+spec_flow_runner.py
+  s_a7f45290e91181::t_68c53619f43540 2202-2207
+  s_a7f45290e91181::t_1ce3467e5a1a8d 1206-1210,1213
+  s_a7f45290e91181::t_eff1e51e7cfc18 1211-1212
+  s_a7f45290e91181::t_3ddddf078df6ae 1695-1708
+  s_a7f45290e91181::t_7dc8896f9c312b 913-917
+tests/harness/role_worker.py
+  s_a7f45290e91181::t_95ec9a1e21efa7 108,111-113
+  s_a7f45290e91181::t_1ab3ab502c358f 160,163-164,167
+  s_a7f45290e91181::t_7e9d85060fb71a 287-288
+  s_a7f45290e91181::t_ef91007576339b 886-887
+  s_a7f45290e91181::t_e4c932315a237f 784-786
+  s_a7f45290e91181::t_a61620ea3bfa1c 253-254,260-261,263-264
+  s_a7f45290e91181::t_90b6301dd8d4dd 752-754,765-766
+tests/harness/specialty.py
+  s_a7f45290e91181::t_319ad4e0606d32 1-80
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "d7d29904a58204083527d474a65be926d8aec604",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
