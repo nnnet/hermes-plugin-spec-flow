@@ -1,0 +1,27 @@
+tests/test_spec_cache_resume.py
+  s_a7f45290e91181::t_6a201803636026 69-84,87,95-96,104,107-113,115-118,120-122
+  s_a7f45290e91181::t_a987ce45e07647 1-68,85-86,88-94,97-103,105-106,114,119
+spec_flow_runner.py
+  s_a7f45290e91181::t_e71f8c986917af 544-561,567-568,572-576,579-580,583-585,588
+  s_a7f45290e91181::t_cf9ad086b53794 2039-2041,2044
+  s_a7f45290e91181::t_3002be49b6bdbb 2116-2129,2131
+  s_a7f45290e91181::t_69c831c81de456 1201-1204
+  s_a7f45290e91181::t_1438675abec322 2038,2042-2043
+  s_a7f45290e91181::t_84c5151ba549b3 900
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "e89ef6d88c8ea131ab7cc0c7f8a470717059f609",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
