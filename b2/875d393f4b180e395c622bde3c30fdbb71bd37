@@ -1,0 +1,22 @@
+tests/test_parallel_children.py
+  s_a7f45290e91181::t_cfba7a9a26442d 264-334
+spec_flow_runner.py
+  s_a7f45290e91181::t_ce7b107048ddf4 1716-1787
+  s_a7f45290e91181::t_7b07d6e0197bfd 1988-1994,1997-2004
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "b2875d393f4b180e395c622bde3c30fdbb71bd37",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
