@@ -321,6 +321,14 @@ def _inputs_md(run_dir: pathlib.Path) -> str:
         "COST.md": "есть" if (run_dir / "COST.md").exists() else "—",
     }
     out += ["## ⚙️ Служебная информация", _kv_table(svc)]
+    # role -> model map: which model each worker role actually ran on
+    # (the workers block resolves it per role; meta.json records it)
+    wm = meta.get("worker_models") or {}
+    if isinstance(wm, dict) and wm:
+        ru = {"decomposer": "декомпозитор", "reviewer": "ревьюер",
+              "implementer": "исполнитель", "verifier": "верификатор"}
+        rows = {ru.get(role, role): model for role, model in wm.items()}
+        out += ["## 🧠 Карта роль → модель", _kv_table(rows)]
     return "\n\n".join(out) if out else "_исходные данные не записаны_"
 
 
