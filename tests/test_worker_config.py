@@ -82,7 +82,7 @@ def test_ask_walks_chain_on_quota_exhaustion(monkeypatch):
         calls.append(("openai", model))
         raise lb.QuotaExhausted("429")
 
-    def fake_claude(prompt, model, system=None, direct=False):
+    def fake_claude(prompt, model, system=None, direct=False, timeout=None):
         calls.append(("claude", model, direct))
         return "chain answer"
 
@@ -101,7 +101,7 @@ def test_ask_walks_chain_on_quota_exhaustion(monkeypatch):
 def test_explicit_claude_model_bypasses_free_gate(monkeypatch):
     monkeypatch.setattr(lb, "BACKEND", "openai")
 
-    def fake_claude(prompt, model, system=None, direct=False):
+    def fake_claude(prompt, model, system=None, direct=False, timeout=None):
         return f"{model} direct={direct}"
 
     monkeypatch.setattr(lb, "_ask_claude", fake_claude)
@@ -252,5 +252,55 @@ def test_exhausted_chain_raises_without_optin(monkeypatch):
         import pytest as _pt
         with _pt.raises(lb.QuotaExhausted):
             lb.ask("q", model="openrouter/a:free")
+    finally:
+        lb.configure_workers(None)
+
+
+def test_hung_claude_cli_is_retriable_not_fatal(monkeypatch):
+    # v19 death class: the terminal claude CLI hung and subprocess
+    # raised TimeoutExpired, which slipped past the chain's exception
+    # net and killed the run while OpenRouter was healthy.
+    import subprocess as _sp
+    calls = {"n": 0}
+
+    def fake_run(*a, **k):
+        calls["n"] += 1
+        raise _sp.TimeoutExpired(cmd="claude", timeout=k.get("timeout", 1))
+
+    monkeypatch.setattr(lb.subprocess, "run", fake_run)
+    monkeypatch.setattr(lb, "RETRIES", 2)
+    import pytest as _pt
+    with _pt.raises(RuntimeError, match="timed out"):
+        lb._ask_claude("q", "haiku", direct=True, timeout=1)
+    assert calls["n"] == 2, "a hung CLI must be retried, then raise (not escape)"
+
+
+def test_terminal_fallback_only_on_last_round(monkeypatch):
+    # free-models policy: claude is the LAST resort — earlier rounds
+    # wait and retry the free chain, sparing the weekly subscription cap
+    lb.configure_workers({"quota_wait_s": 0.01, "quota_retries": 2,
+                          "providers": [{"name": "openrouter-free",
+                                         "kind": "openai",
+                                         "model_prefix": "openrouter/",
+                                         "require_suffix": ":free"}]})
+    monkeypatch.setattr(lb, "FALLBACK_MODEL", "haiku")
+    claude_calls = {"n": 0}
+
+    def dead_chain(prompt, m, system, fallback=False):
+        raise lb.QuotaExhausted("429")
+
+    def fake_claude(prompt, model, system=None, direct=False, timeout=None):
+        claude_calls["n"] += 1
+        raise RuntimeError("weekly cap")
+
+    monkeypatch.setattr(lb, "_ask_one", dead_chain)
+    monkeypatch.setattr(lb, "_ask_claude", fake_claude)
+    try:
+        import pytest as _pt
+        with _pt.raises((lb.QuotaExhausted, RuntimeError)):
+            lb.ask("q", model="openrouter/a:free")
+        # 3 rounds (1 + 2 retries), claude attempted on the LAST one only
+        assert claude_calls["n"] == 1, \
+            f"claude must run once (last round), saw {claude_calls['n']}"
     finally:
         lb.configure_workers(None)

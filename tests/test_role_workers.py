@@ -405,7 +405,7 @@ def test_quota_exhaustion_falls_back_to_haiku(monkeypatch):
     def boom(prompt, model, system=None):
         raise lb.QuotaExhausted("429 x3")
 
-    def claude(prompt, model, system=None, direct=False):
+    def claude(prompt, model, system=None, direct=False, timeout=None):
         calls.append(model)
         return "fallback reply"
 
@@ -563,7 +563,7 @@ def test_fallback_goes_direct_past_the_gateway(monkeypatch):
                             lb.QuotaExhausted("dry")))
     seen = {}
 
-    def fake_claude(prompt, model, system=None, direct=False):
+    def fake_claude(prompt, model, system=None, direct=False, timeout=None):
         seen["direct"] = direct
         return "ok"
 

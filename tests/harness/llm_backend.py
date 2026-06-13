@@ -244,29 +244,38 @@ def ask(prompt: str, *, model: str, system: str | None = None,
                     with gate:
                         return _ask_one(prompt, m, system, fallback=i > 0)
                 return _ask_one(prompt, m, system, fallback=i > 0)
-            except (QuotaExhausted, RuntimeError) as exc:
+            except (QuotaExhausted, RuntimeError,
+                    subprocess.SubprocessError) as exc:
                 # the chain exists to absorb PROVIDER failure of any
-                # kind — quota, throttling, a dead endpoint; only config
-                # errors (ValueError: paid gate, unknown provider) abort
+                # kind — quota, throttling, a dead/hung endpoint; only
+                # config errors (ValueError: paid gate, unknown
+                # provider) abort the call
                 last_exc = exc
-        if FALLBACK_MODEL and not any(m.startswith("claude/")
-                                      for m in chain):
+        # the terminal claude fallback is the LAST resort (free-models
+        # policy: haiku/subscription only when the free pool is truly
+        # down). Try it only on the FINAL round — earlier rounds prefer
+        # to wait and re-try the healthy free chain, sparing the weekly
+        # subscription cap that already killed v18
+        last_round = attempt == rounds - 1
+        if (last_round and FALLBACK_MODEL
+                and not any(m.startswith("claude/") for m in chain)):
             _spend_call()
             last_call.update(backend="claude", model=FALLBACK_MODEL,
                              fallback=True)
             try:
+                # short leash: a hung CLI must not burn the full 300s
                 return _ask_claude(prompt, FALLBACK_MODEL, system=system,
-                                   direct=True)
-            except RuntimeError as exc:
-                # the TERMINAL fallback can be capped too (weekly
-                # subscription limit killed v18) — wait with the rest
+                                   direct=True,
+                                   timeout=int(cfg.get("fallback_timeout_s",
+                                                       90)))
+            except (RuntimeError, subprocess.SubprocessError) as exc:
                 last_exc = exc
     raise last_exc or QuotaExhausted("no model in the chain answered")
 
 
 # ── claude CLI (fallback; gateway via ANTHROPIC_BASE_URL env) ────────────────
 def _ask_claude(prompt: str, model: str, system: str | None = None,
-                direct: bool = False) -> str:
+                direct: bool = False, timeout: int | None = None) -> str:
     """``direct=True`` strips the gateway override (ANTHROPIC_BASE_URL):
     the exhaustion fallback is the SUBSCRIPTION — a broken/limited gateway
     must not take the fallback down with it (a 403 via Bifrost once killed
@@ -277,12 +286,25 @@ def _ask_claude(prompt: str, model: str, system: str | None = None,
     if direct:
         env = {k: v for k, v in os.environ.items()
                if k != "ANTHROPIC_BASE_URL"}
+    timeout = timeout or TIMEOUT
     for _ in range(RETRIES):
-        proc = subprocess.run([*claude_cli.claude_cmd(), "-p", "--model", model,
-                               *extra, *claude_cli.mcp_args_no_serena()],
-                              input=prompt, capture_output=True, text=True,
-                              timeout=TIMEOUT, cwd=claude_cli.agent_cwd(),
-                              env=env)
+        try:
+            proc = subprocess.run(
+                [*claude_cli.claude_cmd(), "-p", "--model", model,
+                 *extra, *claude_cli.mcp_args_no_serena()],
+                input=prompt, capture_output=True, text=True,
+                timeout=timeout, cwd=claude_cli.agent_cwd(), env=env)
+        except subprocess.TimeoutExpired:
+            # a HUNG claude CLI (huge MCP system prompt load) must be a
+            # retriable provider failure, NOT a fatal escape — v19 died
+            # here: the CLI hung 300s while OpenRouter was healthy, and
+            # TimeoutExpired slipped past the chain's (QuotaExhausted,
+            # RuntimeError) net and killed the run
+            last = f"timed out after {timeout}s"
+            continue
+        except OSError as exc:
+            last = f"spawn failed: {exc}"
+            continue
         if proc.returncode == 0 and proc.stdout.strip():
             return claude_cli.strip_headroom_banner(proc.stdout)
         last = (proc.stderr or proc.stdout)[-300:]
