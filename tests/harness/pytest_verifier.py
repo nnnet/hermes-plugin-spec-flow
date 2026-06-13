@@ -330,8 +330,13 @@ def bisect_poisoners(root: str, include_smoke: bool) -> dict:
             "victims": red_alone}
 
 
-# a pytest one-line summary: "FAILED tests/x.py::t - sqlite3.OperationalError: ..."
+# a pytest one-line summary with a reason: "FAILED tests/x.py::t - <reason>"
 _SUMMARY_RE = re.compile(r"^(?:FAILED|ERROR)\s+\S+\s+-\s+(.+)$", re.M)
+# ANY failed/error summary line, incl. class-based ids and reason-less ones
+# ("FAILED tests/x.py::Class::test", "ERROR tests/x.py::Class::test") — pytest
+# omits the ' - reason' when the repr is empty/multi-line, so counting only
+# _SUMMARY_RE undercounts the cascade.
+_FAIL_LINE_RE = re.compile(r"^(?:FAILED|ERROR)\s+\S+", re.M)
 # a traceback exception line: "E   sqlite3.OperationalError: near \"EXISTS\": ..."
 _EXC_RE = re.compile(r"^E\s+([\w.]*(?:Error|Exception)\b[^\n]*)$", re.M)
 _DB_HINT_RE = re.compile(
@@ -357,7 +362,9 @@ def _dominant_error(output: str) -> Optional[tuple]:
     Returns (signature, count, total_failures, looks_db) or None when no
     single cause dominates (genuine independent per-file bugs)."""
     summary = _SUMMARY_RE.findall(output)
-    total = len(summary)
+    # total counts EVERY failed/error line (class-based + reason-less), so the
+    # cascade fraction is honest even when pytest prints no per-line reason.
+    total = len(_FAIL_LINE_RE.findall(output))
     if total < 3:
         return None
     exc_sigs: dict[str, int] = {}

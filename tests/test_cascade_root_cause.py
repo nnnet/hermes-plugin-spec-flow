@@ -50,6 +50,29 @@ def test_prefers_exception_over_assert_symptom():
     assert "assert" not in sig.lower()
 
 
+# class-based ids and reason-less FAILED/ERROR lines — pytest omits ' - reason'
+# when the repr is empty/multi-line; the traceback still carries the exception
+_CLASS_FORMAT = """\
+FAILED tests/test_payouts_schema.py::TestPayouts::test_ac1_structure
+FAILED tests/test_payouts_schema.py::TestPayouts::test_ac2_not_null
+ERROR tests/test_admin_payout.py::TestApproval::test_setup
+ERROR tests/test_web_ui.py::TestCatalog::test_page
+E   sqlite3.OperationalError: no such table: payouts
+E   sqlite3.OperationalError: no such table: payouts
+E   sqlite3.OperationalError: no such table: payouts
+E   sqlite3.OperationalError: no such table: payouts
+33 failed, 60 passed in 1.45s
+"""
+
+
+def test_detects_cascade_in_class_based_reasonless_format():
+    dom = pv._dominant_error(_CLASS_FORMAT)
+    assert dom is not None, "must catch a cascade even without ' - reason' lines"
+    sig, count, total, looks_db = dom
+    assert "OperationalError" in sig and looks_db is True
+    assert total == 4           # all FAILED + ERROR lines counted
+
+
 def test_no_false_positive_on_independent_bugs():
     # three different exception types, none dominant → no cascade
     assert pv._dominant_error(_INDEPENDENT) is None
