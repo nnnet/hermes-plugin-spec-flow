@@ -155,6 +155,38 @@ def _attach_orphan_nodes(tree: dict, events: list) -> list:
     return order
 
 
+def _collect_ids(node: dict, acc: set) -> None:
+    acc.add(node.get("id"))
+    for c in node.get("children", []) or []:
+        _collect_ids(c, acc)
+
+
+def _attach_pending_requirements(tree: dict, run_dir: "pathlib.Path | None") -> list:
+    """Attach injected-but-not-yet-materialized requirements (a folder under
+    hitl/requirements/<name>/) to the root as PENDING nodes, so a freshly
+    injected web_ui shows in the tree/graph immediately instead of staying
+    invisible until the engine places it at the next integrate. Skips names
+    already present (materialized or event-attached). Returns attached ids."""
+    if not run_dir:
+        return []
+    reqs = run_dir / "hitl" / "requirements"
+    if not reqs.is_dir():
+        return []
+    have: set = set()
+    _collect_ids(tree, have)
+    added = []
+    for d in sorted(reqs.iterdir()):
+        if not d.is_dir():
+            continue
+        nid = d.name
+        if nid in have:
+            continue
+        tree.setdefault("children", []).append(
+            {"id": nid, "children": [], "attached": True, "pending": True})
+        added.append(nid)
+    return added
+
+
 def _flatten(node: dict, depth: int, out: dict, parent: str | None) -> None:
     nid = node.get("id", "?")
     eps = [k for k in _EPISODE_BADGE if k in node]
@@ -179,6 +211,8 @@ def _tree_view(node: dict, meta: dict) -> dict:
     }
     if node.get("attached"):
         view["attached"] = True       # late-injected requirement node
+    if node.get("pending"):
+        view["pending"] = True        # injected but not yet materialized
     return view
 
 
@@ -484,6 +518,11 @@ def _build_state(run_dir: pathlib.Path) -> dict:
     # surface late-injected requirement nodes (web_ui, seller_directory) that
     # the decompose tree never knew — otherwise they run but stay invisible
     _attach_orphan_nodes(tree, events)
+    # also surface requirements that were INJECTED (a folder under
+    # hitl/requirements/) but not yet materialized into a node — the engine
+    # only places them at the next branch/root integrate, so without this the
+    # user injects web_ui and sees nothing in the graph until much later
+    _attach_pending_requirements(tree, run_dir)
     meta: dict = {}
     _flatten(tree, 0, meta, None)
     files = {nid: _node_files(ws, nid) for nid in meta} if ws.exists() else {}
@@ -1197,7 +1236,8 @@ function treeHTML(n){
  const act=isActive(n.id);
  const ico=act?'⏳':(has?'🌿':'🍃');
  const pin=n.attached?'<span title="позднее требование, вброшено в прогон">📌</span> ':'';
- let h=`<li>${tw}<span class="node${sel}${act?' actv':''}" data-id="${n.id}">${ico} ${pin}${n.id} <span class=badge>${badgeHTML(n.episodes)}</span></span>`;
+ const pend=n.pending?'<span title="вброшено, ещё не материализовано в узел" style="color:#e3a008">⏳вброшено</span> ':'';
+ let h=`<li>${tw}<span class="node${sel}${act?' actv':''}" data-id="${n.id}">${ico} ${pin}${pend}${n.id} <span class=badge>${badgeHTML(n.episodes)}</span></span>`;
  if(has&&open){h+='<ul>'+n.children.map(treeHTML).join('')+'</ul>';}
  h+='</li>';return h;
 }
@@ -1508,8 +1548,8 @@ function graphSVG(){
   const tip=badgeTips(n.episodes);
   s+=`<g class=gnode data-id="${n.id}" transform="translate(${X(n)},${Y(n)})" style="cursor:pointer">`+
      (tip?`<title>${esc(tip)}</title>`:'')+
-     `<rect width="${BW}" height="${BH}" rx="5" fill="${act?'#3a2a1255':(sel?'#1f6feb55':(leaf?'#161b22':'#13251a'))}" stroke="${act?'#e3b341':(sel?'#1f6feb':(leaf?'#30363d':'#3fb950'))}"${act?' stroke-dasharray="4 3"':''}/>`+
-     `<text x="7" y="15" fill="#c9d1d9" font-size="11">${ico} ${n.attached?'📌':''}${esc(n.id).slice(0,14)}${tail}</text>`+
+     `<rect width="${BW}" height="${BH}" rx="5" fill="${n.pending?'#3a2e12aa':(act?'#3a2a1255':(sel?'#1f6feb55':(leaf?'#161b22':'#13251a')))}" stroke="${n.pending?'#e3a008':(act?'#e3b341':(sel?'#1f6feb':(leaf?'#30363d':'#3fb950')))}"${(act||n.pending)?' stroke-dasharray="4 3"':''}/>`+
+     `<text x="7" y="15" fill="#c9d1d9" font-size="11">${ico} ${n.pending?'⏳':(n.attached?'📌':'')}${esc(n.id).slice(0,14)}${tail}</text>`+
      (bdg?`<text x="${BW-5}" y="14" text-anchor="end" font-size="8">${bdg}</text>`:'')+`</g>`;});
  s+='</svg>';return '<div style="overflow:auto;border:1px solid #21262d;border-radius:6px;padding:6px">'+s+'</div>'+legendHTML();
 }
