@@ -1,0 +1,83 @@
+"""Duration / idle analysis for the ⏱ dashboard tab: _idle_analysis turns a
+trace into per-operation gaps with an attributed cause + roll-ups, so a run's
+time sinks (spec review, integration, quota waits) are visible and sortable."""
+import json
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import live_dashboard as dash  # noqa: E402
+
+
+def _run(tmp_path, trace_rows, llm_rows=None):
+    d = tmp_path / "run"
+    d.mkdir()
+    (d / "trace.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in trace_rows), encoding="utf-8")
+    if llm_rows is not None:
+        (d / "llm-log.jsonl").write_text(
+            "\n".join(json.dumps(r) for r in llm_rows), encoding="utf-8")
+    return d
+
+
+def _ev(t, **kw):
+    base = {"tick": int(t), "phase": "", "task": "", "action": "", "t": float(t)}
+    base.update(kw)
+    return base
+
+
+def test_none_run():
+    assert dash._idle_analysis(None) == {"empty": True}
+
+
+def test_gap_is_attributed_to_owner_event(tmp_path):
+    rows = [_ev(0, task="a", phase="review"),
+            _ev(10, task="b", phase="implement"),
+            _ev(13, task="b", phase="implement")]
+    a = dash._idle_analysis(_run(tmp_path, rows))
+    # two gaps: 10s owned by the review event, 3s by the implement event
+    durs = {r["node"]: r["dur"] for r in a["top"]}
+    assert durs["a"] == 10.0 and durs["b"] == 3.0
+    assert a["total_s"] == 13.0 and a["events"] == 2
+
+
+def test_cause_classification(tmp_path):
+    rows = [_ev(0, task="x", phase="review"),
+            _ev(5, task="x", phase="integrate", action="end-to-end acceptance"),
+            _ev(40, task="x", phase="implement", action="rework round 1"),
+            _ev(60, task="x", phase="implement")]
+    a = dash._idle_analysis(_run(tmp_path, rows))
+    causes = {r["tick"]: r["cause"] for r in a["top"]}
+    assert causes[0] == "ревью спеки"
+    assert causes[5] == "интеграция (тесты)"
+    assert causes[40] == "починка"
+
+
+def test_quota_wait_window_is_detected(tmp_path):
+    rows = [_ev(0, task="x", phase="implement"),
+            _ev(300, task="x", phase="implement")]
+    # a quota_wait logged inside the [0,300] gap → cause = ожидание квоты
+    llm = [{"event": "quota_wait", "t": 100.0, "wait_s": 200}]
+    a = dash._idle_analysis(_run(tmp_path, rows, llm))
+    assert a["top"][0]["cause"] == "ожидание квоты"
+
+
+def test_rollups_sorted_by_total(tmp_path):
+    rows = [_ev(0, task="a", phase="review"),
+            _ev(100, task="b", phase="integrate", action="acceptance"),
+            _ev(110, task="b", phase="integrate", action="acceptance"),
+            _ev(130, task="a", phase="review")]
+    a = dash._idle_analysis(_run(tmp_path, rows))
+    by_cause = {r["cause"]: r["total"] for r in a["by_cause"]}
+    assert by_cause["ревью спеки"] == 100.0
+    assert by_cause["интеграция (тесты)"] == 30.0
+    # by_cause is sorted descending
+    totals = [r["total"] for r in a["by_cause"]]
+    assert totals == sorted(totals, reverse=True)
+
+
+def test_zero_and_negative_gaps_skipped(tmp_path):
+    rows = [_ev(0, task="a"), _ev(0, task="b"), _ev(5, task="c")]
+    a = dash._idle_analysis(_run(tmp_path, rows))
+    # the 0-gap pair is dropped; only the 5s gap counts
+    assert a["events"] == 1 and a["total_s"] == 5.0

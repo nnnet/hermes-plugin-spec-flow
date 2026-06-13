@@ -602,6 +602,111 @@ def _build_state(run_dir: pathlib.Path) -> dict:
     }
 
 
+def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
+    """Duration / idle analysis for the ⏱ tab. Each trace event's gap to the
+    NEXT event is the time that operation took; we attribute it to the owner
+    event (its node + phase + action) and classify the CAUSE of the spend:
+
+      * 'ожидание квоты'   — a quota_wait/error_round overlapped the gap;
+      * 'интеграция'       — integrate gate (pytest over the built tree);
+      * 'починка'          — a rework/repair round;
+      * 'ревью спеки'      — review phase;
+      * 'реализация (LLM)' — implement phase;
+      * 'декомпозиция'     — decompose;
+      * 'ответ человека'   — a HITL ask was open;
+      * otherwise the phase name.
+
+    Returns sortable rows + roll-ups by node, by phase, by cause. All purely
+    from artifacts, no run interaction."""
+    if run_dir is None:
+        return {"empty": True}
+    trace = []
+    tf = run_dir / "trace.jsonl"
+    if tf.exists():
+        for line in tf.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                trace.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    # quota / error wait windows from the llm-log (start time + seconds)
+    waits = []
+    lf = run_dir / "llm-log.jsonl"
+    if lf.exists():
+        for line in lf.read_text(encoding="utf-8", errors="ignore").splitlines():
+            try:
+                e = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if e.get("event") in ("quota_wait", "error_round"):
+                t = e.get("t")
+                if t is not None:
+                    waits.append((float(t), float(e.get("wait_s", 0) or 0)))
+
+    def _cause(ev: dict, gap: float, t0: float, t1: float) -> str:
+        for wt, _ws in waits:
+            if t0 <= wt <= t1:
+                return "ожидание квоты"
+        ph = str(ev.get("phase", ""))
+        act = str(ev.get("action", "")).lower()
+        gate = str(ev.get("gate", ""))
+        if "rework" in act or "repair" in act:
+            return "починка"
+        if ph == "integrate" or "integrate" in act or "acceptance" in act:
+            return "интеграция (тесты)"
+        if ph == "review":
+            return "ревью спеки"
+        if ph == "implement":
+            return "реализация (LLM)"
+        if ph in ("decompose", "expand"):
+            return "декомпозиция (LLM)"
+        if ph == "hitl" or gate == "hitl":
+            return "ответ человека"
+        return ph or "прочее"
+
+    rows = []
+    for i in range(len(trace) - 1):
+        ev, nxt = trace[i], trace[i + 1]
+        t0, t1 = ev.get("t"), nxt.get("t")
+        if t0 is None or t1 is None:
+            continue
+        gap = float(t1) - float(t0)
+        if gap <= 0:
+            continue
+        rows.append({
+            "tick": ev.get("tick"),
+            "node": ev.get("task", ""),
+            "phase": ev.get("phase", ""),
+            "action": str(ev.get("action", ""))[:60],
+            "dur": round(gap, 1),
+            "cause": _cause(ev, gap, float(t0), float(t1)),
+        })
+
+    def _rollup(key: str) -> list:
+        agg: dict = {}
+        for r in rows:
+            k = r[key] or "—"
+            a = agg.setdefault(k, {"total": 0.0, "count": 0})
+            a["total"] += r["dur"]
+            a["count"] += 1
+        out = [{key: k, "total": round(v["total"], 1), "count": v["count"]}
+               for k, v in agg.items()]
+        return sorted(out, key=lambda x: x["total"], reverse=True)
+
+    total = round(sum(r["dur"] for r in rows), 1)
+    top_rows = sorted(rows, key=lambda r: r["dur"], reverse=True)[:top]
+    return {
+        "total_s": total,
+        "events": len(rows),
+        "top": top_rows,
+        "by_node": _rollup("node")[:25],
+        "by_phase": _rollup("phase"),
+        "by_cause": _rollup("cause"),
+    }
+
+
 def _hitl_state(run_dir: "pathlib.Path | None") -> dict:
     """Snapshot the bidirectional HITL channel for the ✋ tab:
       * asks      — worker→human questions parsed from hitl/questions.md
@@ -671,6 +776,12 @@ class _H(BaseHTTPRequestHandler):
                 rows = [{"error": str(exc)}]
             payload = json.dumps(rows, ensure_ascii=False).encode("utf-8")
             return self._send(200, "application/json; charset=utf-8", payload)
+        if parsed.path == "/api/idle":
+            # duration / idle analysis for the ⏱ tab — per-operation gaps with
+            # an attributed cause, plus roll-ups by node / phase / cause
+            return self._send(200, "application/json; charset=utf-8",
+                              json.dumps(_idle_analysis(self._run_dir()),
+                                         ensure_ascii=False).encode("utf-8"))
         if parsed.path == "/api/hitl":
             # bidirectional HITL state for the ✋ tab: the worker→human asks
             # (questions.md), whether an answer is still pending (answer.md
@@ -1078,6 +1189,57 @@ function compareHTML(){
  return h;
 }
 
+// duration / idle analysis (⏱): where the wall-clock went, by op + cause
+let IDLE=null, IDLE_SORT='dur', IDLE_DESC=true;
+function loadIdle(){
+ fetch('/api/idle').then(r=>r.json()).then(d=>{IDLE=d;if(GTAB==='idle')render();})
+  .catch(()=>{IDLE={error:'не удалось загрузить'};render();});
+}
+function fmtDur(s){if(s>=60)return (s/60).toFixed(1)+'м';return s.toFixed(0)+'с';}
+function idleHTML(){
+ if(IDLE===null){loadIdle();return '<p class=dim>анализирую длительности…</p>';}
+ if(IDLE.error)return '<p class=dim>ошибка: '+esc(IDLE.error)+'</p>';
+ if(IDLE.empty)return '<p class=dim>нет активного прогона</p>';
+ const cols=[['tick','тик'],['node','узел'],['phase','фаза'],['action','операция'],
+  ['cause','причина'],['dur','длит']];
+ let rows=(IDLE.top||[]).slice();
+ rows.sort((a,b)=>{let x=a[IDLE_SORT],y=b[IDLE_SORT];
+  if(x<y)return IDLE_DESC?1:-1;if(x>y)return IDLE_DESC?-1:1;return 0;});
+ // cause heat: quota waits + integration are the usual long poles
+ const causeColor=c=>({'ожидание квоты':'#f85149','интеграция (тесты)':'#e3b341',
+  'починка':'#db6d28','реализация (LLM)':'#58a6ff','ревью спеки':'#79c0ff',
+  'декомпозиция (LLM)':'#a371f7','ответ человека':'#f0883e'}[c]||'#8b949e');
+ let h='<h3 class=muted>⏱ Анализ простоев и длительности '+
+  '<span class="tab" id=idlereload style="margin-left:8px">↻ обновить</span></h3>';
+ h+='<p class=muted>суммарно учтено <b>'+fmtDur(IDLE.total_s||0)+'</b> по '+
+  (IDLE.events||0)+' операциям. Длительность = разрыв до следующего события трассы, '+
+  'причина атрибутирована по фазе/действию и окнам ожидания квоты.</p>';
+ // roll-up by cause — where the time structurally goes
+ h+='<h4>По причинам (куда уходит время)</h4><div class=cmpscroll style="max-height:none">'+
+  '<table class=cmp><thead><tr><th>причина</th><th>суммарно</th><th>операций</th><th>доля</th></tr></thead><tbody>';
+ (IDLE.by_cause||[]).forEach(r=>{const sh=IDLE.total_s?Math.round(100*r.total/IDLE.total_s):0;
+  h+=`<tr><td style="color:${causeColor(r.cause)}">${esc(r.cause)}</td>`+
+   `<td>${fmtDur(r.total)}</td><td>${r.count}</td>`+
+   `<td><span style="display:inline-block;height:8px;background:${causeColor(r.cause)};width:${sh}px;max-width:120px"></span> ${sh}%</td></tr>`;});
+ h+='</tbody></table></div>';
+ // roll-up by node — which nodes cost the most
+ h+='<h4>По узлам (самые дорогие)</h4><div class=cmpscroll style="max-height:260px">'+
+  '<table class=cmp><thead><tr><th>узел</th><th>суммарно</th><th>операций</th></tr></thead><tbody>'+
+  (IDLE.by_node||[]).map(r=>`<tr><td>${esc(r.node||'—')}</td><td>${fmtDur(r.total)}</td><td>${r.count}</td></tr>`).join('')+
+  '</tbody></table></div>';
+ // the longest individual operations — sortable
+ h+='<h4>Самые длинные операции (клик по заголовку = сортировка)</h4>';
+ h+='<div class=cmpscroll><table class=cmp><thead><tr>'+cols.map(([k,t])=>
+  `<th data-isort="${k}" style="cursor:pointer">${t}${IDLE_SORT===k?(IDLE_DESC?' ▾':' ▴'):''}</th>`).join('')+'</tr></thead><tbody>';
+ rows.forEach(r=>{h+='<tr>'+
+  `<td>${r.tick??''}</td><td>${esc(r.node||'')}</td><td>${esc(r.phase||'')}</td>`+
+  `<td title="${esc(r.action||'')}">${esc((r.action||'').slice(0,40))}</td>`+
+  `<td style="color:${causeColor(r.cause)}">${esc(r.cause||'')}</td>`+
+  `<td><b>${fmtDur(r.dur)}</b></td></tr>`;});
+ h+='</tbody></table></div>';
+ return h;
+}
+
 // bidirectional HITL (✋): worker→human asks + human→worker answer/inject
 let HITL=null;
 function loadHitl(){
@@ -1134,11 +1296,12 @@ function hitlPost(path,payload,msgEl){
 
 function renderGlobal(){
  const R=STATE.reports;
- const tabs=[['inputs','▶ Старт (цель+вход)'],['graph','🕸 Граф спеков'],['flow','🔀 Поток выполнения'],['timeline','⏱ Таймлайн'],['report','Отчёт+аудит'],['agents','🤖 Агенты сейчас'],['hitl','✋ HITL'],['compare','📊 Сравнение прогонов'],['workflow','Воркфлоу'],['oracle','Оракул'],['commits','Версии/коммиты'],['summary','Итог']];
- let h='<div class=tabs>'+tabs.map(([k,t])=>(k==='timeline'||k==='graph'||k==='agents'||k==='hitl'||k==='compare'||R[k])?`<span class="tab${GTAB===k?' on':''}" data-g="${k}">${t}</span>`:'').join('')+'</div>';
+ const tabs=[['inputs','▶ Старт (цель+вход)'],['graph','🕸 Граф спеков'],['flow','🔀 Поток выполнения'],['timeline','⏱ Таймлайн'],['report','Отчёт+аудит'],['agents','🤖 Агенты сейчас'],['hitl','✋ HITL'],['idle','⏱ Простои'],['compare','📊 Сравнение прогонов'],['workflow','Воркфлоу'],['oracle','Оракул'],['commits','Версии/коммиты'],['summary','Итог']];
+ let h='<div class=tabs>'+tabs.map(([k,t])=>(k==='timeline'||k==='graph'||k==='agents'||k==='hitl'||k==='idle'||k==='compare'||R[k])?`<span class="tab${GTAB===k?' on':''}" data-g="${k}">${t}</span>`:'').join('')+'</div>';
  let body;
  if(GTAB==='agents')body='<h3 class=muted>Что делают агенты сейчас <span class=dim>(сверху — последнее)</span></h3><ol class="feed full" reversed>'+(STATE.feed||[]).slice().reverse().map(f=>`<li>${esc(f)}</li>`).join('')+'</ol>';
  else if(GTAB==='hitl')body=hitlHTML();
+ else if(GTAB==='idle')body=idleHTML();
  else if(GTAB==='compare')body=compareHTML();
  else if(GTAB==='timeline')body=timelineHTML();
  else if(GTAB==='graph')body='<p class=muted>граф задач, что построил плагин — <b>дабл-клик</b> = провалиться в спеку/код/версии · <b>клик</b> = свернуть поддерево / развернуть следующий уровень. 🌿 ветка · 🍃 лист · бейджи = эпизоды</p>'+graphSVG();
@@ -1266,6 +1429,10 @@ document.addEventListener('click',e=>{
    runCtl('/api/run/stop',{});return;}
  if(e.target.closest('#runstart')){
   if(confirm('Запустить новый прогон того же кейса?'))runCtl('/api/run/start',{});return;}
+ if(e.target.closest('#idlereload')){IDLE=null;loadIdle();return;}
+ const isort=e.target.closest('[data-isort]');
+ if(isort){const k=isort.dataset.isort;if(IDLE_SORT===k)IDLE_DESC=!IDLE_DESC;
+  else{IDLE_SORT=k;IDLE_DESC=true;}renderGlobal();return;}
  if(e.target.closest('#hitlreload')){HITL=null;loadHitl();return;}
  if(e.target.closest('#hitlsend')){const t=($('#hitlans')||{}).value||'';
   if(t.trim())hitlPost('/api/hitl/answer',{text:t},'#hitlmsg');
