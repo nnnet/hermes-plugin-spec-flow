@@ -1,0 +1,30 @@
+tests/harness/ws_tx.py
+  s_a7f45290e91181::t_4c9a7bd9728149 109-234
+tests/test_leaf_worktree.py
+  s_a7f45290e91181::t_73286db7975105 1-103
+spec_flow_runner.py
+  s_a7f45290e91181::t_24907016d7d398 853-854
+  s_a7f45290e91181::t_2e812e1bbfd158 62-100
+  s_a7f45290e91181::t_aa548e48974f8c 1125-1133
+  s_a7f45290e91181::t_9e1916b7f6c10e 1884-1895,1897-1923
+  s_a7f45290e91181::t_c38a23f9004920 1896
+  s_a7f45290e91181::t_902ffaf5a75b89 1963
+tests/test_isolation_wiring.py
+  s_a7f45290e91181::t_44e105ad1208e7 1-90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "a8ca84cc43b17c1a8d8bec344cc00e40762e220c",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
