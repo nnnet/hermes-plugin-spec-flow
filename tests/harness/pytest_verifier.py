@@ -52,13 +52,21 @@ text (no prose, no fence):
 {{"files": {{"src/x.py": "...", "tests/test_x.py": "..."}}}}"""
 
 
-def run_suite(root: str, include_smoke: bool) -> tuple[bool, str]:
-    """Run the workspace tests for REAL. Returns (passed, output tail)."""
+def run_suite(root: str, include_smoke: bool,
+              targets: Optional[list] = None) -> tuple[bool, str]:
+    """Run the workspace tests for REAL. Returns (passed, output tail).
+
+    #4: ``targets`` scopes a BRANCH integrate to its subtree's test files
+    instead of the whole corpus — each non-root gate stays cheap as the
+    suite grows. The ROOT integrate passes targets=None and runs everything
+    (the honest full check is never skipped)."""
     if not (Path(root) / "tests").is_dir():
         return True, "(no tests yet)"
-    cmd = [sys.executable, "-m", "pytest", "tests", "-q", "--no-header",
+    scope = [t for t in (targets or []) if (Path(root) / t).is_file()]
+    paths = scope or ["tests"]
+    cmd = [sys.executable, "-m", "pytest", *paths, "-q", "--no-header",
            "-p", "no:cacheprovider", "--import-mode=importlib"]
-    if not include_smoke and (Path(root) / SMOKE_DIR).is_dir():
+    if not scope and not include_smoke and (Path(root) / SMOKE_DIR).is_dir():
         cmd += ["--ignore", SMOKE_DIR]
     with llm_backend.PYTEST_LOCK:
         proc = subprocess.run(cmd, capture_output=True, text=True,
@@ -337,7 +345,11 @@ def make_verifier(model: Optional[str] = None,
                 llm_log.log({"event": "requirements_synced",
                              "role": "verifier", "paths": synced})
         include_smoke = str(ctx.get("node")) == "L0"
-        passed, out = run_suite(root, include_smoke)
+        # #4: a branch integrate runs only its subtree's tests (ctx.test_targets);
+        # the root (L0) passes none and runs the whole corpus. Repair re-runs and
+        # diagnostics below stay full-suite — a scoped green still owes the root.
+        targets = None if include_smoke else (ctx.get("test_targets") or None)
+        passed, out = run_suite(root, include_smoke, targets)
         first_red = ""
         if not passed:
             # the FIRST red output is the diagnosis — keep it on record

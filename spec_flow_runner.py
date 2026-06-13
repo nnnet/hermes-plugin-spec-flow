@@ -880,6 +880,8 @@ class Engine:
         self._wave_lock = threading.RLock()
         # axis F: leaf isolation mode, set in run() from the project dict
         self._isolation = "none"
+        # #4: scope a branch integrate to its subtree's tests (root stays full)
+        self._incremental_integrate = True
         # П1: set True when a run ends via a cooperative STOP (partial result)
         self._stopped = False
         self.agents = {**DEFAULT_AGENTS, **(agents or {})}
@@ -1159,6 +1161,10 @@ class Engine:
         self._isolation = str(project.get("isolation", "none")).lower()
         if self._isolation not in ("none", "worktree"):
             raise ValueError("isolation must be none|worktree")
+        # #4: incremental integrate on by default (root still runs full);
+        # a case may turn it off with incremental_integrate: false
+        self._incremental_integrate = project.get(
+            "incremental_integrate", True) is not False
         if self._isolation == "worktree":
             self.workspace.git_provenance = True
         try:
@@ -1615,6 +1621,28 @@ class Engine:
         order.extend(remaining)        # cycle / unresolved → declared order
         return order
 
+    def _subtree_test_targets(self, node: dict) -> list:
+        """#4: the test files belonging to a branch's subtree —
+        tests/test_<module>.py for every node under ``node`` that has a module
+        assigned and whose test file exists. Used to scope a branch integrate
+        to its own subtree instead of the whole corpus."""
+        mods = []
+
+        def walk(n):
+            m = self._module_names.get(n.get("id"))
+            if m:
+                mods.append(m)
+            for c in n.get("children") or []:
+                walk(c)
+        walk(node)
+        root = Path(self.workspace.root or ".")
+        out = []
+        for m in mods:
+            rel = f"tests/test_{m}.py"
+            if (root / rel).is_file():
+                out.append(rel)
+        return sorted(set(out))
+
     def _has_sibling_deps(self, kids: list) -> bool:
         """True when some child declares a depends_on on ANOTHER sibling —
         the signal that forces sequential (topo) execution for correctness."""
@@ -1906,10 +1934,16 @@ class Engine:
                 # (on_integrate_fail: record | rework | halt).
                 def _verify_once():
                     try:
-                        vout = verifier({"node": nid, "title": title,
-                                         "children": child_ids,
-                                         "depth": depth,
-                                         "workspace_root": self.workspace.root}) or {}
+                        vctx = {"node": nid, "title": title,
+                                "children": child_ids, "depth": depth,
+                                "workspace_root": self.workspace.root}
+                        # #4: scope a BRANCH integrate to its subtree's tests;
+                        # the root (depth 0 / L0) runs the whole corpus.
+                        if self._incremental_integrate and depth > 0:
+                            tgts = self._subtree_test_targets(node)
+                            if tgts:
+                                vctx["test_targets"] = tgts
+                        vout = verifier(vctx) or {}
                         st = "FAIL" if str(vout.get("status", "PASS")).upper() == "FAIL" else "PASS"
                         return st, str(vout.get("detail", ""))[:300]
                     except Exception as exc:  # noqa: BLE001

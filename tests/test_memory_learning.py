@@ -91,7 +91,7 @@ def test_verifier_failure_is_retained_with_diagnosis(tmp_path, monkeypatch):
     from harness import pytest_verifier as pv
     prov, _ = _mgr()
     monkeypatch.setattr(pv, "run_suite",
-                        lambda root, smoke: (False, "E assert 1 == 2"))
+                        lambda root, smoke, targets=None: (False, "E assert 1 == 2"))
     verify = pv.make_verifier(model="stub", max_repair=0)
     out = verify({"workspace_root": str(tmp_path), "node": "beta"})
     assert out["status"] == "FAIL"
@@ -104,7 +104,7 @@ def test_verifier_repair_success_is_retained(tmp_path, monkeypatch):
     prov, _ = _mgr()
     calls = {"n": 0}
 
-    def suite(root, smoke):
+    def suite(root, smoke, targets=None):
         calls["n"] += 1
         return (calls["n"] >= 2, "E no route GET /x" if calls["n"] < 2
                 else "all green")
