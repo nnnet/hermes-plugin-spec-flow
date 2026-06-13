@@ -541,27 +541,51 @@ class Workspace:
             return None
         return Path(self.root) / ".spec-flow" / "journal.jsonl"
 
-    def journal_mark(self, node: str, version: int) -> None:
-        """Append a completed-node record — the resume index."""
+    def spec_hash(self, rel: str) -> str:
+        """#7: content hash of a workspace-relative spec file ('' if absent).
+        Lets a resume tell whether a node's spec CHANGED since it was
+        journaled — an unchanged spec is reused, a changed one is re-run."""
+        if not (self.enabled and self.root):
+            return ""
+        p = Path(self.root) / rel
+        if not p.is_file():
+            return ""
+        try:
+            return hashlib.sha256(p.read_bytes()).hexdigest()[:16]
+        except OSError:
+            return ""
+
+    def journal_mark(self, node: str, version: int,
+                     spec_hash: str = "") -> None:
+        """Append a completed-node record — the resume index. #7: the spec
+        hash rides along so a resume can re-run a node whose spec changed."""
         path = self._journal_path()
         if path is None:
             return
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps({"node": node, "version": version}) + "\n")
+            fh.write(json.dumps({"node": node, "version": version,
+                                 "spec_hash": spec_hash}) + "\n")
 
     def journal_nodes(self) -> set:
         """Node ids already completed by a previous run of this workspace."""
+        return set(self.journal_index().keys())
+
+    def journal_index(self) -> dict:
+        """#7: node id → last journaled {version, spec_hash}. Later records
+        win (a re-run overwrites an earlier hash)."""
         path = self._journal_path()
         if path is None or not path.is_file():
-            return set()
-        done = set()
+            return {}
+        idx: dict = {}
         for line in path.read_text(encoding="utf-8").splitlines():
             try:
-                done.add(json.loads(line)["node"])
+                rec = json.loads(line)
+                idx[rec["node"]] = {"version": rec.get("version"),
+                                    "spec_hash": rec.get("spec_hash", "")}
             except Exception:  # noqa: BLE001 — a torn line is not fatal
                 continue
-        return done
+        return idx
 
     def _write(self, rel: str, content: str, kind: str) -> str:
         if not self.enabled:
@@ -873,6 +897,7 @@ class Engine:
         # leaves keep their persisted artifacts, the implementer is not re-run.
         self.resume = resume
         self._journal_done: set = set()
+        self._journal_index: dict = {}   # #7: node → {version, spec_hash}
         # П2: wave journal — a single-writer, append-only trail of node
         # commits (one wave per committed node). Opened in run() when the
         # workspace has a root; None means the trail is off (optional).
@@ -1173,7 +1198,10 @@ class Engine:
             self.workspace.open(preserve=self.resume,
                                 seed_files=self._seed_files)
             if self.resume:
-                self._journal_done = self.workspace.journal_nodes()
+                # #7: load the full index (version + spec_hash), not just ids,
+                # so a node whose spec changed is re-run rather than reused
+                self._journal_index = self.workspace.journal_index()
+                self._journal_done = set(self._journal_index.keys())
             # П1: a STOP sentinel only governs the run that was live when it
             # was dropped — clear any stale one so a resume never self-halts.
             if getattr(self.workspace, "root", None):
@@ -2007,7 +2035,13 @@ class Engine:
         # C4: record the completed leaf in the run journal — a restarted run
         # (resume=True) reuses its persisted artifact instead of re-implementing
         if verdict == "leaf":
-            self.workspace.journal_mark(nid, self.tasks[nid].version)
+            # #7: stamp the spec hash so a later resume can detect a changed
+            # spec and re-run, while an unchanged one is reused. Same module
+            # resolver as the skip check, so the spec path matches.
+            mfn = self._module_for(nid)
+            self.workspace.journal_mark(
+                nid, self.tasks[nid].version,
+                self.workspace.spec_hash(f"specs/{mfn}.md"))
         # П2: one wave per committed node — the restartable trail. A leaf is
         # the unit a resume can skip; a branch commit marks its subtree closed.
         self._wave([{"kind": "node_commit", "node": nid, "verdict": verdict,
@@ -2079,7 +2113,22 @@ class Engine:
             code_rel, test_rel = f"src/{fn}.py", f"tests/test_{fn}.py"
             # C4 resume: the journal says this leaf finished and its artifact
             # survived the restart — reuse it, do not re-run the implementer.
+            # #7: but only if its SPEC is unchanged — a spec edit since the
+            # journal entry means the cached artifact is stale → re-run.
+            spec_unchanged = True
+            if self.resume and nid in self._journal_index:
+                prev = self._journal_index[nid].get("spec_hash", "")
+                cur = self.workspace.spec_hash(f"specs/{fn}.md")
+                # only invalidate when BOTH hashes are known and differ; an
+                # empty stored hash (old journal) keeps legacy reuse behavior
+                if prev and cur and prev != cur:
+                    spec_unchanged = False
+                    self.emit("implement", "implementer", "spec-implement",
+                              f"{nid}:impl", "spec changed since journal — "
+                              "re-running (cache miss)", "", "", "",
+                              level=L_MILESTONE)
             persisted = (self.resume and nid in self._journal_done
+                         and spec_unchanged
                          and self.workspace.enabled and self.workspace.root
                          and (Path(self.workspace.root) / code_rel).is_file())
             if persisted:
