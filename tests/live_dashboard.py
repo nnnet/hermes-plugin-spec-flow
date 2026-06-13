@@ -829,14 +829,30 @@ def _hitl_state(run_dir: "pathlib.Path | None") -> dict:
     asks, answered = [], []
     qmd = hitl / "questions.md"
     if qmd.exists():
+        # Block format: a '## [time] role @ node' header, then the question
+        # body lines, then optional '**answer ...**' lines. Parse into
+        # structured asks {header, body, answer, answered} so the dashboard
+        # shows the actual question text, not just the header.
+        cur = None
         for line in qmd.read_text(encoding="utf-8", errors="ignore").splitlines():
-            s = line.strip()
-            if not s:
-                continue
-            if s.startswith("**answer"):
-                answered.append(s)
-            elif s.startswith("##") or "asks:" in s or "[HITL?]" in s:
-                asks.append(s.lstrip("# ").strip())
+            s = line.rstrip()
+            st = s.strip()
+            if st.startswith("##") or "asks:" in st or "[HITL?]" in st:
+                if cur:
+                    asks.append(cur)
+                cur = {"header": st.lstrip("# ").strip(),
+                       "body": "", "answer": "", "answered": False}
+            elif st.startswith("**answer"):
+                answered.append(st)
+                if cur is not None:
+                    cur["answer"] = (cur["answer"] + "\n" + st).strip()
+                    # an auto/routing boilerplate reply is not a real answer
+                    cur["answered"] = "auto/routing" not in st and "(none" not in st
+            elif st:
+                if cur is not None:
+                    cur["body"] = (cur["body"] + "\n" + st).strip()
+        if cur:
+            asks.append(cur)
     ans = hitl / "answer.md"
     pending = ans.exists() and bool(ans.read_text(encoding="utf-8",
                                                   errors="ignore").strip())
@@ -1386,8 +1402,19 @@ function hitlHTML(){
  h+='<div class='+(HITL.pending?'errbox':'fixbox')+'>'+
   (HITL.pending?'⏳ <b>ответ записан, воркер ещё не забрал</b> (answer.md ждёт потребления)'
    :'✓ <b>нет неотправленного ответа</b> — можно отвечать на новый вопрос')+'</div>';
- h+='<h4>Вопросы воркеров (worker → человек)</h4>';
- h+= asks.length? '<ol class="feed full">'+asks.map(a=>`<li>${esc(a)}</li>`).join('')+'</ol>'
+ const open=asks.filter(a=>a&&typeof a==='object'&&!a.answered).length;
+ h+='<h4>Вопросы воркеров (worker → человек)'+(open?' — <span style="color:#c0392b">без ответа: '+open+'</span>':'')+'</h4>';
+ const askItem=a=>{
+   if(typeof a==='string')return `<li>${esc(a)}</li>`;
+   const cls=a.answered?'fixbox':'errbox';
+   let s=`<li class="${cls}" style="margin:6px 0;padding:6px 8px;border-radius:4px">`+
+     `<div><b>${esc(a.header||'')}</b></div>`+
+     `<div style="white-space:pre-wrap;margin:4px 0">${esc(a.body||'')}</div>`;
+   if(a.answer)s+=`<div class=dim style="white-space:pre-wrap;border-left:2px solid #888;padding-left:6px">${esc(a.answer)}</div>`;
+   else s+=`<div style="color:#c0392b">⏳ без ответа</div>`;
+   return s+'</li>';
+ };
+ h+= asks.length? '<ul class="feed full" style="list-style:none;padding-left:0">'+asks.map(askItem).join('')+'</ul>'
    : '<p class=dim>пока вопросов нет</p>';
  // human → worker: answer box
  h+='<h4>Ответить воркеру (человек → worker)</h4>'+
