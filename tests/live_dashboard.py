@@ -694,6 +694,10 @@ h2{color:#58a6ff;border-bottom:1px solid #21262d;padding-bottom:4px}h3,h4{color:
 table{border-collapse:collapse;width:100%;margin:8px 0;font-size:12px}
 th,td{border:1px solid #30363d;padding:4px 7px;text-align:left;vertical-align:top}
 th{background:#161b22}tr:nth-child(even) td{background:#0f141a}
+/* compare tab: only the data BODY scrolls; header stays pinned */
+.cmpscroll{max-height:calc(100vh - 230px);overflow:auto;border:1px solid #21262d;border-radius:6px}
+.cmpscroll table{margin:0}
+.cmpscroll thead th{position:sticky;top:0;z-index:2}
 code{background:#161b22;padding:1px 5px;border-radius:4px;color:#ffa657}
 pre.code{background:#161b22;padding:10px;border-radius:6px;overflow:auto;white-space:pre-wrap}
 .feed{padding-left:38px;max-height:150px;overflow:auto}.feed.full{max-height:none;overflow:visible}.feed li{margin:1px 0}
@@ -859,12 +863,14 @@ function compareHTML(){
  h+='<div style="margin:8px 0"><label>кейс: <select id=cmpcase>'+opts+'</select></label> '+
   '<span class="tab" id=cmpreload style="margin-left:8px">↻ обновить</span> '+
   '<span class=dim>'+rows.length+' прогон(ов)</span></div>';
- h+='<table class=cmp><thead><tr>'+CMP_COLS.map(([k,t])=>
+ // only the table BODY scrolls: the filter row + header stay put, the
+ // data area gets its own scroll box sized to the remaining pane height
+ h+='<div class=cmpscroll><table class=cmp><thead><tr>'+CMP_COLS.map(([k,t])=>
   `<th data-sort="${k}" style="cursor:pointer">${t}${CMP_SORT===k?(CMP_DESC?' ▾':' ▴'):''}</th>`).join('')+'</tr></thead><tbody>';
  rows.forEach(r=>{h+='<tr>'+CMP_COLS.map(([k])=>{
   let v=r[k];if(typeof v==='boolean')v=v?'<b style="color:#f85149">RED</b>':'—';
   return `<td>${v===undefined?'':v}</td>`;}).join('')+'</tr>';});
- h+='</tbody></table>';
+ h+='</tbody></table></div>';
  return h;
 }
 
