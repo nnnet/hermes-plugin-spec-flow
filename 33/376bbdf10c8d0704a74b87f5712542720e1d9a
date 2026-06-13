@@ -1,0 +1,21 @@
+tests/phase_overlap.py
+  s_a7f45290e91181::t_07d27cefa2d5ed 1-184
+tests/test_phase_overlap.py
+  s_a7f45290e91181::t_4239afd36593de 1-83
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "33376bbdf10c8d0704a74b87f5712542720e1d9a",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
