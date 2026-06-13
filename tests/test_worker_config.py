@@ -157,7 +157,7 @@ def test_chain_attempts_each_spend_budget(monkeypatch):
     monkeypatch.setattr(lb, "_ask_openai", exhausted)
     monkeypatch.setattr(
         lb, "_ask_claude",
-        lambda prompt, model, system=None, direct=False: "ok")
+        lambda prompt, model, system=None, direct=False, timeout=None: "ok")
     lb.configure_workers({"budget": 10})
     lb.ask("q", model="openrouter/a:free", fallbacks=["claude/haiku"])
     monkeypatch.setattr(lb, "_free_down_until", 0.0)
@@ -198,7 +198,7 @@ def test_chain_absorbs_plain_provider_failure(monkeypatch):
     monkeypatch.setattr(lb, "_ask_openai", broken)
     monkeypatch.setattr(
         lb, "_ask_claude",
-        lambda prompt, model, system=None, direct=False: "fallback answer")
+        lambda prompt, model, system=None, direct=False, timeout=None: "fallback answer")
     out = lb.ask("q", model="openrouter/a:free", fallbacks=["claude/haiku"])
     assert out == "fallback answer"
 
@@ -284,23 +284,90 @@ def test_terminal_fallback_only_on_last_round(monkeypatch):
                                          "model_prefix": "openrouter/",
                                          "require_suffix": ":free"}]})
     monkeypatch.setattr(lb, "FALLBACK_MODEL", "haiku")
-    claude_calls = {"n": 0}
+    fb_calls = {"n": 0}
 
-    def dead_chain(prompt, m, system, fallback=False):
+    def router(prompt, m, system, fallback=False, timeout=None):
+        # the terminal fallback rotation calls _ask_one with fallback=True
+        if fallback:
+            fb_calls["n"] += 1
         raise lb.QuotaExhausted("429")
 
-    def fake_claude(prompt, model, system=None, direct=False, timeout=None):
-        claude_calls["n"] += 1
-        raise RuntimeError("weekly cap")
-
-    monkeypatch.setattr(lb, "_ask_one", dead_chain)
-    monkeypatch.setattr(lb, "_ask_claude", fake_claude)
+    monkeypatch.setattr(lb, "_ask_one", router)
     try:
         import pytest as _pt
         with _pt.raises((lb.QuotaExhausted, RuntimeError)):
             lb.ask("q", model="openrouter/a:free")
-        # 3 rounds (1 + 2 retries), claude attempted on the LAST one only
-        assert claude_calls["n"] == 1, \
-            f"claude must run once (last round), saw {claude_calls['n']}"
+        # 3 rounds (1 + 2 retries), the fallback rotation runs on the
+        # LAST round only — sparing the capped provider on earlier rounds
+        assert fb_calls["n"] == 1, \
+            f"fallback must run once (last round), saw {fb_calls['n']}"
     finally:
         lb.configure_workers(None)
+
+
+def test_fallback_rotation_cycles_across_providers(monkeypatch):
+    # user ask: on exhaustion, ROTATE through providers (claude/haiku ->
+    # openrouter_custom -> ...) instead of dying on one terminal model
+    lb.configure_workers({
+        "quota_wait_s": 0.001, "quota_retries": 0, "quota_wait_jitter": 0,
+        "fallback_models": ["claude/haiku", "openrouter_custom/sonnet"],
+        "providers": [{"name": "openrouter-free", "kind": "openai",
+                       "model_prefix": "openrouter/",
+                       "require_suffix": ":free"}]})
+    tried = []
+
+    def router(prompt, m, system, fallback=False, timeout=None):
+        if fallback:
+            tried.append(m)
+            if m == "openrouter_custom/sonnet":
+                return "answered by the second provider"
+            raise lb.QuotaExhausted("haiku capped")
+        raise lb.QuotaExhausted("free pool out")
+
+    monkeypatch.setattr(lb, "_ask_one", router)
+    try:
+        out = lb.ask("q", model="openrouter/a:free")
+        assert out == "answered by the second provider"
+        # first provider tried and capped, rolled to the second
+        assert tried == ["claude/haiku", "openrouter_custom/sonnet"]
+    finally:
+        lb.configure_workers(None)
+
+
+def test_fallback_rotation_start_advances_each_round(monkeypatch):
+    # a capped provider must not be retried FIRST every round — the
+    # rotation start advances so the other provider leads next time
+    lb.configure_workers({
+        "quota_wait_s": 0.001, "quota_retries": 1, "quota_wait_jitter": 0,
+        "fallback_models": ["claude/haiku", "openrouter_custom/sonnet"],
+        "providers": [{"name": "openrouter-free", "kind": "openai",
+                       "model_prefix": "openrouter/",
+                       "require_suffix": ":free"}]})
+    order = []
+
+    def router(prompt, m, system, fallback=False, timeout=None):
+        if fallback:
+            order.append(m)
+        raise lb.QuotaExhausted("all capped")
+
+    monkeypatch.setattr(lb, "_ask_one", router)
+    try:
+        import pytest as _pt
+        with _pt.raises((lb.QuotaExhausted, RuntimeError)):
+            lb.ask("q", model="openrouter/a:free")
+        # rounds=2 -> last round attempt=1, start = 1 % 2 = 1: the lead
+        # ADVANCES to the second provider rather than always retrying the
+        # capped first one; then it wraps to cover both
+        assert order == ["openrouter_custom/sonnet", "claude/haiku"]
+    finally:
+        lb.configure_workers(None)
+
+
+def test_jitter_spreads_the_wait(monkeypatch):
+    # thundering-herd guard: the wait is NOT a fixed value when jitter on
+    cfg = {"quota_wait_jitter": 0.2}
+    seen = {lb._jittered(100.0, cfg) for _ in range(20)}
+    assert len(seen) > 1, "jitter must vary the wait"
+    assert all(80 <= v <= 120 for v in seen), "jitter stays within +/-20%"
+    # jitter 0 is deterministic (tests rely on this)
+    assert lb._jittered(100.0, {"quota_wait_jitter": 0}) == 100.0

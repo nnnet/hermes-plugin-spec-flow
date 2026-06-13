@@ -303,6 +303,15 @@ workers:
   # fallback): up to 11 retries x 300s covers the nightly free reset
   quota_wait_s: 300
   quota_retries: 11
+  # jitter spreads concurrent workers' retries so they don't hammer the
+  # 8/min window in lockstep (thundering herd seen in v20)
+  quota_wait_jitter: 0.25
+  # terminal-fallback ROTATION across providers: when one is capped the
+  # call rolls to the next instead of dying. Free-models policy holds —
+  # only the subscription haiku as last resort here; a case may add more
+  # providers (e.g. openrouter_custom) to this rotation.
+  fallback_models:
+    - claude/haiku
   providers:
     - name: openrouter-free
       kind: openai

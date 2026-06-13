@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import re
 import subprocess
 import threading
@@ -180,7 +181,7 @@ class QuotaExhausted(RuntimeError):
 
 
 def _ask_one(prompt: str, model: str, system: str | None,
-             fallback: bool) -> str:
+             fallback: bool, timeout: int | None = None) -> str:
     """Route ONE model of a chain to its provider; QuotaExhausted bubbles
     up so the caller can walk the rest of the chain."""
     global _free_down_until
@@ -191,7 +192,8 @@ def _ask_one(prompt: str, model: str, system: str | None,
         cli_model = model.split("/", 1)[1]
         last_call.update(backend="claude", model=cli_model,
                          fallback=fallback)
-        return _ask_claude(prompt, cli_model, system=system, direct=True)
+        return _ask_claude(prompt, cli_model, system=system, direct=True,
+                           timeout=timeout)
     if BACKEND != "openai":
         last_call.update(backend="claude", model=model, fallback=fallback)
         return _ask_claude(prompt, model, system=system)
@@ -229,14 +231,24 @@ def ask(prompt: str, *, model: str, system: str | None = None,
     # workers block — the single source of worker behaviour
     wait_s = float(cfg.get("quota_wait_s", 300))
     rounds = 1 + int(cfg.get("quota_retries", 0))
+    # terminal fallbacks form a ROTATION across providers: when one is
+    # capped (claude/haiku weekly limit) the call rolls to the NEXT
+    # provider instead of dying — a different provider may answer the
+    # very same request. Default keeps the legacy single haiku fallback.
+    rotation = _fallback_rotation(cfg, chain)
     last_exc: Exception | None = None
     for attempt in range(rounds):
         if attempt:
             from . import llm_log
+            # jitter breaks the THUNDERING HERD: with concurrency>1 every
+            # worker hits the 8/min wall at once, sleeps the same wait_s,
+            # and wakes together to hit it again — a random spread lets
+            # them retry staggered so some get through each minute
+            slept = _jittered(wait_s, cfg)
             llm_log.log({"event": "quota_wait", "attempt": attempt,
-                         "wait_s": wait_s,
+                         "wait_s": round(slept, 1),
                          "detail": str(last_exc)[:160]})
-            time.sleep(wait_s)
+            time.sleep(slept)
         for i, m in enumerate(chain):
             _spend_call()
             try:
@@ -251,26 +263,54 @@ def ask(prompt: str, *, model: str, system: str | None = None,
                 # config errors (ValueError: paid gate, unknown
                 # provider) abort the call
                 last_exc = exc
-        # the terminal claude fallback is the LAST resort (free-models
-        # policy: haiku/subscription only when the free pool is truly
-        # down). Try it only on the FINAL round — earlier rounds prefer
-        # to wait and re-try the healthy free chain, sparing the weekly
-        # subscription cap that already killed v18
-        last_round = attempt == rounds - 1
-        if (last_round and FALLBACK_MODEL
-                and not any(m.startswith("claude/") for m in chain)):
-            _spend_call()
-            last_call.update(backend="claude", model=FALLBACK_MODEL,
-                             fallback=True)
-            try:
-                # short leash: a hung CLI must not burn the full 300s
-                return _ask_claude(prompt, FALLBACK_MODEL, system=system,
-                                   direct=True,
-                                   timeout=int(cfg.get("fallback_timeout_s",
-                                                       90)))
-            except (RuntimeError, subprocess.SubprocessError) as exc:
-                last_exc = exc
+        # terminal-fallback ROTATION is the LAST resort (free-models
+        # policy: subscription/extra providers only when the free pool
+        # is truly down). Try it only on the FINAL round — earlier
+        # rounds prefer to wait and re-try the healthy free chain. The
+        # rotation start advances each round so a capped provider is not
+        # retried first every time (claude weekly cap killed v18).
+        if rotation and attempt == rounds - 1:
+            start = attempt % len(rotation)
+            order = rotation[start:] + rotation[:start]
+            leash = int(cfg.get("fallback_timeout_s", 90))
+            for fb in order:
+                _spend_call()
+                try:
+                    # short leash: a hung CLI fallback must not burn the
+                    # full 300s before the rotation rolls to the next one
+                    return _ask_one(prompt, fb, system, fallback=True,
+                                    timeout=leash)
+                except (QuotaExhausted, RuntimeError,
+                        subprocess.SubprocessError) as exc:
+                    last_exc = exc
     raise last_exc or QuotaExhausted("no model in the chain answered")
+
+
+def _fallback_rotation(cfg: dict, chain: list[str]) -> list[str]:
+    """Ordered list of terminal fallback models spanning providers.
+    `workers.fallback_models` is the explicit cross-provider rotation;
+    legacy default is the single subscription model (FALLBACK_MODEL).
+    A model already in the role chain is dropped (no point retrying it
+    as a fallback)."""
+    explicit = cfg.get("fallback_models")
+    if explicit:
+        rot = [str(m) for m in explicit]
+    elif FALLBACK_MODEL:
+        rot = [f"claude/{FALLBACK_MODEL}"
+               if not FALLBACK_MODEL.startswith("claude/")
+               else FALLBACK_MODEL]
+    else:
+        rot = []
+    return [m for m in rot if m not in chain]
+
+
+def _jittered(wait_s: float, cfg: dict) -> float:
+    """wait_s plus a random spread (default ±20%) so concurrent workers
+    do not wake in lockstep. Jitter 0 → deterministic (tests)."""
+    frac = float(cfg.get("quota_wait_jitter", 0.2))
+    if frac <= 0:
+        return wait_s
+    return wait_s * (1.0 + random.uniform(-frac, frac))
 
 
 # ── claude CLI (fallback; gateway via ANTHROPIC_BASE_URL env) ────────────────
