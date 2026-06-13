@@ -105,11 +105,12 @@ def _with_language(system: str) -> str:
     return system + _LANG_DIRECTIVE.format(lang=worker_language())
 
 
-def _model_for(role: str) -> str:
+def _model_for(role: str, specialty: str = "") -> str:
     # delegates to the shared per-role resolver: the case YAML `workers:`
     # block is the single source of truth when present (env vars apply only
-    # without it); paid models stay forbidden — llm_backend gates ':free'
-    return llm_backend.model_for(role)
+    # without it); paid models stay forbidden — llm_backend gates ':free'.
+    # #10: a node's specialty routes the role to a specialty-specific chain.
+    return llm_backend.model_for(role, specialty)
 
 
 def _chat_only() -> bool:
@@ -156,13 +157,14 @@ def _granular_commit(ws_root: str, fn: str, stage: str) -> None:
 
 def _call_model(prompt: str, *, system: str, allowed: list[str],
                 disallowed: list[str], cwd: Optional[str], model: str,
-                role: Optional[str] = None) -> str:
+                role: Optional[str] = None, specialty: str = "") -> str:
     """ONE door to the model for every role worker (free-pool rule lives in
     llm_backend). ``role`` resolves the case-configured model CHAIN — the
-    tail entries answer when the primary's quota is exhausted. The
+    tail entries answer when the primary's quota is exhausted. #10: a node's
+    ``specialty`` routes the role to a specialty-specific chain. The
     claude-CLI path keeps the real tool-policy flags."""
     if _chat_only():
-        fallbacks = llm_backend.chain_for(role)[1:] if role else ()
+        fallbacks = llm_backend.chain_for(role, specialty)[1:] if role else ()
         if fallbacks:
             return llm_backend.ask(prompt, model=model, system=system,
                                    fallbacks=fallbacks, role=role or "")
@@ -248,15 +250,18 @@ output as specified above."""
 
 def _dialog_round(prompt: str, *, role: str, node: str, system: str,
                   allowed: list[str], disallowed: list[str],
-                  cwd: Optional[str], model: str, channel: Any) -> str:
+                  cwd: Optional[str], model: str, channel: Any,
+                  specialty: str = "") -> str:
     """One worker session + at most one human Q&A round.
 
     A reply consisting of {"question": ...} pauses the work, asks the human
     through the channel and re-runs the session with the answer appended.
     No channel / no answer → the worker is told to proceed on its own
-    judgement and state its assumption."""
+    judgement and state its assumption. #10: ``specialty`` routes the call's
+    fallback chain to a specialty-specific one."""
     raw = _call_model(prompt, system=system, allowed=allowed,
-                      disallowed=disallowed, cwd=cwd, model=model, role=role)
+                      disallowed=disallowed, cwd=cwd, model=model, role=role,
+                      specialty=specialty)
     try:
         probe = _extract_json(raw)
     except ValueError:
@@ -279,7 +284,8 @@ def _dialog_round(prompt: str, *, role: str, node: str, system: str,
                     "judgement, STATE the assumption you made, and produce "
                     "the normal output now (no more questions).")
     return _call_model(followup, role=role, system=system, allowed=allowed,
-                       disallowed=disallowed, cwd=cwd, model=model)
+                       disallowed=disallowed, cwd=cwd, model=model,
+                       specialty=specialty)
 
 
 def _handle_operator_reply(out: dict, *, role: str, node: str,
@@ -743,6 +749,9 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         return out
 
     def _implement_claude(ctx: dict, ws_root: str, nid: str, fn: str) -> Any:
+        # #10: a node's specialty routes the implementer to a specialty model
+        specialty = str(ctx.get("specialty", "") or "")
+        model = _model_for("implementer", specialty)
         prompt = _IMPLEMENT_TASK.format(title=ctx["title"], id=nid,
                                         spec=ctx["spec"], fn=fn) \
             + memory.recall_block_for("implementer", ctx["title"]) \
@@ -753,7 +762,8 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         _log_call_start("implementer", nid, int(ctx.get("depth", -1)), model)
         raw = _dialog_round(prompt, role="implementer", node=nid, system=system,
                             allowed=allowed, disallowed=disallowed,
-                            cwd=ws_root, model=model, channel=channel)
+                            cwd=ws_root, model=model, channel=channel,
+                            specialty=specialty)
         try:
             _handle_operator_reply(_extract_json(raw), role="implementer",
                                    node=nid, note=note, channel=channel)
@@ -771,6 +781,9 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         """Chat-only implementer: the model returns the files, the harness
         writes them and runs pytest for REAL; one repair round on failure."""
         ws = ctx["workspace"]
+        # #10: a node's specialty routes the implementer to a specialty model
+        specialty = str(ctx.get("specialty", "") or "")
+        model = _model_for("implementer", specialty)
         spec_body = _inline_file(ws_root, ctx["spec"])
         prompt = _IMPLEMENT_CHAT_TASK.format(
             title=ctx["title"], id=nid, spec=ctx["spec"],
@@ -870,7 +883,8 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
                                                  src=cur_src, test=cur_test))
             raw2 = _call_model(repair, system=system, allowed=allowed,
                                disallowed=disallowed, cwd=ws_root,
-                               model=model, role="implementer")
+                               model=model, role="implementer",
+                               specialty=specialty)
             with ws_tx.transaction(ws_root, f"leaf:{nid}",
                                    "repair write+bar"):
                 if _apply_diff_repair(ws, ws_root, fn, raw2):

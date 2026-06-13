@@ -177,12 +177,23 @@ def _provider_for(model: str) -> dict | None:
         + ", ".join(str(p.get("name")) for p in provs))
 
 
-def chain_for(role: str) -> list[str]:
+def chain_for(role: str, specialty: str = "") -> list[str]:
     """Ordered model chain for a role: primary first, quota fallbacks after.
-    Every entry is validated against the provider registry."""
+    Every entry is validated against the provider registry.
+
+    #10 (П13): when ``specialty`` is given and the role declares a chain for
+    it under ``specialties.<name>``, that chain wins — a domain-specific node
+    (frontend / db / api) routes to a better-fit model. Falls back to the
+    role's normal chain when the specialty is unknown."""
     role_cfg = WORKERS_CFG.get(role) or {}
     defaults = WORKERS_CFG.get("defaults") or {}
-    chain = (role_cfg.get("models")
+    spec_chain = None
+    if specialty:
+        spec_cfg = (role_cfg.get("specialties") or {}).get(specialty) or {}
+        spec_chain = (spec_cfg.get("models")
+                      or ([spec_cfg["model"]] if spec_cfg.get("model") else None))
+    chain = (spec_chain
+             or role_cfg.get("models")
              or ([role_cfg["model"]] if role_cfg.get("model") else None)
              or defaults.get("models")
              or ([defaults["model"]] if defaults.get("model") else None))
@@ -196,9 +207,10 @@ def chain_for(role: str) -> list[str]:
     return list(chain)
 
 
-def model_for(role: str) -> str:
-    """The role's primary model (head of the chain) — for logs and meta."""
-    return chain_for(role)[0]
+def model_for(role: str, specialty: str = "") -> str:
+    """The role's primary model (head of the chain) — for logs and meta.
+    #10: a specialty routes to its own chain head when configured."""
+    return chain_for(role, specialty)[0]
 
 
 class QuotaExhausted(RuntimeError):

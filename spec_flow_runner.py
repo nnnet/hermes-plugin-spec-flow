@@ -910,6 +910,11 @@ class Engine:
         # #8: auto-spike thresholds (0 = off) — set in run() from the project
         self._spike_open = 0
         self._spike_loc = 0
+        # #10: specialty routing — project meta, the implementer's declared
+        # specialties, and the auto-infer switch; set in run()
+        self._project_meta: dict = {}
+        self._impl_specialties: set = set()
+        self._auto_specialty = False
         # П1: set True when a run ends via a cooperative STOP (partial result)
         self._stopped = False
         self.agents = {**DEFAULT_AGENTS, **(agents or {})}
@@ -1198,6 +1203,14 @@ class Engine:
         _spk = project.get("auto_spike") or {}
         self._spike_open = int(_spk.get("open_decisions", 0) or 0)
         self._spike_loc = int(_spk.get("estimated_loc", 0) or 0)
+        # #10: specialty routing — the project dict (carries default_specialty)
+        # + the auto-infer switch. The set of declared specialties stays empty
+        # here (allow any): chain_for() falls back to the role chain for a
+        # specialty it doesn't define, so restricting is unnecessary and avoids
+        # a runner→harness dependency.
+        self._project_meta = project
+        self._auto_specialty = bool(project.get("auto_specialty"))
+        self._impl_specialties = set()
         if self._isolation == "worktree":
             self.workspace.git_provenance = True
         try:
@@ -1678,6 +1691,20 @@ class Engine:
             if (root / rel).is_file():
                 out.append(rel)
         return sorted(set(out))
+
+    def _resolve_specialty(self, node: dict) -> str:
+        """#10: the node's specialty — explicit on the node, else the project
+        default, else auto-inferred — restricted to specialties the
+        implementer role actually declares. '' when none applies."""
+        try:
+            from tests.harness import specialty as _sp
+        except Exception:  # noqa: BLE001
+            try:
+                from harness import specialty as _sp  # type: ignore
+            except Exception:  # noqa: BLE001
+                return ""
+        return _sp.resolve_specialty(node, self._project_meta,
+                                     self._impl_specialties, self._auto_specialty)
 
     def _has_sibling_deps(self, kids: list) -> bool:
         """True when some child declares a depends_on on ANOTHER sibling —
@@ -2172,6 +2199,12 @@ class Engine:
                         # module — the worker must write THIS file, not
                         # recompute its own name from the node id
                         "module": fn}
+                # #10: resolve the node's specialty (explicit → project
+                # default → auto-inferred) so the implementer routes to the
+                # matching model chain
+                sp = self._resolve_specialty(node)
+                if sp:
+                    ictx["specialty"] = sp
                 if self._leaf_seconds:
                     ictx["deadline"] = time.time() + self._leaf_seconds
                 try:
