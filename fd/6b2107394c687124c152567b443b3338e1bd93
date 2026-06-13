@@ -1,0 +1,23 @@
+tests/test_contract_from_smoke.py
+  s_a7f45290e91181::t_bffb8372d3fcfa 1-80
+tests/harness/contract_from_smoke.py
+  s_a7f45290e91181::t_0b44e8dbc09ddf 1-128
+spec_flow_runner.py
+  s_a7f45290e91181::t_d394dda7c18f8d 2283-2307,2315
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "fd6b2107394c687124c152567b443b3338e1bd93",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
