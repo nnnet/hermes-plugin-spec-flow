@@ -1,0 +1,20 @@
+tests/scenarios/p4_b2b_marketplace.yaml
+  s_a7f45290e91181::t_481a62ea23dd49 259-265
+  s_a7f45290e91181::t_b4232ac8ceabdf 385-388
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "31802cd2daad7c6b89a18b70d8932841ab19c1e1",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "nvidia/nemotron-3-super-120b-a12b-20230311:free"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
