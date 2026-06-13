@@ -208,3 +208,49 @@ def test_paid_gate_error_still_aborts_the_chain(monkeypatch):
     monkeypatch.setattr(lb, "_free_down_until", 0.0)
     with pytest.raises(ValueError, match="forbidden"):
         lb.ask("q", model="openrouter/gpt-4o", fallbacks=["claude/haiku"])
+
+
+def test_exhausted_chain_waits_then_recovers(monkeypatch):
+    # v18 death class: free pool out + terminal fallback capped killed
+    # the RUN. With quota_retries the chain sleeps and tries again.
+    lb.configure_workers({"quota_wait_s": 0.01, "quota_retries": 2,
+                          "providers": [{"name": "openrouter-free",
+                                         "kind": "openai",
+                                         "model_prefix": "openrouter/",
+                                         "require_suffix": ":free"}]})
+    monkeypatch.setattr(lb, "FALLBACK_MODEL", None)
+    calls = {"n": 0}
+
+    def flaky(prompt, m, system, fallback=False):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise lb.QuotaExhausted("429")
+        return "recovered"
+
+    monkeypatch.setattr(lb, "_ask_one", flaky)
+    try:
+        assert lb.ask("q", model="openrouter/a:free",
+                      fallbacks=["openrouter/b:free"]) == "recovered"
+        assert calls["n"] == 3, "two failures absorbed by one wait round"
+    finally:
+        lb.configure_workers(None)
+
+
+def test_exhausted_chain_raises_without_optin(monkeypatch):
+    # default stays fail-fast: tests and ad-hoc calls never sleep
+    lb.configure_workers({"providers": [{"name": "openrouter-free",
+                                         "kind": "openai",
+                                         "model_prefix": "openrouter/",
+                                         "require_suffix": ":free"}]})
+    monkeypatch.setattr(lb, "FALLBACK_MODEL", None)
+
+    def dead(prompt, m, system, fallback=False):
+        raise lb.QuotaExhausted("429")
+
+    monkeypatch.setattr(lb, "_ask_one", dead)
+    try:
+        import pytest as _pt
+        with _pt.raises(lb.QuotaExhausted):
+            lb.ask("q", model="openrouter/a:free")
+    finally:
+        lb.configure_workers(None)

@@ -298,6 +298,11 @@ seed_files:
 # the reviewer model differs from the implementer model (defaults).
 workers:
   concurrency: 3
+  # an exhausted chain WAITS for quota instead of dying (v18 died when
+  # the free pool ran out and the claude weekly cap hit the terminal
+  # fallback): up to 11 retries x 300s covers the nightly free reset
+  quota_wait_s: 300
+  quota_retries: 11
   providers:
     - name: openrouter-free
       kind: openai

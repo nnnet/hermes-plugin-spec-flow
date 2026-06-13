@@ -220,26 +220,47 @@ def ask(prompt: str, *, model: str, system: str | None = None,
     terminal fallback (subscription CLI, FALLBACK_MODEL) still applies
     unless the chain already contains a 'claude/' entry."""
     chain = [model, *fallbacks]
-    last_exc: Exception | None = None
     gate = _concurrency_gate()
-    for i, m in enumerate(chain):
-        _spend_call()
-        try:
-            if gate is not None:
-                with gate:
-                    return _ask_one(prompt, m, system, fallback=i > 0)
-            return _ask_one(prompt, m, system, fallback=i > 0)
-        except (QuotaExhausted, RuntimeError) as exc:
-            # the chain exists to absorb PROVIDER failure of any kind —
-            # quota, throttling, a dead endpoint; only config errors
-            # (ValueError: paid gate, unknown provider) abort the call
-            last_exc = exc
-    if FALLBACK_MODEL and not any(m.startswith("claude/") for m in chain):
-        _spend_call()
-        last_call.update(backend="claude", model=FALLBACK_MODEL,
-                         fallback=True)
-        return _ask_claude(prompt, FALLBACK_MODEL, system=system,
-                           direct=True)
+    cfg = WORKERS_CFG or {}
+    # exhausted chain = WAIT, not death: a burst of 429s (8/min window)
+    # or the nightly free-pool reset is hours away at most — a paused
+    # run beats a dead one (v18 died exactly here)
+    # off by default (tests, ad-hoc calls); a CASE opts in via its
+    # workers block — the single source of worker behaviour
+    wait_s = float(cfg.get("quota_wait_s", 300))
+    rounds = 1 + int(cfg.get("quota_retries", 0))
+    last_exc: Exception | None = None
+    for attempt in range(rounds):
+        if attempt:
+            from . import llm_log
+            llm_log.log({"event": "quota_wait", "attempt": attempt,
+                         "wait_s": wait_s,
+                         "detail": str(last_exc)[:160]})
+            time.sleep(wait_s)
+        for i, m in enumerate(chain):
+            _spend_call()
+            try:
+                if gate is not None:
+                    with gate:
+                        return _ask_one(prompt, m, system, fallback=i > 0)
+                return _ask_one(prompt, m, system, fallback=i > 0)
+            except (QuotaExhausted, RuntimeError) as exc:
+                # the chain exists to absorb PROVIDER failure of any
+                # kind — quota, throttling, a dead endpoint; only config
+                # errors (ValueError: paid gate, unknown provider) abort
+                last_exc = exc
+        if FALLBACK_MODEL and not any(m.startswith("claude/")
+                                      for m in chain):
+            _spend_call()
+            last_call.update(backend="claude", model=FALLBACK_MODEL,
+                             fallback=True)
+            try:
+                return _ask_claude(prompt, FALLBACK_MODEL, system=system,
+                                   direct=True)
+            except RuntimeError as exc:
+                # the TERMINAL fallback can be capped too (weekly
+                # subscription limit killed v18) — wait with the rest
+                last_exc = exc
     raise last_exc or QuotaExhausted("no model in the chain answered")
 
 
