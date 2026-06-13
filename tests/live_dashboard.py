@@ -844,6 +844,23 @@ const CMP_COLS=[['run','прогон'],['duration','время'],['ticks','ти�
  ['integrate_pass','интегр✓'],['integrate_red','интегрR'],
  ['quota_waits','квота'],['auto_answers','авто'],['reqs_attached','требов'],
  ['root_red','корень']];
+// short tooltips (<=2 sentences) for the abbreviated headers
+const CMP_TIPS={
+ run:'Номер прогона (vNNN). Берётся из имени каталога runs-out.',
+ duration:'Длительность от первого до последнего события трассы. «~» = прогон не финиширован (живой или оборван).',
+ ticks:'Число тиков — внутренних шагов движка в трассе. Грубая мера объёма проделанной работы.',
+ tree_nodes:'Сколько узлов в дереве спеков. У живого прогона считается из трассы (tree.json пишется только в конце).',
+ llm_calls:'Сколько раз воркеры обращались к модели (call_start). Прямая мера расхода LLM.',
+ reviews_rejected:'Сколько раз ревьюер отклонил спеку (REJECT) → доработка. Высокое число = спеки рождаются сырыми.',
+ demotions:'Бездетная ветка низведена до листа: ветка без детей прошла бы пустой-зелёной, движок заставляет её реализовать.',
+ crashes:'Сколько листьев упали с ошибкой воркера. Лист сдаётся красным, прогон продолжается.',
+ leaf_timeouts:'Сколько листьев превысили потолок времени и сданы красными. Защита от зависшего узла.',
+ integrate_pass:'Сколько интеграционных гейтов прошли зелёными (ветка собрана и проверена).',
+ integrate_red:'Сколько раз интеграция дала красный набор тестов на первой проверке (до починки).',
+ quota_waits:'Сколько раз прогон ждал сброса квоты вместо смерти. Высокое = free-пул жёстко лимитирован.',
+ auto_answers:'Сколько вопросов воркеров закрыл автоответчик по известной политике (без 5-мин ожидания человека).',
+ reqs_attached:'Сколько поздних требований движок материализовал в дерево (ATTACHED).',
+ root_red:'Корневая интеграция дала FAIL: прогон дошёл до конца, но собранный продукт НЕ зелёный.'};
 function loadCompare(){
  fetch('/api/compare').then(r=>r.json()).then(d=>{CMP=d;render();})
   .catch(()=>{CMP=[{error:'не удалось загрузить'}];render();});
@@ -866,7 +883,7 @@ function compareHTML(){
  // only the table BODY scrolls: the filter row + header stay put, the
  // data area gets its own scroll box sized to the remaining pane height
  h+='<div class=cmpscroll><table class=cmp><thead><tr>'+CMP_COLS.map(([k,t])=>
-  `<th data-sort="${k}" style="cursor:pointer">${t}${CMP_SORT===k?(CMP_DESC?' ▾':' ▴'):''}</th>`).join('')+'</tr></thead><tbody>';
+  `<th data-sort="${k}" title="${esc(CMP_TIPS[k]||'')}" style="cursor:help">${t}${CMP_SORT===k?(CMP_DESC?' ▾':' ▴'):''}</th>`).join('')+'</tr></thead><tbody>';
  rows.forEach(r=>{h+='<tr>'+CMP_COLS.map(([k])=>{
   let v=r[k];if(typeof v==='boolean')v=v?'<b style="color:#f85149">RED</b>':'—';
   return `<td>${v===undefined?'':v}</td>`;}).join('')+'</tr>';});
