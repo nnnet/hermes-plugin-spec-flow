@@ -536,6 +536,36 @@ only) and reply again with ONLY the same JSON shape:
 {{"files": {{"src/{fn}.py": "...", "tests/test_{fn}.py": "..."}}}}"""
 
 
+# Diff-based repair (#1 / П3): a SURGICAL fix instead of a whole-file rewrite.
+# The model edits the CURRENT files via SEARCH/REPLACE blocks; a search that
+# doesn't match exactly once is refused without a write, so a stale diff can
+# never clobber working code.
+_REPAIR_DIFF_TASK = """The test run FAILED. Output (tail):
+---
+{output}
+---
+Repair with the SMALLEST possible edit. Do NOT rewrite whole files — emit one
+or more SEARCH/REPLACE blocks against the CURRENT files shown below. The SEARCH
+text must be copied EXACTLY from the current file and be unique. Standard
+library only, same conventions.
+
+CURRENT src/{fn}.py:
+---
+{src}
+---
+CURRENT tests/test_{fn}.py:
+---
+{test}
+---
+Reply with ONLY diff blocks in this exact format (repeat as needed):
+FILE: src/{fn}.py
+<<<<<<< SEARCH
+<exact lines to find>
+=======
+<replacement lines>
+>>>>>>> REPLACE"""
+
+
 def _leaf_bar(ws_root: str, fn: str, baseline: int, pv) -> tuple[bool, str]:
     """The leaf's completion bar: own tests green AND the whole (non-smoke)
     suite no worse than before this leaf touched the tree."""
@@ -605,6 +635,44 @@ def _write_reply_files(ws: Any, files: dict, fn: str) -> bool:
             llm_log.log({"event": "ws_write", "writer": "implementer",
                          "node": fn, "paths": [rel]})
             wrote = True
+    return wrote
+
+
+def _apply_diff_repair(ws: Any, ws_root: str, fn: str, reply: str) -> bool:
+    """#1 / П3: apply SEARCH/REPLACE diff blocks from a repair reply to the
+    leaf's own files. Only src/<fn>.py and tests/test_<fn>.py are touchable;
+    the platform skeleton stays immutable and platform-internal content is
+    refused. Returns True if at least one block applied (a write happened)."""
+    from . import diff_repair, pytest_verifier
+    blocks = diff_repair.parse_blocks(reply)
+    if not blocks:
+        return False
+    safe = {f"src/{fn}.py": "code", f"tests/test_{fn}.py": "test"}
+    protected = pytest_verifier.protected_files()
+    allowed = {p for p in safe if p not in protected}
+
+    def _read(rel: str) -> str:
+        return _inline_file(ws_root, rel) or ""
+
+    res = diff_repair.apply_repair(_read, blocks, allowed=allowed)
+    for rel, reason in res["refused"]:
+        llm_log.log({"event": "diff_refused", "role": "implementer",
+                     "node": fn, "path": rel, "reason": reason})
+    wrote = False
+    for rel, body in res["files"].items():
+        kind = safe.get(rel)
+        if kind is None:
+            continue
+        if not pytest_verifier.content_allowed(body):
+            llm_log.log({"event": "write_refused", "role": "implementer",
+                         "node": fn, "path": rel,
+                         "reason": "touches platform internals"})
+            continue
+        ws._write(rel, body if body.endswith("\n") else body + "\n", kind)
+        llm_log.log({"event": "ws_write", "writer": "implementer-diff",
+                     "node": fn, "paths": [rel],
+                     "applied": len(res["applied"])})
+        wrote = True
     return wrote
 
 
@@ -753,22 +821,31 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
                 passed, test_out = _leaf_bar(ws_root, fn, baseline, pv)
         if wrote and not passed:
             _round_gate(2, "repair round")
+            # #1 / П3: prefer a SURGICAL diff repair (SEARCH/REPLACE against
+            # the current files) over a whole-file rewrite — fewer regressions,
+            # cheaper. Whole-file JSON stays as a back-compat fallback when the
+            # model returns no applicable diff.
+            cur_src = _inline_file(ws_root, f"src/{fn}.py") or ""
+            cur_test = _inline_file(ws_root, f"tests/test_{fn}.py") or ""
             repair = (prompt + "\n\n"
-                      + _REPAIR_TASK.format(output=test_out, fn=fn))
+                      + _REPAIR_DIFF_TASK.format(output=test_out, fn=fn,
+                                                 src=cur_src, test=cur_test))
             raw2 = _call_model(repair, system=system, allowed=allowed,
                                disallowed=disallowed, cwd=ws_root,
                                model=model, role="implementer")
-            try:
-                out2 = _extract_json(raw2)
-            except ValueError:
-                # prose instead of JSON surrenders the REPAIR round,
-                # never the run (this exact site once killed a whole
-                # live run on a Russian-prose reply)
-                out2 = {}
             with ws_tx.transaction(ws_root, f"leaf:{nid}",
                                    "repair write+bar"):
-                if _write_reply_files(ws, out2.get("files") or {}, fn):
+                if _apply_diff_repair(ws, ws_root, fn, raw2):
                     passed, test_out = _leaf_bar(ws_root, fn, baseline, pv)
+                else:
+                    # no applicable diff — fall back to whole-file JSON if the
+                    # model returned that shape instead
+                    try:
+                        out2 = _extract_json(raw2)
+                    except ValueError:
+                        out2 = {}
+                    if _write_reply_files(ws, out2.get("files") or {}, fn):
+                        passed, test_out = _leaf_bar(ws_root, fn, baseline, pv)
             raw = raw2
         if passed:
             # a GREEN leaf is worth remembering: craft for the role,
