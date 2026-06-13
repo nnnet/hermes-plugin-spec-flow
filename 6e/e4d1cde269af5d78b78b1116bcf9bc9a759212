@@ -1,0 +1,19 @@
+tests/live_dashboard.py
+  s_a7f45290e91181::t_17cf89af1cef4d 1399,1404-1406,1408,1414,1417-1459
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "6ee4d1cde269af5d78b78b1116bcf9bc9a759212",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
