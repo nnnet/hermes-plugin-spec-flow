@@ -1713,6 +1713,78 @@ class Engine:
         return any(d in ids and d != c.get("id")
                    for c in kids for d in (c.get("depends_on") or []))
 
+    def _dependency_waves(self, kids: list) -> list:
+        """Partition siblings into dependency WAVES (Kahn levels): a child is
+        in the earliest wave after all its intra-sibling dependencies. Members
+        of one wave have no dependency between them, so they run in PARALLEL;
+        a barrier between waves lets a dependent see its dependency's commits.
+        This recovers concurrency that the all-or-nothing
+        ``_has_sibling_deps`` gate threw away — an LLM decomposer declares
+        depends_on liberally (research→arch→features), which would otherwise
+        serialize the whole branch. A dependency cycle degrades to one wave
+        (run together) rather than deadlocking."""
+        ids = {c.get("id") for c in kids}
+        deps = {c.get("id"): {d for d in (c.get("depends_on") or [])
+                              if d in ids and d != c.get("id")} for c in kids}
+        done: set = set()
+        waves: list = []
+        remaining = list(kids)
+        while remaining:
+            wave = [c for c in remaining if deps[c.get("id")] <= done]
+            if not wave:                      # cycle — break it, run the rest
+                wave = remaining
+            waves.append(wave)
+            done |= {c.get("id") for c in wave}
+            wave_ids = {c.get("id") for c in wave}
+            remaining = [c for c in remaining if c.get("id") not in wave_ids]
+        return waves
+
+    def _run_child_pool(self, wave: list, depth: int, contract_ctx, phase,
+                        title: str, nid: str, ancestors: tuple) -> None:
+        """Run every node in `wave` concurrently (each its whole subtree in a
+        thread), joining before return — the barrier the caller relies on.
+        A parent that only WAITS hands its semaphore slot back so nested
+        grandchildren can't starve it into a live deadlock."""
+        errs: list = []
+
+        def _one(c):
+            try:
+                with self._parallel_sem:
+                    self._sem_state.held = True
+                    try:
+                        self._visit(c, depth + 1, contract_ctx, phase,
+                                    parent=title,
+                                    ancestors=ancestors + ((nid, title),))
+                    finally:
+                        self._sem_state.held = False
+            except Exception as exc:    # noqa: BLE001 — re-raised after join
+                errs.append(exc)
+
+        lent = getattr(self._sem_state, "held", False)
+        if lent:
+            self._sem_state.held = False
+            self._parallel_sem.release()
+        try:
+            pool, alive = list(wave), []
+            limit = self._parallel_children
+            while pool or alive:
+                while pool and len(alive) < limit:
+                    th = threading.Thread(target=_one, args=(pool.pop(0),),
+                                          daemon=True)
+                    th.start()
+                    alive.append(th)
+                for th in alive:
+                    th.join(timeout=0.05)
+                alive = [th for th in alive if th.is_alive()]
+                if errs:
+                    for th in alive:
+                        th.join()
+                    raise errs[0]
+        finally:
+            if lent:
+                self._parallel_sem.acquire()
+                self._sem_state.held = True
+
     def _dedup_children(self, node: dict, nid: str, title: str,
                         ancestors: tuple) -> None:
         """Dedup gate: prune proposed children that duplicate an existing
@@ -1913,58 +1985,23 @@ class Engine:
             kids = self._topo_order(node.get("children", []))
             if (self._parallel_children > 1
                     and depth <= self._parallel_depth_limit
-                    and len(kids) >= self._parallel_min_siblings
-                    # intra-sibling deps force sequential (topo) order — a
-                    # dependent must not start before its dependency commits
-                    and not self._has_sibling_deps(kids)):
-                # stage 1: each child's WHOLE subtree runs in its own
-                # thread; the branch integrate below is the join barrier.
+                    and len(kids) >= self._parallel_min_siblings):
+                # stage 1 + waves: each child's WHOLE subtree runs in its own
+                # thread; independent siblings run together, a barrier between
+                # dependency WAVES lets a dependent see its dependency's
+                # commits. Previously ANY intra-sibling depends_on forced the
+                # whole branch sequential — an LLM decomposer declares deps
+                # liberally, so that gate erased nearly all concurrency.
                 # Trade-off (why opt-in): parallel siblings see the node
                 # registry as of fork time, so the dedup gate is weaker.
-                errs = []
-
-                def _one(c):
-                    try:
-                        with self._parallel_sem:
-                            self._sem_state.held = True
-                            try:
-                                self._visit(c, depth + 1, child_contract_ctx,
-                                            phase, parent=title,
-                                            ancestors=ancestors + ((nid, title),))
-                            finally:
-                                self._sem_state.held = False
-                    except Exception as exc:    # noqa: BLE001 — re-raised after join
-                        errs.append(exc)
-
-                # a parent that only JOINS must not sit on a worker slot:
-                # with nested forks every slot lands at a waiting parent
-                # and the grandchildren starve (live deadlock in v16)
-                lent = getattr(self._sem_state, "held", False)
-                if lent:
-                    self._sem_state.held = False
-                    self._parallel_sem.release()
-                try:
-                    pool, alive = list(kids), []
-                    limit = self._parallel_children
-                    while pool or alive:
-                        while pool and len(alive) < limit:
-                            th = threading.Thread(target=_one,
-                                                  args=(pool.pop(0),),
-                                                  daemon=True)
-                            th.start()
-                            alive.append(th)
-                        for th in alive:
-                            th.join(timeout=0.05)
-                        alive = [th for th in alive if th.is_alive()]
-                        if errs:
-                            for th in alive:
-                                th.join()
-                            raise errs[0]
-                finally:
-                    if lent:
-                        # take a slot back BEFORE own integrate work
-                        self._parallel_sem.acquire()
-                        self._sem_state.held = True
+                for wave in self._dependency_waves(kids):
+                    if len(wave) >= 2:
+                        self._run_child_pool(wave, depth, child_contract_ctx,
+                                             phase, title, nid, ancestors)
+                    else:
+                        self._visit(wave[0], depth + 1, child_contract_ctx,
+                                    phase, parent=title,
+                                    ancestors=ancestors + ((nid, title),))
                 child_ids = [c["id"] for c in kids]
             else:
                 for child in kids:

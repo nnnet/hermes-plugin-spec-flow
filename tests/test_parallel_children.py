@@ -261,3 +261,74 @@ def test_nested_forks_do_not_deadlock_on_max_workers(tmp_path):
     for i in range(3):
         for j in range(3):
             assert f"br{i}_leaf{j}" in done, "every grandchild processed"
+
+
+# ── dependency WAVES: independent siblings still parallelize ───────────────
+
+def _project_waves(parallel=None):
+    """5 children: research → arch → {auth, catalog, orders}. The three
+    feature leaves depend on arch but NOT on each other, so they form one
+    parallel wave; research and arch are their own (serial) waves."""
+    deps = {"research": [], "arch": ["research"],
+            "auth": ["arch"], "catalog": ["arch"], "orders": ["arch"]}
+    titles = {"research": "Market research", "arch": "Architecture baseline",
+              "auth": "Accounts and access", "catalog": "Catalog and search",
+              "orders": "Orders and checkout"}
+    proj = {
+        "name": "wave-case", "goal": "wide service", "target": "x",
+        "policy": {"measurable_target": True, "spend_per_action_usd": 1,
+                   "human_in_loop": False, "involves_outreach": False,
+                   "consent_obtained": True, "legal_exposure": False,
+                   "legality_reviewed": True},
+        "tree": {"id": "L0", "title": "Root", "metrics": dict(_BRANCH),
+                 "children": [{"id": k, "title": titles[k],
+                               "metrics": dict(_LEAF), "depends_on": deps[k]}
+                              for k in ["research", "arch", "auth",
+                                        "catalog", "orders"]]},
+    }
+    if parallel:
+        proj["parallel"] = parallel
+    return proj
+
+
+def test_independent_siblings_parallelize_despite_dependencies(tmp_path):
+    # the regression this fixes: ANY depends_on used to force the whole
+    # branch sequential (peak == 1). Now only dependency WAVES serialize;
+    # the three arch-dependent-but-mutually-independent leaves overlap.
+    probe = _OverlapProbe(dwell=0.15)
+    eng.run_project(_project_waves(parallel={"children": 4}),
+                    workspace=str(tmp_path / "w"), depth="spec",
+                    agents={"reviewer": probe})
+    assert probe.peak >= 2, "independent siblings in a wave must overlap"
+    order = [n for n in probe.nodes if n in
+             ("research", "arch", "auth", "catalog", "orders")]
+    # the dependency barrier holds: arch after research, features after arch
+    assert order.index("research") < order.index("arch")
+    for f in ("auth", "catalog", "orders"):
+        assert order.index("arch") < order.index(f), \
+            "a dependent wave starts only after its dependency wave"
+
+
+def test_pure_dependency_chain_stays_serial(tmp_path):
+    # a→b→c with each depending on the previous: every wave has one member,
+    # so peak stays 1 (correctness preserved, no false parallelism)
+    chain = {
+        "name": "chain", "goal": "g", "target": "x",
+        "policy": {"measurable_target": True, "spend_per_action_usd": 1,
+                   "human_in_loop": False, "involves_outreach": False,
+                   "consent_obtained": True, "legal_exposure": False,
+                   "legality_reviewed": True},
+        "tree": {"id": "L0", "title": "Root", "metrics": dict(_BRANCH),
+                 "children": [
+                     {"id": "a", "title": "Stage alpha", "metrics": dict(_LEAF),
+                      "depends_on": []},
+                     {"id": "b", "title": "Stage beta", "metrics": dict(_LEAF),
+                      "depends_on": ["a"]},
+                     {"id": "c", "title": "Stage gamma", "metrics": dict(_LEAF),
+                      "depends_on": ["b"]}]},
+        "parallel": {"children": 3},
+    }
+    probe = _OverlapProbe(dwell=0.1)
+    eng.run_project(chain, workspace=str(tmp_path / "w"), depth="spec",
+                    agents={"reviewer": probe})
+    assert probe.peak == 1, "a pure chain must stay strictly serial"
