@@ -115,7 +115,7 @@ def test_decomposer_prompt_carries_memory_block(monkeypatch):
     mem.MANAGER = mem.MemoryManager(f, "p4-case")
     seen = {}
 
-    def fake_ask(prompt, model, system=None):
+    def fake_ask(prompt, model, system=None, **kw):
         seen["prompt"] = prompt
         return _json.dumps({"atomic": True, "metrics": dict(_LEAF),
                             "spec_markdown": "## Requirements\n- x"})
@@ -139,7 +139,7 @@ def test_green_leaf_retained_in_both_tiers(tmp_path, monkeypatch):
     (tmp_path / "specs").mkdir()
     (tmp_path / "specs" / "pay.md").write_text("spec", encoding="utf-8")
 
-    def fake_ask(prompt, model, system=None):
+    def fake_ask(prompt, model, system=None, **kw):
         return _json.dumps({"files": {
             "src/pay.py": "def ok():\n    return True\n",
             "tests/test_pay.py":

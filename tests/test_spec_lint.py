@@ -122,7 +122,7 @@ def test_rework_prompt_contains_previous_spec(monkeypatch):
     monkeypatch.setattr(lb, "BACKEND", "openai")
     seen = {}
 
-    def fake_ask(prompt, model, system=None):
+    def fake_ask(prompt, model, system=None, **kw):
         seen["prompt"] = prompt
         return _json.dumps({"atomic": True, "metrics": dict(_LEAF),
                             "spec_markdown": GOOD_MD})

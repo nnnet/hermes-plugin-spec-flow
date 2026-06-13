@@ -454,7 +454,7 @@ def test_chat_implementer_writes_files_and_runs_pytest(monkeypatch, tmp_path):
     import json as _json
     from harness import llm_backend as lb
     monkeypatch.setattr(lb, "BACKEND", "openai")
-    monkeypatch.setattr(lb, "ask", lambda prompt, model, system=None: _json.dumps(
+    monkeypatch.setattr(lb, "ask", lambda prompt, model, system=None, **kw: _json.dumps(
         {"files": {"src/adder.py": GOOD_IMPL, "tests/test_adder.py": GOOD_TEST}}))
     impl = rw.make_implementer()
     impl(_chat_ctx(tmp_path))
@@ -468,7 +468,7 @@ def test_chat_implementer_repairs_after_red_tests(monkeypatch, tmp_path):
     monkeypatch.setattr(lb, "BACKEND", "openai")
     n = {"calls": 0}
 
-    def fake_ask(prompt, model, system=None):
+    def fake_ask(prompt, model, system=None, **kw):
         n["calls"] += 1
         impl_body = BAD_IMPL if n["calls"] == 1 else GOOD_IMPL
         return _json.dumps({"files": {"src/adder.py": impl_body,
@@ -490,7 +490,7 @@ def test_chat_reviewer_inlines_spec_text(monkeypatch, tmp_path):
                                               encoding="utf-8")
     seen = {}
 
-    def fake_ask(prompt, model, system=None):
+    def fake_ask(prompt, model, system=None, **kw):
         seen["prompt"] = prompt
         return _json.dumps({"verdict": "PASS", "reasons": []})
 
@@ -549,7 +549,7 @@ def test_extract_json_survives_fences_and_leading_braces():
 def test_chat_implementer_survives_garbage_reply(monkeypatch, tmp_path):
     from harness import llm_backend as lb
     monkeypatch.setattr(lb, "BACKEND", "openai")
-    monkeypatch.setattr(lb, "ask", lambda prompt, model, system=None:
+    monkeypatch.setattr(lb, "ask", lambda prompt, model, system=None, **kw:
                         "I cannot produce JSON today {broken")
     impl = rw.make_implementer()
     assert impl(_chat_ctx(tmp_path)) is None    # surrendered, not crashed
@@ -611,7 +611,7 @@ def test_branch_decomposer_sees_standing_requirements(tmp_path, monkeypatch):
     ch = _req_channel(tmp_path)
     seen = {}
 
-    def fake_ask(prompt, model, system=None):
+    def fake_ask(prompt, model, system=None, **kw):
         seen["prompt"] = prompt
         return _json.dumps({"metrics": dict(SMALL)})
 
@@ -636,7 +636,7 @@ def test_branch_decomposer_never_attaches_requirements(
     ch = _req_channel(tmp_path)
     seen = {}
 
-    def fake_ask(prompt, model, system=None):
+    def fake_ask(prompt, model, system=None, **kw):
         seen["prompt"] = prompt
         return _json.dumps({"atomic": False, "metrics": dict(SMALL),
                             "children": [{"id": "catalog", "title": "C"}],
@@ -661,7 +661,7 @@ def test_requirement_already_in_tree_not_attached_twice(
     monkeypatch.setattr(lb, "BACKEND", "openai")
     ch = _req_channel(tmp_path)
 
-    def fake_ask(prompt, model, system=None):
+    def fake_ask(prompt, model, system=None, **kw):
         return _json.dumps({"atomic": False, "metrics": dict(SMALL),
                             "children": [{"id": "payments", "title": "P"}],
                             "spec_markdown": "## Requirements\n- x"})
@@ -686,7 +686,7 @@ def test_requirement_node_gets_full_statement_in_prompt(
     ch = _req_channel(tmp_path)
     seen = {}
 
-    def fake_ask(prompt, model, system=None):
+    def fake_ask(prompt, model, system=None, **kw):
         seen["prompt"] = prompt
         return _json.dumps({"atomic": True, "metrics": dict(SMALL),
                             "spec_markdown": "## Requirements\n- x"})
@@ -735,7 +735,7 @@ def test_leaf_bar_catches_suite_degradation(monkeypatch, tmp_path):
                                                   encoding="utf-8")
     calls = {"n": 0}
 
-    def fake_ask(prompt, model, system=None):
+    def fake_ask(prompt, model, system=None, **kw):
         calls["n"] += 1
         return _json.dumps({"files": {
             "src/shared.py": "def val():\n    return 3\n",

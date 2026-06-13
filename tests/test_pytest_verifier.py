@@ -42,7 +42,7 @@ def test_smoke_gates_only_the_root(tmp_path):
 
 def test_red_suite_triggers_repair_and_repasses(tmp_path, monkeypatch):
     root = _ws(tmp_path, {"tests/test_a.py": RED})
-    monkeypatch.setattr(lb, "ask", lambda prompt, model, system=None:
+    monkeypatch.setattr(lb, "ask", lambda prompt, model, system=None, **kw:
                         json.dumps({"files": {"tests/test_a.py": GREEN}}))
     out = pv.make_verifier(max_repair=1)({"node": "n1",
                                           "workspace_root": root})
@@ -60,7 +60,7 @@ def test_unsafe_paths_are_refused(tmp_path):
 def test_worsening_repair_is_rolled_back(tmp_path, monkeypatch):
     # the model "repair" breaks collection — the round must be undone
     root = _ws(tmp_path, {"tests/test_a.py": RED})
-    monkeypatch.setattr(lb, "ask", lambda prompt, model, system=None:
+    monkeypatch.setattr(lb, "ask", lambda prompt, model, system=None, **kw:
                         json.dumps({"files": {
                             "tests/test_a.py": "import missing_module\n"}}))
     out = pv.make_verifier(max_repair=1)({"node": "n1",

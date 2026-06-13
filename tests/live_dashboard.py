@@ -776,7 +776,42 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
         "by_node": _rollup("node")[:25],
         "by_phase": _rollup("phase"),
         "by_cause": _rollup("cause"),
+        "tokens": _token_economics(run_dir),
     }
+
+
+def _token_economics(run_dir: "pathlib.Path | None") -> dict:
+    """#6: real token spend rolled up by role+model from token_usage events
+    (the API usage field). Returns {rows: [{role, model, calls, prompt,
+    completion, total}], total}. Empty when the provider reported no usage."""
+    if run_dir is None:
+        return {"rows": [], "total": 0}
+    lf = run_dir / "llm-log.jsonl"
+    if not lf.exists():
+        return {"rows": [], "total": 0}
+    agg: dict = {}
+    grand = 0
+    for line in lf.read_text(encoding="utf-8", errors="ignore").splitlines():
+        try:
+            e = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if e.get("event") != "token_usage":
+            continue
+        key = (e.get("role") or "—", e.get("model") or "—")
+        a = agg.setdefault(key, {"calls": 0, "prompt": 0, "completion": 0})
+        pt = int(e.get("prompt_tokens", 0) or 0)
+        ct = int(e.get("completion_tokens", 0) or 0)
+        a["calls"] += 1
+        a["prompt"] += pt
+        a["completion"] += ct
+        grand += pt + ct
+    rows = [{"role": r, "model": m, "calls": v["calls"],
+             "prompt": v["prompt"], "completion": v["completion"],
+             "total": v["prompt"] + v["completion"]}
+            for (r, m), v in agg.items()]
+    rows.sort(key=lambda x: x["total"], reverse=True)
+    return {"rows": rows, "total": grand}
 
 
 def _hitl_state(run_dir: "pathlib.Path | None") -> dict:
@@ -1198,10 +1233,11 @@ const CMP_COLS=[['run','прогон'],['duration','время'],['ticks','ти�
  // normalized efficiency (size-independent) — compare runs of different power
  ['calls_per_node','LLM/узел'],['errors_per_node','ошиб/узел'],
  ['rework_per_node','реворк/узел'],['sec_per_node','сек/узел'],
- ['first_pass_rate','1й-пасс'],['quota_per_call','квота/LLM']];
+ ['first_pass_rate','1й-пасс'],['quota_per_call','квота/LLM'],
+ ['tokens_total','токенов'],['tokens_per_node','ток/узел']];
 // columns where LOWER is better (defect/cost density) vs HIGHER is better
 const CMP_LOWER=new Set(['calls_per_node','errors_per_node','rework_per_node',
- 'sec_per_node','quota_per_call']);
+ 'sec_per_node','quota_per_call','tokens_per_node']);
 const CMP_HIGHER=new Set(['first_pass_rate']);
 const CMP_NORM=new Set([...CMP_LOWER,...CMP_HIGHER]);
 // short tooltips (<=2 sentences) for the abbreviated headers
@@ -1226,7 +1262,9 @@ const CMP_TIPS={
  rework_per_node:'Доработок ревью на узел. Меньше = спеки рождаются зрелее.',
  sec_per_node:'Пропускная способность: секунд стенных часов на узел. Меньше = быстрее.',
  first_pass_rate:'Доля интеграций, зелёных с ПЕРВОЙ попытки = интегр✓/(интегр✓+интегрR). Больше = выше качество сборки.',
- quota_per_call:'Давление квоты: ожиданий квоты на один LLM-вызов. Меньше = свободнее пул.'};
+ quota_per_call:'Давление квоты: ожиданий квоты на один LLM-вызов. Меньше = свободнее пул.',
+ tokens_total:'Реальные токены за прогон (prompt+completion из API usage). 0 = провайдер не вернул usage.',
+ tokens_per_node:'Удельный расход токенов на узел. Меньше = экономнее. Сравнимо между кейсами.'};
 function loadCompare(){
  fetch('/api/compare').then(r=>r.json()).then(d=>{CMP=d;render();})
   .catch(()=>{CMP=[{error:'не удалось загрузить'}];render();});
@@ -1302,6 +1340,17 @@ function idleHTML(){
    `<td>${fmtDur(r.total)}</td><td>${r.count}</td>`+
    `<td><span style="display:inline-block;height:8px;background:${causeColor(r.cause)};width:${sh}px;max-width:120px"></span> ${sh}%</td></tr>`;});
  h+='</tbody></table></div>';
+ // token economics by role+model (#6) — real spend, not call counts
+ const tok=IDLE.tokens||{rows:[],total:0};
+ if(tok.rows.length){
+  h+='<h4>Токены по роли+модели (реальный расход)</h4><div class=cmpscroll style="max-height:240px">'+
+   '<table class=cmp><thead><tr><th>роль</th><th>модель</th><th>вызовов</th><th>prompt</th><th>completion</th><th>всего</th><th>доля</th></tr></thead><tbody>';
+  tok.rows.forEach(r=>{const sh=tok.total?Math.round(100*r.total/tok.total):0;
+   h+=`<tr><td>${esc(r.role)}</td><td>${esc(r.model)}</td><td>${r.calls}</td>`+
+    `<td>${r.prompt}</td><td>${r.completion}</td><td><b>${r.total}</b></td>`+
+    `<td><span style="display:inline-block;height:8px;background:#58a6ff;width:${sh}px;max-width:120px"></span> ${sh}%</td></tr>`;});
+  h+=`</tbody></table></div><p class=dim>всего токенов: <b>${tok.total}</b></p>`;
+ }
  // roll-up by node — which nodes cost the most
  h+='<h4>По узлам (самые дорогие)</h4><div class=cmpscroll style="max-height:260px">'+
   '<table class=cmp><thead><tr><th>узел</th><th>суммарно</th><th>операций</th></tr></thead><tbody>'+

@@ -165,8 +165,9 @@ def _call_model(prompt: str, *, system: str, allowed: list[str],
         fallbacks = llm_backend.chain_for(role)[1:] if role else ()
         if fallbacks:
             return llm_backend.ask(prompt, model=model, system=system,
-                                   fallbacks=fallbacks)
-        return llm_backend.ask(prompt, model=model, system=system)
+                                   fallbacks=fallbacks, role=role or "")
+        return llm_backend.ask(prompt, model=model, system=system,
+                               role=role or "")
     return _run_claude(prompt, system=system, allowed=allowed,
                        disallowed=disallowed, cwd=cwd, model=model)
 

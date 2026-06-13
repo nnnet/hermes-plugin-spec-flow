@@ -237,8 +237,34 @@ def _ask_one(prompt: str, model: str, system: str | None,
         raise
 
 
+# #6: the role of the call in flight, so the OpenAI path can log token usage
+# tagged by role+model without threading role through every layer. Thread-local
+# because the worker pool runs roles concurrently.
+_call_ctx = threading.local()
+
+
+def _log_token_usage(model: str, usage: dict) -> None:
+    """#6: record REAL token counts (from the API usage field) tagged by the
+    in-flight role + model, so a run's true economics — not just call counts —
+    can be rolled up. Best effort: a missing usage block logs nothing."""
+    if not usage:
+        return
+    pt = int(usage.get("prompt_tokens", 0) or 0)
+    ct = int(usage.get("completion_tokens", 0) or 0)
+    if pt == 0 and ct == 0:
+        return
+    try:
+        from . import llm_log
+        llm_log.log({"event": "token_usage",
+                     "role": getattr(_call_ctx, "role", "") or "",
+                     "model": model, "prompt_tokens": pt,
+                     "completion_tokens": ct})
+    except Exception:              # noqa: BLE001 — accounting never blocks work
+        pass
+
+
 def ask(prompt: str, *, model: str, system: str | None = None,
-        fallbacks: tuple | list = ()) -> str:
+        fallbacks: tuple | list = (), role: str = "") -> str:
     """Send one prompt, return the reply text.
 
     ``model`` + ``fallbacks`` form an ordered chain (the case YAML
@@ -247,6 +273,7 @@ def ask(prompt: str, *, model: str, system: str | None = None,
     terminal fallback (subscription CLI, FALLBACK_MODEL) still applies
     unless the chain already contains a 'claude/' entry."""
     cfg = WORKERS_CFG or {}
+    _call_ctx.role = role          # #6: tag token usage with the calling role
     # cyclic primary rotation (#40): spread successive calls across the free
     # chain so one capped model isn't every call's first hit. No-op unless
     # the case sets workers.cycle_models; the model SET is unchanged.
@@ -436,6 +463,7 @@ def _ask_openai(prompt: str, model: str, system: str | None = None) -> str:
                 out = json.loads(body)
                 text = out["choices"][0]["message"]["content"]
                 if text and text.strip():
+                    _log_token_usage(model, out.get("usage") or {})
                     return text
                 last = "empty completion"
             except (KeyError, IndexError, json.JSONDecodeError) as exc:

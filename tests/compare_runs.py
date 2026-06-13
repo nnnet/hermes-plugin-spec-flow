@@ -108,6 +108,13 @@ def metrics(run_dir: pathlib.Path) -> dict:
     mem = meta.get("memory") or {}
     par = meta.get("parallel") or {}
 
+    # #6: real token economics from token_usage events (prompt + completion)
+    tok_prompt = sum(int(e.get("prompt_tokens", 0) or 0)
+                     for e in llm if e.get("event") == "token_usage")
+    tok_completion = sum(int(e.get("completion_tokens", 0) or 0)
+                         for e in llm if e.get("event") == "token_usage")
+    tokens_total = tok_prompt + tok_completion
+
     llm_calls = count_event("call_start")
     reviews_rejected = count_action("REJECT")
     crashes = count_action("crashed")
@@ -152,6 +159,11 @@ def metrics(run_dir: pathlib.Path) -> dict:
         if isinstance(mem, dict) else "—",
         "concurrency": (meta.get("workers") or {}).get("concurrency", "—")
         if isinstance(meta.get("workers"), dict) else "—",
+        # #6: real token economics (0 when the provider returned no usage)
+        "tokens_total": tokens_total,
+        "tokens_prompt": tok_prompt,
+        "tokens_completion": tok_completion,
+        "tokens_per_node": _ratio(tokens_total, tree_nodes),
         # normalized efficiency (size-independent) — see _ratio note above
         "calls_per_node": _ratio(llm_calls, tree_nodes),
         "errors_per_node": _ratio(defects, tree_nodes),
