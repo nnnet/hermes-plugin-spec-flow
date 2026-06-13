@@ -1,0 +1,25 @@
+tests/test_dashboard_orphan_nodes.py
+  s_a7f45290e91181::t_9857a9cbbf93e3 1-59
+tests/live_dashboard.py
+  s_a7f45290e91181::t_d3a2a45e71197f 175,180-182
+  s_a7f45290e91181::t_53d8b6b5a7a14f 469-471
+  s_a7f45290e91181::t_80d42da6a14c4f 1128-1129
+  s_a7f45290e91181::t_5b64e362f7bd34 111-157
+  s_a7f45290e91181::t_d7c1544e3cd47f 1386
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "75bc115185a1b60f07db3cebd933bdcf14ca94ae",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
