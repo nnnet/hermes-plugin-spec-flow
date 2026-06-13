@@ -406,6 +406,34 @@ def _schema_module_paths(root: str) -> list:
     return out
 
 
+_DEFINE_TABLE_RE = re.compile(r"""define_table\(\s*['"]([A-Za-z_]\w*)['"]""")
+
+
+def _duplicate_table_owners(root: str) -> dict:
+    """Tables declared via db.define_table in MORE THAN ONE module — a design
+    conflict: the module-global registry keeps the last definition, so the
+    other module's columns vanish in the integrated corpus while it passes
+    alone. Deterministic (no LLM) and the exact class that reddened a live run.
+    Returns {table: [module_rel, ...]} for tables owned by >1 writable module."""
+    owners: dict[str, list] = {}
+    sdir = Path(root) / "src"
+    if not sdir.is_dir():
+        return {}
+    for p in sorted(sdir.glob("*.py")):
+        rel = str(p.relative_to(root))
+        if not _safe_rel(rel):
+            continue
+        try:
+            text = p.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for tbl in set(_DEFINE_TABLE_RE.findall(text)):
+            owners.setdefault(tbl, [])
+            if rel not in owners[tbl]:
+                owners[tbl].append(rel)
+    return {t: m for t, m in owners.items() if len(m) > 1}
+
+
 def make_verifier(model: Optional[str] = None,
                   max_repair: int = MAX_REPAIR,
                   channel: Optional[object] = None) -> Callable[[dict], dict]:
@@ -492,6 +520,28 @@ def make_verifier(model: Optional[str] = None,
                 llm_log.log({"event": "cascade_root_cause", "role": "verifier",
                              "node": str(ctx.get("node")), "signature": sig,
                              "count": cnt, "total": tot, "db": looks_db})
+            # TABLE-OWNERSHIP CONFLICT: deterministic (no LLM) — two modules
+            # define the same table differently; the registry keeps the last,
+            # so the other's columns vanish in the corpus (green alone, red
+            # together). Name the conflict and the owning modules so repair
+            # consolidates to ONE owner instead of chasing missing-column
+            # symptoms across victim tests.
+            dupes = _duplicate_table_owners(root)
+            if dupes:
+                lines = "; ".join(f"'{t}' in {', '.join(m)}"
+                                  for t, m in sorted(dupes.items()))
+                out += ("\n\nROOT-CAUSE HINT: the same DB table is defined by "
+                        "MORE THAN ONE module: " + lines + ". db.define_table "
+                        "keeps only the last definition, so the other module's "
+                        "columns disappear in the assembled corpus (each passes "
+                        "alone, they fail together). Make ONE module own each "
+                        "table and declare its FULL schema; the others must use "
+                        "db.insert/select/update/delete and NOT call "
+                        "define_table on it.\n" + "\n".join(
+                            sorted({m for ms in dupes.values() for m in ms})))
+                llm_log.log({"event": "table_ownership_conflict",
+                             "role": "verifier", "node": str(ctx.get("node")),
+                             "tables": sorted(dupes)})
             # #3: a FLAKY acceptance test (proven non-deterministic) must not
             # redden the root. Re-run each red file FLAKY_RERUNS times; a file
             # that flips green↔red is quarantined — recorded, never silent —

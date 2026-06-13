@@ -83,6 +83,34 @@ def test_quiet_below_threshold():
         is None
 
 
+def test_duplicate_table_owners(tmp_path):
+    # two modules define 'products', three define 'orders' — the registry keeps
+    # the last, dropping the others' columns in the corpus (green alone, red
+    # together). The deterministic detector names the conflict for repair.
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "catalog.py").write_text(
+        "import db\ndb.define_table('products', {'id': 'id', 'name': 'text'})")
+    (src / "product_schema.py").write_text(
+        'import db\ndb.define_table("products", {"id": "id", "price": "real"})')
+    (src / "orders_a.py").write_text("db.define_table('orders', {'id': 'id'})")
+    (src / "orders_b.py").write_text("db.define_table('orders', {'id': 'id'})")
+    (src / "orders_c.py").write_text('db.define_table("orders", {"id": "id"})')
+    (src / "clean.py").write_text("db.insert('products', name='x')")
+    dupes = pv._duplicate_table_owners(str(tmp_path))
+    assert set(dupes) == {"products", "orders"}
+    assert len(dupes["orders"]) == 3
+    assert "src/clean.py" not in dupes.get("products", [])
+
+
+def test_no_duplicate_owners_when_single(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.py").write_text("db.define_table('products', {'id': 'id'})")
+    (src / "b.py").write_text("db.insert('products', name='x')")
+    assert pv._duplicate_table_owners(str(tmp_path)) == {}
+
+
 def test_norm_error_buckets_numeric_variants():
     assert pv._norm_error("assert 500 == 201") == pv._norm_error("assert 500 == 200")
 
