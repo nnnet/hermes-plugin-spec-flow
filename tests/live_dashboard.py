@@ -459,6 +459,21 @@ def _flow_mermaid(events: list[dict], tree: dict | None = None) -> str | None:
 
 
 # ── state ────────────────────────────────────────────────────────────────────
+def _pid_alive(run_dir: "pathlib.Path | None") -> bool:
+    """True when the run's process (run.pid) is alive. Used to gate the
+    stop/run buttons: a run is 'active' only while its pid exists."""
+    if run_dir is None:
+        return False
+    pidf = run_dir / "run.pid"
+    if not pidf.exists():
+        return False
+    try:
+        os.kill(int(pidf.read_text().strip()), 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 def _build_state(run_dir: pathlib.Path) -> dict:
     events = _read_jsonl(run_dir / "trace.jsonl")
     llm = _read_jsonl(run_dir / "llm-log.jsonl")
@@ -626,6 +641,10 @@ def _build_state(run_dir: pathlib.Path) -> dict:
     return {
         "name": run_dir.name,
         "status": "done" if done else "running",
+        # actual process liveness (run.pid), not just trace state — gates the
+        # dashboard's stop/run buttons. A killed/crashed run is NOT active even
+        # if its last trace line never said 'done'.
+        "run_active": _pid_alive(run_dir),
         "goal": inputs_goal,
         "current": current,
         "active": active,
@@ -987,6 +1006,7 @@ body{margin:0;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;background:#0d
 .runbtn{cursor:pointer;border-radius:6px;padding:2px 10px;font-weight:700;border:1px solid #30363d}
 #runstop{background:#3d1518;color:#f85149}#runstop:hover{background:#5a1d22}
 #runstart{background:#11281a;color:#3fb950}#runstart:hover{background:#163a25}
+.runbtn.off{opacity:.35;cursor:not-allowed;pointer-events:none;filter:grayscale(.6)}
 .live{color:#3fb950}.donec{color:#8b949e}
 .bar2{position:sticky;top:38px;z-index:4;background:#0f141a;border-bottom:1px solid #21262d;padding:3px 14px;display:block;font-size:12px}
 .goal{color:#e3b341;display:block;min-height:1.2em;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.cur{color:#3fb950;font-weight:700;display:block;margin-top:0;min-height:1.2em;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -1138,6 +1158,12 @@ function render(){
  $('#name').textContent=STATE.name;
  const c=STATE.counts;$('#counts').textContent=`узлов ${c.nodes} · листьев ${c.leaves} · реализовано ${c.impl} · событий ${c.events}`;
  $('#mode').innerHTML='⟳ авто: '+(AUTO?'<span class=live>вкл</span>':'<span class=dim>выкл</span>');
+ // stop/run availability follows the run's ACTUAL process liveness: a live
+ // run can be stopped (not started); no live run can be started (not stopped)
+ const active=!!STATE.run_active;
+ const bs=$('#runstop'),br=$('#runstart');
+ if(bs){bs.classList.toggle('off',!active);bs.title=active?'остановить активный прогон (STOP + SIGTERM)':'нет активного прогона';}
+ if(br){br.classList.toggle('off',active);br.title=active?'прогон уже идёт — сначала останови':'запустить новый прогон того же кейса';}
  $('#goal').textContent=STATE.goal?('🎯 '+STATE.goal):'';
  trackActive();
  // the line is ALWAYS rendered (finished runs show the final state) — an emptied div collapses and the header jumps between 1 and 2 lines

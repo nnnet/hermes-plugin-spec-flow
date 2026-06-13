@@ -133,3 +133,37 @@ def test_post_run_stop_signals_pid(tmp_path, monkeypatch):
     body = json.loads(h.sent["body"])
     assert body["ok"] and body["signalled"] == 424242
     assert killed["pid"] == 424242
+
+
+# ─── run liveness gating the stop/run buttons ─────────────────────────
+
+def test_pid_alive_none():
+    assert dash._pid_alive(None) is False
+
+
+def test_pid_alive_no_pidfile(tmp_path):
+    d = tmp_path / "run"
+    d.mkdir()
+    assert dash._pid_alive(d) is False
+
+
+def test_pid_alive_dead_pid(tmp_path):
+    d = tmp_path / "run"
+    d.mkdir()
+    (d / "run.pid").write_text("999999\n")  # almost certainly not running
+    assert dash._pid_alive(d) is False
+
+
+def test_pid_alive_self(tmp_path):
+    import os
+    d = tmp_path / "run"
+    d.mkdir()
+    (d / "run.pid").write_text(str(os.getpid()) + "\n")
+    assert dash._pid_alive(d) is True
+
+
+def test_pid_alive_garbage(tmp_path):
+    d = tmp_path / "run"
+    d.mkdir()
+    (d / "run.pid").write_text("not-a-number\n")
+    assert dash._pid_alive(d) is False
