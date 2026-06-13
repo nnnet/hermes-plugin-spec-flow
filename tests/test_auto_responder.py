@@ -83,3 +83,27 @@ def test_channel_defers_novel_question(tmp_path, monkeypatch):
                  "Should the payout threshold be $50 or $100?")
     assert not ans
     assert "answer (auto/" not in ch.questions.read_text()
+
+
+def test_russian_routing_question_is_auto_answered():
+    # LIVE gap (v22): a worker asked the routing question in Russian and
+    # the English-only matcher missed it — it waited the full window.
+    # Language-neutral code tokens (<id>, ?id=, GET /) must catch it.
+    q = ("Спецификация требует GET /categories/<id> путь, но маршрутизатор"
+         " не поддерживает динамические параметры пути. Использовать GET"
+         " /categories с query-параметром (например ?id=123) или есть"
+         " другой механизм?")
+    res = ar.answer(q)
+    assert res is not None and res[0] == "routing"
+
+
+def test_http_verb_with_path_alone_triggers_routing():
+    q = "Should the endpoint be POST /orders/{id}/cancel or a query param?"
+    res = ar.answer(q)
+    assert res is not None and res[0] == "routing"
+
+
+def test_plain_business_question_still_deferred_after_neutral_tokens():
+    # adding neutral tokens must NOT make it fire on non-routing asks
+    q = "Should the payout threshold be 50 or 100 dollars before transfer?"
+    assert ar.answer(q) is None

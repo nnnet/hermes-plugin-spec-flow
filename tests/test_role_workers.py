@@ -97,9 +97,11 @@ def test_worker_session_gets_real_skill_md(monkeypatch):
                "depth": 1, "ancestors": ["Root"],
                "existing_nodes": [{"id": "a", "title": "A"}]})
     assert out["atomic"] is True
-    # system prompt is the SKILL.md verbatim, not a paraphrase
+    # system prompt is the SKILL.md verbatim (not a paraphrase), with the
+    # configured-language directive appended
     real_md = rw.load_skill_md("spec-flow-decompose")
-    assert captured["system"] == real_md
+    assert captured["system"].startswith(real_md)
+    assert "Working language" in captured["system"]
     # tree context made it into the task prompt
     assert "a (A)" in captured["prompt"] and "Root" in captured["prompt"]
 

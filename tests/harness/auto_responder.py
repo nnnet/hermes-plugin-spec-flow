@@ -40,9 +40,17 @@ _CONSTRAINT = ("constraint", "stdlib", "standard library",
 _SPEC_CONFLICT = ("spec", "requirement", "bcrypt", "deviat", "exception",
                   "wins", "violat")
 
-# class 3: dynamic path parameters against an exact-match dispatcher
-_ROUTING = ("path parameter", "path param", "{id}", "dynamic path",
-            "exact path", "exact match", "path_info", "/{")
+# class 3: dynamic path parameters against an exact-match dispatcher.
+# Workers ask in EN or RU — match LANGUAGE-NEUTRAL code tokens (the URL
+# shapes, the word 'query') that appear verbatim in either language,
+# never a per-language phrase list (a RU question slipped past the
+# English-only matcher in a live run).
+_ROUTING = ("path parameter", "path param", "{id}", "<id>", "dynamic path",
+            "exact path", "exact match", "path_info", "/{", "?id=",
+            "/<", "query param", "query string", "query-")
+# a routing question almost always carries an HTTP verb next to a path —
+# a language-neutral signal present in EN and RU questions alike
+_HTTP_VERB = ("get /", "post /", "put /", "patch /", "delete /")
 
 _PLATFORM_ANSWER = (
     "Platform and protected files are READ-ONLY — do not modify them. "
@@ -76,9 +84,11 @@ def answer(question: str) -> Optional[tuple[str, str]]:
     q = (question or "").lower()
     if not _has(q, _ASKING):
         return None
-    # routing is the most specific platform class — check it first
-    if _has(q, _ROUTING) and (_has(q, _MODIFY) or _has(q, _PLATFORM_FILE)
-                              or "query" in q):
+    # routing is the most specific platform class — check it first.
+    # A dynamic-path marker (any language) OR an HTTP verb next to a path
+    # is a strong enough signal on its own; these tokens are code, so the
+    # class is caught whether the worker asked in English or Russian.
+    if _has(q, _ROUTING) or _has(q, _HTTP_VERB):
         return ("routing", _ROUTING_ANSWER)
     if _has(q, _CONSTRAINT) and _has(q, _SPEC_CONFLICT):
         return ("constraint-vs-spec", _CONSTRAINT_ANSWER)

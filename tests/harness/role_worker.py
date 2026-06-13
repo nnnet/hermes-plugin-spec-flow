@@ -78,6 +78,33 @@ def load_skill_md(skill: str) -> str:
     return (SKILLS_DIR / skill / "SKILL.md").read_text(encoding="utf-8")
 
 
+def worker_language() -> str:
+    """The working language for specs and in-plugin communication. Taken
+    from SPEC_FLOW_LANG env or the case `workers.language`; default
+    English. Centralised so every role speaks the configured language —
+    a worker once asked its HITL question in Russian and the (English)
+    auto-responder missed it."""
+    env = os.environ.get("SPEC_FLOW_LANG")
+    if env:
+        return env.strip()
+    cfg = getattr(llm_backend, "WORKERS_CFG", None) or {}
+    return str(cfg.get("language") or "English").strip()
+
+
+_LANG_DIRECTIVE = (
+    "\n\n## Working language\n"
+    "Write EVERYTHING you produce — specs, plans, code comments,"
+    " identifiers, and any HITL question or reply — in {lang}. This is the"
+    " plugin's configured working language (env SPEC_FLOW_LANG /"
+    " workers.language). Do NOT switch to another language even if an"
+    " input fragment uses one.")
+
+
+def _with_language(system: str) -> str:
+    """Append the configured-language directive to a role's system prompt."""
+    return system + _LANG_DIRECTIVE.format(lang=worker_language())
+
+
 def _model_for(role: str) -> str:
     # delegates to the shared per-role resolver: the case YAML `workers:`
     # block is the single source of truth when present (env vars apply only
@@ -297,7 +324,7 @@ MAX_CHILDREN = int(os.environ.get("SPEC_FLOW_LLM_MAX_CHILDREN", "4"))
 
 def make_decomposer(workspace_dir: Optional[str] = None,
                     channel: Any = None) -> Callable[[dict], dict]:
-    system = load_skill_md("spec-flow-decompose")
+    system = _with_language(load_skill_md("spec-flow-decompose"))
     allowed, disallowed = load_profile_policy("spec-decomposer")
     model = _model_for("decomposer")
 
@@ -566,7 +593,7 @@ def _write_reply_files(ws: Any, files: dict, fn: str) -> bool:
 
 
 def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
-    system = load_skill_md("spec-implement")
+    system = _with_language(load_skill_md("spec-implement"))
     allowed, disallowed = load_profile_policy("implementer")
     model = _model_for("implementer")
 
@@ -772,7 +799,7 @@ Reply with ONLY: {{"verdict": "PASS"|"REJECT", "reasons": ["..."]}}"""
 
 
 def make_reviewer() -> Callable[[dict], dict]:
-    system = load_skill_md("spec-reviewer")
+    system = _with_language(load_skill_md("spec-reviewer"))
     allowed, disallowed = load_profile_policy("spec-reviewer")
     model = _model_for("reviewer")
 

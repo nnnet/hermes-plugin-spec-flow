@@ -244,9 +244,12 @@ def make_verifier(model: Optional[str] = None,
                                 " module — keep your fix consistent with"
                                 " it):\n" + rmap)
             try:
+                from . import role_worker
                 raw = llm_backend.ask(
                     _REPAIR_TASK.format(output=out, files_block=files_block),
-                    model=model)
+                    model=model,
+                    system=role_worker._with_language(
+                        "You are the integration repair worker."))
                 m = re.search(r"\{.*\}", raw, re.S)
                 reply = json.loads(m.group(0)) if m else {}
             except Exception as exc:  # noqa: BLE001 — verdict stays honest
