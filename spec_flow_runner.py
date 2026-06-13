@@ -316,6 +316,8 @@ class RunResult:
     verbosity: int = DEFAULT_VERBOSITY
     depth: int = DEPTH_SPEC
     workspace_root: Optional[str] = None
+    # variant A: nid -> collision-free module name (every value unique)
+    module_names: dict = field(default_factory=dict)
 
 
 def event_line(e: Event, widths: Optional[dict] = None) -> str:
@@ -499,7 +501,8 @@ class Workspace:
         self._write("constitution.md", "\n".join(body) + "\n", "constitution")
 
     def spec(self, node_id, title, depth, verdict, reasons, parent, plan_lines,
-             node: Optional[dict] = None, target: str = "") -> str:
+             node: Optional[dict] = None, target: str = "",
+             module: Optional[str] = None) -> str:
         """Materialise the node's level spec. Carries every piece of REAL data
         the run has about the node: gate inputs/outputs, resolved decisions,
         spike findings, the governing contract, drift/review episodes, the
@@ -550,7 +553,11 @@ class Workspace:
         if children:
             lines += ["", "## Children (next level)"]
             lines += [f"- `{c['id']}` — {c.get('title', c['id'])}" for c in children]
-        return self._write(f"specs/{_snake(node_id)}.md", "\n".join(lines) + "\n", "spec")
+        # variant A: use the engine-resolved collision-free stem when given
+        # (two nodes snaking to the same base would otherwise overwrite each
+        # other's spec — and then both implementers read the SAME spec)
+        stem = module or _snake(node_id)
+        return self._write(f"specs/{stem}.md", "\n".join(lines) + "\n", "spec")
 
     def contract(self, src_path: str, name: str) -> str:
         rel = f"contracts/{name}"
@@ -1035,6 +1042,29 @@ class Engine:
                 self.sink.close()
             self.workspace.finalize()
 
+    def _module_for(self, nid: str) -> str:
+        """Variant A: a deterministic, COLLISION-FREE module name per node.
+        Same nid → same fn (resume-safe); two nids that snake to the same
+        base get a stable short-hash suffix so their src files never clash."""
+        with self._module_lock:
+            cached = self._module_names.get(nid)
+            if cached is not None:
+                return cached
+            base = _snake(nid)
+            fn = base
+            taken = set(self._module_names.values())
+            if fn in taken:
+                # deterministic disambiguation from the FULL node id
+                suffix = hashlib.sha1(nid.encode("utf-8")).hexdigest()[:6]
+                fn = f"{base}_{suffix}"
+                self.emit("decompose", "engine", "", nid,
+                          "namespace collision avoided",
+                          f"module '{base}.py' already owned by another node;"
+                          f" this node uses '{fn}.py'",
+                          "namespace", "PARTITIONED", level=L_MILESTONE)
+            self._module_names[nid] = fn
+            return fn
+
     def _run(self, project: dict) -> RunResult:
         # Note: the contract validator (CONTRACT_VALIDATORS) is configured by the
         # caller on the gate provider — the runner does not hardcode it.
@@ -1054,6 +1084,14 @@ class Engine:
         #                      returns one level up.
         self._revisions = self._load_revisions(project)
         self._fired_rev: set[str] = set()
+        # variant A (static namespace partition): every leaf gets a UNIQUE
+        # module name BY CONSTRUCTION, so two nodes can never write the
+        # same src/<name>.py. Two distinct node ids can snake to the same
+        # base (e.g. 'seller-opt-in' and 'seller opt in' → 'seller_opt_in')
+        # — the loser gets a deterministic short-hash suffix. nid → fn,
+        # so a re-visit / resume always resolves to the same file.
+        self._module_names: dict[str, str] = {}
+        self._module_lock = threading.Lock()
 
         # Phase 0-1: requirements (spec-decomposer + spec-requirements)
         self.task("L0:req", "Requirements & constitution", "requirements", "spec-decomposer", "spec-requirements")
@@ -1138,7 +1176,8 @@ class Engine:
 
         return RunResult(project, self.events, self.tasks, self.skills, self.profiles,
                          self.loops, self.gate_calls, self.verbosity, self.depth,
-                         getattr(self.workspace, "root", None))
+                         getattr(self.workspace, "root", None),
+                         dict(self._module_names))
 
     # -- recursion ---------------------------------------------------------
     def _decomposer_ctx(self, node: dict, depth: int, parent: Optional[str],
@@ -1239,7 +1278,8 @@ class Engine:
         fails after the budget keeps its honest episode record."""
         spec_rel = self.workspace.spec(
             nid, title, depth, spec_args["verdict"], spec_args["reasons"],
-            parent, spec_args["plan"], node=node, target=self._target)
+            parent, spec_args["plan"], node=node, target=self._target,
+            module=self._module_for(nid))
         # deterministic lint BEFORE the reviewer: the mechanical
         # traceability class (AC without REQ and the reverse) is fixed by
         # a bounded author round with the EXACT violations — a reviewer
@@ -1277,7 +1317,8 @@ class Engine:
             spec_rel = self.workspace.spec(
                 nid, title, depth, spec_args["verdict"],
                 spec_args["reasons"], parent, spec_args["plan"],
-                node=node, target=self._target)
+                node=node, target=self._target,
+            module=self._module_for(nid))
         else:
             lint = _lint_spec_traceability(nid,
                                            str(node.get("spec_markdown")
@@ -1342,7 +1383,8 @@ class Engine:
                                   "", level=L_MILESTONE)
                 spec_rel = self.workspace.spec(
                     nid, title, depth, spec_args["verdict"], spec_args["reasons"],
-                    parent, spec_args["plan"], node=node, target=self._target)
+                    parent, spec_args["plan"], node=node, target=self._target,
+            module=self._module_for(nid))
                 verdict, reasons = self._consult_reviewer(nid, title, spec_rel, depth)
             if verdict == "REJECT":
                 exhausted = getattr(self, "_review_exhausted", "record")
@@ -1747,7 +1789,7 @@ class Engine:
         # an injected implementer agent produces real code instead of a scaffold.
         code_rel = test_rel = None
         if self.depth >= DEPTH_EXECUTE:
-            fn = _snake(nid)
+            fn = self._module_for(nid)   # variant A: collision-free module
             code_rel, test_rel = f"src/{fn}.py", f"tests/test_{fn}.py"
             # C4 resume: the journal says this leaf finished and its artifact
             # survived the restart — reuse it, do not re-run the implementer.
