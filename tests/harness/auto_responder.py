@@ -27,29 +27,40 @@ from typing import Optional
 # not trigger — the worker must actually be asking permission/choice
 _ASKING = ("should i", "may i", "can i", "is it ok", "which wins",
            "do i", "am i allowed", "how should i", "or is there",
-           "?", "instead")
+           "?", "？", "instead")   # ASCII + full-width (CJK) question mark
 
-# class 1: touching platform / protected / read-only code
-_PLATFORM_FILE = ("app.py", "dispatcher", "registry", "platform",
-                  "read-only", "read only", "protected file")
+# ROBUSTNESS PRINCIPLE: the worker is told to speak the plugin language
+# (English), so a question in ANY OTHER language is a robustness probe —
+# the plugin must still recognise the known-policy class and not stall.
+# We therefore key on LANGUAGE-NEUTRAL ANCHORS only: file/library/symbol
+# names, URL shapes, HTTP verbs — code tokens that appear verbatim
+# regardless of the surrounding prose. Never a per-language phrase list.
+
+# class 1: touching platform / protected / read-only code.
+# Anchors are the literal platform symbols (a German/French/RU question
+# about app.py still contains 'app.py').
+# only UNAMBIGUOUS platform internals (a bare 'registry' is a common
+# domain word — dropped to avoid false positives on business questions)
+_PLATFORM_FILE = ("app.py", "dispatcher", "wsgi", "path_info",
+                  "exact path matching", "read-only dispatcher")
+# modify-intent words across a few languages is a per-language list and
+# thus brittle — instead a platform-symbol anchor + a question mark is
+# enough (see answer()); these stay only as a soft EN hint.
 _MODIFY = ("modify", "edit", "change", "extend", "patch", "alter")
 
-# class 2: an explicit constraint conflicts with the spec
-_CONSTRAINT = ("constraint", "stdlib", "standard library",
-               "third-party", "third party", "no third", "forbid")
-_SPEC_CONFLICT = ("spec", "requirement", "bcrypt", "deviat", "exception",
-                  "wins", "violat")
+# class 2: an explicit constraint conflicts with the spec. Anchors are
+# library/symbol names and tokens that are the SAME in every language.
+_CONSTRAINT = ("stdlib", "standard library", "third-party", "third party",
+               "no third", "constraint")
+_LIB_ANCHOR = ("bcrypt", "import ", "pip install", "requirements.txt",
+               "package", "hashlib", "pbkdf2")
 
 # class 3: dynamic path parameters against an exact-match dispatcher.
-# Workers ask in EN or RU — match LANGUAGE-NEUTRAL code tokens (the URL
-# shapes, the word 'query') that appear verbatim in either language,
-# never a per-language phrase list (a RU question slipped past the
-# English-only matcher in a live run).
 _ROUTING = ("path parameter", "path param", "{id}", "<id>", "dynamic path",
             "exact path", "exact match", "path_info", "/{", "?id=",
             "/<", "query param", "query string", "query-")
 # a routing question almost always carries an HTTP verb next to a path —
-# a language-neutral signal present in EN and RU questions alike
+# language-neutral, present whatever the prose language
 _HTTP_VERB = ("get /", "post /", "put /", "patch /", "delete /")
 
 _PLATFORM_ANSWER = (
@@ -80,18 +91,23 @@ def _has(text: str, words) -> bool:
 
 def answer(question: str) -> Optional[tuple[str, str]]:
     """Return (policy_class, answer) for a known-policy question, or None
-    to defer to the human. Conservative: silence beats a wrong auto-yes."""
+    to defer to the human. Language-AGNOSTIC: keys on neutral code anchors
+    so the class is caught whatever language the worker used (a robustness
+    probe injects a non-plugin language on purpose). Conservative: silence
+    beats a wrong auto-yes."""
     q = (question or "").lower()
     if not _has(q, _ASKING):
         return None
-    # routing is the most specific platform class — check it first.
-    # A dynamic-path marker (any language) OR an HTTP verb next to a path
-    # is a strong enough signal on its own; these tokens are code, so the
-    # class is caught whether the worker asked in English or Russian.
+    # routing — a dynamic-path marker OR an HTTP verb next to a path is a
+    # strong enough neutral signal on its own.
     if _has(q, _ROUTING) or _has(q, _HTTP_VERB):
         return ("routing", _ROUTING_ANSWER)
-    if _has(q, _CONSTRAINT) and _has(q, _SPEC_CONFLICT):
+    # constraint-vs-spec — a constraint token + a library/symbol anchor,
+    # OR a library anchor alongside an explicit 'standard library' token.
+    if _has(q, _LIB_ANCHOR) and _has(q, _CONSTRAINT):
         return ("constraint-vs-spec", _CONSTRAINT_ANSWER)
-    if _has(q, _PLATFORM_FILE) and _has(q, _MODIFY):
+    # platform-readonly — a literal platform symbol in a QUESTION is the
+    # neutral anchor (modify-intent words are per-language and unreliable).
+    if _has(q, _PLATFORM_FILE):
         return ("platform-readonly", _PLATFORM_ANSWER)
     return None

@@ -107,3 +107,32 @@ def test_plain_business_question_still_deferred_after_neutral_tokens():
     # adding neutral tokens must NOT make it fire on non-routing asks
     q = "Should the payout threshold be 50 or 100 dollars before transfer?"
     assert ar.answer(q) is None
+
+
+# ─── robustness: ANY non-plugin language must still be caught ──────────
+
+def test_german_routing_question_caught():
+    q = ("Die Spezifikation verlangt GET /categories/{id}, aber der "
+         "Dispatcher unterstützt keine dynamischen Pfade. Soll ich einen "
+         "query-Parameter verwenden?")
+    res = ar.answer(q)
+    assert res is not None and res[0] == "routing"
+
+
+def test_french_stdlib_constraint_caught():
+    q = ("La spec demande bcrypt mais la contrainte est 'standard library "
+         "only'. Dois-je utiliser bcrypt ou hashlib?")
+    res = ar.answer(q)
+    assert res is not None and res[0] == "constraint-vs-spec"
+
+
+def test_chinese_platform_question_caught():
+    q = "我应该修改 app.py 来支持动态路由吗？"  # may I modify app.py ...?
+    res = ar.answer(q)
+    assert res is not None and res[0] in ("routing", "platform-readonly")
+
+
+def test_business_question_in_any_language_deferred():
+    # neutral anchors must NOT fire on a plain domain question
+    assert ar.answer("Soll die Auszahlungsschwelle 50 oder 100 sein?") is None
+    assert ar.answer("¿El umbral de pago debe ser 50 o 100?") is None
