@@ -1,0 +1,24 @@
+tests/test_auto_responder.py
+  s_a7f45290e91181::t_f46678e6d1bf40 110-138
+tests/harness/auto_responder.py
+  s_a7f45290e91181::t_fbf26fcf0f9510 94-97,101-102,105-107,109-111
+  s_a7f45290e91181::t_e2781d208f94e8 42-45
+  s_a7f45290e91181::t_b3ab7fe4e50f8c 30
+  s_a7f45290e91181::t_e0bbe1bf60c794 32-41,46-48,51-56,63
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "217d5211eed75d5ab8d02b56654ce0ed713235aa",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
