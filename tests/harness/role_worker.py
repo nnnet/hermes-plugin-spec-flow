@@ -830,8 +830,49 @@ requirements trace to the project goal and that is valid by definition.
 
 Apply the skill's gate to the authored sections: REQ-id traceability,
 EARS form, testable acceptance, explicit scope boundary, constitution
-compliance. Binary verdict.
+compliance. Binary verdict.{repo_map}{refusals}
 Reply with ONLY: {{"verdict": "PASS"|"REJECT", "reasons": ["..."]}}"""
+
+
+def _review_repo_map(ws_root: Optional[str]) -> str:
+    """П7: the public surface (AST digest) of the modules already in the
+    workspace, so the reviewer catches a spec that COLLIDES with what exists
+    — a duplicate concern, a clashing route, a signature mismatch — BEFORE
+    it is implemented, not after the integration goes red."""
+    if not ws_root:
+        return ""
+    try:
+        from . import repo_map
+        rmap = repo_map.build_map(ws_root, subdirs=("src",))
+    except Exception:  # noqa: BLE001
+        return ""
+    if not rmap:
+        return ""
+    return ("\n\nREPOSITORY MAP — modules ALREADY built (public surface). "
+            "REJECT if this spec duplicates an existing concern or clashes "
+            "with an existing route/signature:\n" + rmap)
+
+
+def _review_refusals(node: Any) -> str:
+    """П7: this node's write_refused / rolled_back history, so the reviewer
+    sees that an earlier attempt was blocked touching protected/platform
+    files — a strong signal the spec is reaching outside its boundary."""
+    if node in (None, "", "?"):
+        return ""
+    try:
+        events = llm_log.read_events({"write_refused", "rolled_back"}, node=node)
+    except Exception:  # noqa: BLE001
+        return ""
+    if not events:
+        return ""
+    lines = []
+    for e in events[:8]:
+        path = e.get("path", e.get("file", "?"))
+        reason = e.get("reason", e.get("event", ""))
+        lines.append(f"  - {e.get('event')}: {path} ({reason})")
+    return ("\n\nREFUSAL HISTORY for this node (writes the platform blocked). "
+            "If the spec still requires reaching into these, REJECT and tell "
+            "it to stay within its boundary:\n" + "\n".join(lines))
 
 
 def make_reviewer() -> Callable[[dict], dict]:
@@ -848,7 +889,9 @@ def make_reviewer() -> Callable[[dict], dict]:
             spec_body = " (read it)."
         prompt = _REVIEW_TASK.format(
             spec=ctx["spec"], spec_body=spec_body, goal=ctx.get("goal", ""),
-            constitution="; ".join(ctx.get("constitution") or []))
+            constitution="; ".join(ctx.get("constitution") or []),
+            repo_map=_review_repo_map(ctx.get("workspace_root")),
+            refusals=_review_refusals(ctx.get("node")))
         _log_call_start("reviewer", str(ctx.get("node", "?")), int(ctx.get("depth", -1)), model)
         raw = _call_model(prompt, system=system, allowed=allowed,
                           disallowed=disallowed, cwd=ctx.get("workspace_root"),

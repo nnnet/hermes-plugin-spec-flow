@@ -36,6 +36,37 @@ def log(event: dict) -> None:
         fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 
+def read_events(kinds: Any = None, *, node: Any = None) -> list:
+    """Read back structured events from the LLM log (П7). Optional filters:
+    ``kinds`` (an event name or iterable of names) and ``node``. Returns []
+    when the log is unset or unreadable — a reader never breaks a run."""
+    p = log_path()
+    if p is None or not p.exists():
+        return []
+    if isinstance(kinds, str):
+        kinds = {kinds}
+    elif kinds is not None:
+        kinds = set(kinds)
+    out = []
+    try:
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if kinds is not None and rec.get("event") not in kinds:
+                continue
+            if node is not None and rec.get("node") != node:
+                continue
+            out.append(rec)
+    except OSError:
+        return []
+    return out
+
+
 def timed_ask(ask: Callable[[str], str], *, role: str, node: str, depth: Any,
               model: str, prompt: str) -> str:
     """Run ``ask(prompt)``, timing it and logging the call (and any failure).
