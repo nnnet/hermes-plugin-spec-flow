@@ -1,0 +1,20 @@
+.claude/plans/2026-06-13T14-30__backend-backlog-ranked.md
+  s_a7f45290e91181::t_e30f9a5fccc383 41-49
+  s_a7f45290e91181::t_3b81fa4ae280e7 83-104,106-110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "b3643e59c4f8bdbbdb09594c4bfd315931699afa",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
