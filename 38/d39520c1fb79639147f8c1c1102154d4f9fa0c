@@ -1,0 +1,25 @@
+tests/test_auto_spike.py
+  s_a7f45290e91181::t_b84bc0e1e7d9e7 1-95,99-100
+  s_a7f45290e91181::t_e9f20eb0b8b307 96-98
+spec_flow_runner.py
+  s_a7f45290e91181::t_9747de601a4827 1196-1200
+  s_a7f45290e91181::t_15127cb51246d3 1763-1767,1769-1784
+  s_a7f45290e91181::t_f50fe4852536ca 1768
+  s_a7f45290e91181::t_e5729cc4511a2b 910-912
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "38d39520c1fb79639147f8c1c1102154d4f9fa0c",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
