@@ -169,10 +169,15 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
         # modes (fresh/resume/readonly/off) from the case YAML
         memory_mod.configure(case.get("memory"), case.get("name", ""))
         # intent board (anti-duplication B+C): on unless the case opts out
-        # with `dedup: false`
+        # with `dedup: false`. The board's persistence backend is pluggable
+        # (П15): default in-memory; `claims: {backend: sqlite}` keeps the
+        # board in <workspace>/claims.db so a --resume restores cache-hits.
         from harness import claims as claims_mod
-        claims_mod.configure(case.get("dedup", True) is not False)
         ws_dir = str(case_dir / "workspace")
+        _dedup_on = case.get("dedup", True) is not False
+        _claims_store = (claims_mod.make_store(case.get("claims"), run_dir=ws_dir)
+                         if _dedup_on and case.get("claims") else None)
+        claims_mod.configure(_dedup_on, store=_claims_store)
         q_chan = channel if hitl_questions or hitl_notes else None
         dec_fn = role_worker.make_decomposer(workspace_dir=ws_dir, channel=q_chan)
         rev_fn = role_worker.make_reviewer()
