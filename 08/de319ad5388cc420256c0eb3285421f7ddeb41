@@ -1,0 +1,23 @@
+tests/test_flaky_quarantine.py
+  s_a7f45290e91181::t_1d6cf18ce00d13 1-69
+tests/harness/pytest_verifier.py
+  s_a7f45290e91181::t_d3a714523413fc 371-401
+  s_a7f45290e91181::t_42796de68e97d5 271-272,275-277
+  s_a7f45290e91181::t_d35a81772a7c0a 236-270,273-274,278-280
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "08de319ad5388cc420256c0eb3285421f7ddeb41",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
