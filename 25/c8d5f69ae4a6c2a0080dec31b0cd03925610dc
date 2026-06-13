@@ -1,0 +1,25 @@
+tests/test_topo_order.py
+  s_a7f45290e91181::t_1d6c8e5de1e665 1-12,14-86
+  s_a7f45290e91181::t_89b80062f5246c 13
+tests/harness/role_worker.py
+  s_a7f45290e91181::t_8eb4e77d2dcd4f 330
+spec_flow_runner.py
+  s_a7f45290e91181::t_089ecb0e8606b2 1591-1624
+  s_a7f45290e91181::t_c0b2b3a4fff057 1796-1800,1803-1806
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "25c8d5f69ae4a6c2a0080dec31b0cd03925610dc",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
