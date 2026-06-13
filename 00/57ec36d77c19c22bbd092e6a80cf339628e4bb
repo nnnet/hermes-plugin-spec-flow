@@ -1,0 +1,32 @@
+tests/harness/claims.py
+  s_a7f45290e91181::t_a3266ab852bd17 94-104
+  s_a7f45290e91181::t_f1c095f5514749 1-93
+spec_flow_runner.py
+  s_a7f45290e91181::t_87fe917845cf9d 1805-1809
+tests/harness/role_worker.py
+  s_a7f45290e91181::t_26b6e5b5ee5be6 619-641
+  s_a7f45290e91181::t_4b3a942dfb04ad 36
+  s_a7f45290e91181::t_1473de8865920f 565-580
+tests/test_claims.py
+  s_a7f45290e91181::t_bb312e3f836c97 60-72,74-77,80-85,92,98-99,101,103
+  s_a7f45290e91181::t_ea6a28b41b6295 87-89,91,94-96,100
+  s_a7f45290e91181::t_f6383f732a9d1a 1-59,73,78-79,86,90,93,97,102
+tests/run_cases.py
+  s_a7f45290e91181::t_2919591b1bf828 171-174
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "0057ec36d77c19c22bbd092e6a80cf339628e4bb",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
