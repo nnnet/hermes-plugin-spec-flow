@@ -347,3 +347,18 @@ workers:
     models:
       - "claude/haiku"
       - "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"
+  verifier:
+    # integration verification LEADS with haiku so the integrate gate does
+    # NOT stall on a free-pool cooldown (v22 wedged ~30 min here); free
+    # models are cyclic fallbacks for provider+model variety
+    models:
+      - "claude/haiku"
+      - "openrouter/qwen/qwen3-coder:free"
+      - "openrouter/deepseek/deepseek-chat-v3.1:free"
+  implementer:
+    # CYCLIC provider+model chain: two distinct free models then the
+    # subscription fallback — raises model variety and quota resilience
+    models:
+      - "openrouter/qwen/qwen3-coder:free"
+      - "openrouter/deepseek/deepseek-chat-v3.1:free"
+      - "claude/haiku"
