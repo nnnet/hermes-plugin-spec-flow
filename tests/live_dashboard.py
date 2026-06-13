@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import os
 import time as _time
 import pathlib
 import re
@@ -722,6 +723,65 @@ class _H(BaseHTTPRequestHandler):
                                                        encoding="utf-8")
                 return self._send(200, "application/json",
                                   b'{"ok":true,"wrote":"answer.md"}')
+            if parsed.path == "/api/run/stop":
+                # cooperative stop (П1): drop the STOP sentinel the engine
+                # checks at each node boundary, then SIGTERM the run's pid
+                # (run.pid) so a blocked worker wakes. The run exits with a
+                # partial result a --resume can continue.
+                import signal
+                ws = rd / "workspace"
+                (ws / ".spec-flow").mkdir(parents=True, exist_ok=True)
+                (ws / ".spec-flow" / "STOP").write_text("stop\n",
+                                                        encoding="utf-8")
+                killed = None
+                pidf = rd / "run.pid"
+                if pidf.exists():
+                    try:
+                        pid = int(pidf.read_text().strip())
+                        os.kill(pid, signal.SIGTERM)
+                        killed = pid
+                    except (OSError, ValueError):
+                        killed = None
+                return self._send(200, "application/json",
+                                  json.dumps({"ok": True, "stopped": True,
+                                              "signalled": killed}).encode())
+            if parsed.path == "/api/run/start":
+                # launch a fresh run (or --resume RUN_DIR) as a detached
+                # process so it outlives this request. case defaults to the
+                # latest run's leading slug token (p4-b2b… → p4).
+                import subprocess
+                import tempfile
+                here = pathlib.Path(__file__).resolve().parent
+                slug = str(body.get("case", "")).strip()
+                if not slug:
+                    latest = _latest_run()
+                    tail = latest.name.split("__")[-1] if latest else "p4"
+                    slug = tail.split("-")[0] or "p4"
+                resume = str(body.get("resume", "")).strip()
+                cmd = [sys.executable, str(here / "run_cases.py"),
+                       "--case", slug, "--workers", "real",
+                       "--depth", "execute", "--hitl", "auto"]
+                if resume:
+                    cmd += ["--resume", resume]
+                # a live run still holding its pid blocks a fresh start
+                if not resume:
+                    cur = _latest_run()
+                    pf = cur / "run.pid" if cur else None
+                    if pf and pf.exists():
+                        try:
+                            os.kill(int(pf.read_text().strip()), 0)
+                            return self._send(409, "application/json",
+                                              b'{"ok":false,"error":"a run is already active"}')
+                        except (OSError, ValueError):
+                            pass
+                logf = pathlib.Path(tempfile.gettempdir()) / \
+                    f"specflow_dashboard_{slug}.log"
+                fh = open(logf, "ab")
+                subprocess.Popen(cmd, stdout=fh, stderr=subprocess.STDOUT,
+                                 cwd=str(here), start_new_session=True)
+                return self._send(200, "application/json",
+                                  json.dumps({"ok": True, "started": slug,
+                                              "log": str(logf)}).encode())
             if parsed.path == "/api/hitl/inject":
                 # human → engine: a late requirement. One folder per
                 # requirement under hitl/requirements/<name>/REQUIREMENT.md,
@@ -760,6 +820,9 @@ body{margin:0;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;background:#0d
 .bar{position:sticky;top:0;z-index:5;background:#161b22;border-bottom:1px solid #30363d;padding:8px 14px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
 .st{font-weight:700}.dim{color:#8b949e}.pill{background:#21262d;border-radius:10px;padding:1px 8px;cursor:pointer}
 .home{cursor:pointer;background:#1f6feb;color:#fff;border-radius:6px;padding:2px 10px;font-weight:700}.home:hover{background:#388bfd}
+.runbtn{cursor:pointer;border-radius:6px;padding:2px 10px;font-weight:700;border:1px solid #30363d}
+#runstop{background:#3d1518;color:#f85149}#runstop:hover{background:#5a1d22}
+#runstart{background:#11281a;color:#3fb950}#runstart:hover{background:#163a25}
 .live{color:#3fb950}.donec{color:#8b949e}
 .bar2{position:sticky;top:38px;z-index:4;background:#0f141a;border-bottom:1px solid #21262d;padding:3px 14px;display:block;font-size:12px}
 .goal{color:#e3b341;display:block;min-height:1.2em;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.cur{color:#3fb950;font-weight:700;display:block;margin-top:0;min-height:1.2em;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -808,6 +871,9 @@ pre.code{background:#161b22;padding:10px;border-radius:6px;overflow:auto;white-s
  <span class=st id=status></span>
  <span class=dim id=counts></span>
  <span class=pill id=mode title="клик — вкл/выкл авторефреш"></span>
+ <span class=runbtn id=runstop title="кооперативная остановка прогона (STOP + SIGTERM)">⏹ стоп</span>
+ <span class=runbtn id=runstart title="запустить новый прогон того же кейса">▶ ран</span>
+ <span class=dim id=runmsg></span>
 </div>
 <div class=bar2>
  <div id=goal class=goal></div>
@@ -1051,6 +1117,13 @@ function hitlHTML(){
   ans.slice(-10).map(a=>`<li>${esc(a)}</li>`).join('')+'</ol>';}
  return h;
 }
+function runCtl(path,payload){
+ const el=$('#runmsg');if(el)el.textContent='…';
+ fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify(payload)}).then(r=>r.json()).then(d=>{
+   if(el)el.textContent=d.ok?(d.stopped?'⏹ остановлен'+(d.signalled?' (pid '+d.signalled+')':''):'▶ запущен: '+esc(d.started||'')):('✗ '+(d.error||'ошибка'));
+  }).catch(()=>{if(el)el.textContent='✗ сеть';});
+}
 function hitlPost(path,payload,msgEl){
  fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},
   body:JSON.stringify(payload)}).then(r=>r.json()).then(d=>{
@@ -1188,6 +1261,11 @@ document.addEventListener('click',e=>{
  if(sorth){const k=sorth.dataset.sort;if(CMP_SORT===k)CMP_DESC=!CMP_DESC;else{CMP_SORT=k;CMP_DESC=false;}renderGlobal();return;}
  const g=e.target.closest('[data-g]');if(g){GTAB=g.dataset.g;renderGlobal();return;}
  const rl=e.target.closest('#cmpreload');if(rl){CMP=null;renderGlobal();return;}
+ if(e.target.closest('#runstop')){
+  if(confirm('Остановить активный прогон? (STOP + SIGTERM, можно продолжить через --resume)'))
+   runCtl('/api/run/stop',{});return;}
+ if(e.target.closest('#runstart')){
+  if(confirm('Запустить новый прогон того же кейса?'))runCtl('/api/run/start',{});return;}
  if(e.target.closest('#hitlreload')){HITL=null;loadHitl();return;}
  if(e.target.closest('#hitlsend')){const t=($('#hitlans')||{}).value||'';
   if(t.trim())hitlPost('/api/hitl/answer',{text:t},'#hitlmsg');

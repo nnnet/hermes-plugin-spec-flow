@@ -107,3 +107,29 @@ def test_post_inject_requires_name_and_text(tmp_path):
     h = _FakeHandler(d, "/api/hitl/inject", {"name": "", "text": "x"})
     h.do_POST()
     assert h.sent["code"] == 400
+
+
+# ─── run control: stop / start endpoints ──────────────────────────────
+
+def test_post_run_stop_drops_sentinel(tmp_path):
+    d = _run(tmp_path)
+    (d / "workspace").mkdir()
+    h = _FakeHandler(d, "/api/run/stop", {})
+    h.do_POST()
+    assert h.sent["code"] == 200
+    # the STOP sentinel the engine polls at each node boundary is written
+    assert (d / "workspace" / ".spec-flow" / "STOP").exists()
+
+
+def test_post_run_stop_signals_pid(tmp_path, monkeypatch):
+    d = _run(tmp_path)
+    (d / "workspace").mkdir()
+    (d / "run.pid").write_text("424242\n", encoding="utf-8")
+    killed = {}
+    import live_dashboard as ld
+    monkeypatch.setattr(ld.os, "kill", lambda pid, sig: killed.setdefault("pid", pid))
+    h = _FakeHandler(d, "/api/run/stop", {})
+    h.do_POST()
+    body = json.loads(h.sent["body"])
+    assert body["ok"] and body["signalled"] == 424242
+    assert killed["pid"] == 424242
