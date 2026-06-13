@@ -40,6 +40,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from . import auto_responder
+
 
 TIMEOUT = float(os.environ.get("SPEC_FLOW_HITL_TIMEOUT", "120"))
 ASK_TIMEOUT = float(os.environ.get("SPEC_FLOW_HITL_ASK_TIMEOUT", "300"))
@@ -70,6 +72,22 @@ class HumanChannel:
         stamp = time.strftime("%H:%M:%S")
         with open(self.questions, "a", encoding="utf-8") as fh:
             fh.write(f"\n## [{stamp}] {role} @ {node}\n{question}\n")
+        # AUTO-RESPONDER: known-policy questions (read-only platform code,
+        # stdlib-only constraint, path-param routing) are answered from
+        # the constitution instantly — no 5-min human window burned. It
+        # defers (returns None) on anything it is not sure of.
+        auto = auto_responder.answer(question)
+        if auto is not None:
+            cls, ans = auto
+            try:
+                from . import llm_log
+                llm_log.log({"event": "auto_answer", "role": role,
+                             "node": node, "policy_class": cls})
+            except Exception:        # noqa: BLE001
+                pass
+            with open(self.questions, "a", encoding="utf-8") as fh:
+                fh.write(f"**answer (auto/{cls}):** {ans}\n")
+            return ans
         if sys.stdin.isatty():
             sys.stderr.write(
                 f"\n[HITL?] {role} @ {node} asks:\n  {question}\n"
