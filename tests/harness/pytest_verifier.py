@@ -233,6 +233,51 @@ def _run_without(root: str, rels: list, drop: str, include_smoke: bool) -> bool:
     return proc.returncode in (0, 5)
 
 
+FLAKY_RERUNS = int(os.environ.get("SPEC_FLOW_FLAKY_RERUNS", "0"))
+
+
+def detect_flaky(root: str, rel: str, runs: int) -> bool:
+    """#3: a test file is FLAKY only if its isolated verdict is INCONSISTENT
+    across ``runs`` repetitions — some green, some red. A consistently-red
+    file is a GENUINE bug, never flaky; a consistently-green one isn't red to
+    begin with. Proven non-determinism is the only trigger, so a real failure
+    is never quarantined."""
+    if runs < 2:
+        return False
+    seen = set()
+    for _ in range(runs):
+        seen.add(_run_one(root, rel))
+        if len(seen) > 1:            # already both green and red → flaky
+            return True
+    return False
+
+
+def quarantine_flaky(root: str, include_smoke: bool, runs: int) -> dict:
+    """When the suite is red, find which red test FILES are flaky (proven
+    non-deterministic) vs stably red (real bugs). Returns
+    {flaky: [rel], stable_red: [rel]}. A flaky file is RECORDED, never
+    silently dropped — the caller excludes it from the gate verdict and notes
+    it in the output, so the root stays honest about real failures while a
+    coin-flip test can't redden it. Bounded: only runs on a red suite, only
+    re-checks the files that were red alone."""
+    if runs < 2:
+        return {"flaky": [], "stable_red": []}
+    tdir = Path(root) / "tests"
+    if not tdir.is_dir():
+        return {"flaky": [], "stable_red": []}
+    files = sorted(str(p.relative_to(root)) for p in tdir.glob("test_*.py"))
+    flaky, stable_red = [], []
+    for rel in files:
+        # check flakiness DIRECTLY — a single _run_one can't pre-screen a
+        # flaky file (its one run may land green and wrongly skip it)
+        if detect_flaky(root, rel, runs):
+            flaky.append(rel)
+        elif not _run_one(root, rel):
+            stable_red.append(rel)   # consistently red → a real bug
+        # else consistently green → not a red source
+    return {"flaky": flaky, "stable_red": stable_red}
+
+
 def bisect_poisoners(root: str, include_smoke: bool) -> dict:
     """П4-bis: diagnose the 'green alone, red together' class. When the whole
     suite is red but individual test files pass on their own, one file is
@@ -323,6 +368,37 @@ def make_verifier(model: Optional[str] = None,
                                  "node": str(ctx.get("node")),
                                  "poisoners": diag["poisoners"],
                                  "green_alone": diag.get("green_alone", [])})
+            # #3: a FLAKY acceptance test (proven non-deterministic) must not
+            # redden the root. Re-run each red file FLAKY_RERUNS times; a file
+            # that flips green↔red is quarantined — recorded, never silent —
+            # and the verdict is re-taken with flaky files excluded. A stably
+            # red file is a real bug and stays red.
+            if FLAKY_RERUNS >= 2:
+                try:
+                    q = quarantine_flaky(root, include_smoke, FLAKY_RERUNS)
+                except Exception:  # noqa: BLE001 — never breaks the verdict
+                    q = {}
+                if q.get("flaky") and not q.get("stable_red"):
+                    # every red source was flaky → re-run excluding them
+                    cmd = [sys.executable, "-m", "pytest", "tests", "-q",
+                           "--no-header", "-p", "no:cacheprovider",
+                           "--import-mode=importlib"]
+                    for rel in q["flaky"]:
+                        cmd += ["--ignore", str(Path(root) / rel)]
+                    if not include_smoke and (Path(root) / SMOKE_DIR).is_dir():
+                        cmd += ["--ignore", SMOKE_DIR]
+                    with llm_backend.PYTEST_LOCK:
+                        pr = subprocess.run(cmd, capture_output=True, text=True,
+                                            timeout=PYTEST_TIMEOUT, cwd=root)
+                    if pr.returncode in (0, 5):
+                        passed = True
+                        out += ("\n\nQUARANTINE: these test files are FLAKY "
+                                "(green↔red across reruns) and were excluded "
+                                "from the verdict — NOT a product failure: "
+                                + ", ".join(q["flaky"]))
+                    llm_log.log({"event": "flaky_quarantine",
+                                 "role": "verifier", "node": str(ctx.get("node")),
+                                 "flaky": q["flaky"], "passed_after": passed})
         rounds = 0
         while not passed and rounds < max_repair:
             rounds += 1
