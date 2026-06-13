@@ -41,6 +41,29 @@ from datetime import datetime
 from pathlib import Path
 
 
+def _stop_run(run_dir: Path) -> None:
+    """П1: ask a live run rooted at RUN_DIR to stop. Drops the STOP sentinel
+    the engine checks at every node boundary, then SIGTERMs the run's pid
+    (from run.pid) so a blocked worker wakes promptly. The run still exits
+    cleanly with a partial result a later --resume continues."""
+    import signal
+    from harness import run_engine as _eng
+    ws = run_dir / "workspace"
+    sentinel = _eng.request_stop(str(ws))
+    print(f"stop requested → {sentinel}")
+    pidfile = run_dir / "run.pid"
+    try:
+        pid = int(pidfile.read_text().strip())
+    except (OSError, ValueError):
+        print("no run.pid — sentinel dropped; the run stops at its next node")
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+        print(f"signalled pid {pid} (SIGTERM)")
+    except ProcessLookupError:
+        print(f"pid {pid} not running — sentinel left for a resumed run")
+
+
 def _next_run_no(case_name: str) -> int:
     """Sequential run number for the case. The counter file is the source
     of truth — it tracks the OPERATOR's run sequence (v10, v11, ...) and
@@ -115,7 +138,7 @@ def _load_tools():
 def _run_full(case: dict, case_dir: Path, depth: str, tools,
               decomposer: str = "blueprint", implementer: str = "auto",
               meter=None, model: str = "", workers: str = "sim",
-              hitl: str = "auto") -> dict:
+              hitl: str = "auto", resume: bool = False) -> dict:
     """The real production run: mandatory workspace inside the case folder,
     disk sink at full detail, the plugin's own report built from the trace.
 
@@ -268,7 +291,7 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
                               tools=tools, agents=agents or None,
                               contracts_dir=str(eng.CONTRACTS), sink=sink,
                               max_decompose_calls=max_calls, node_engine=node_engine,
-                              review_policy=review_policy, seed_files=seeds,
+                              review_policy=review_policy, seed_files=seeds, resume=resume,
                               standing_requirements=getattr(
                                   channel, "standing_requirements", None),
                               human_ask=getattr(channel, "ask", None))
@@ -488,7 +511,18 @@ def main() -> int:
                          "routing as-is (default), 'bifrost' points claude at the "
                          "Bifrost Anthropic route (env SPEC_FLOW_BIFROST_URL), "
                          "'direct' clears ANTHROPIC_BASE_URL")
+    ap.add_argument("--resume", default="", metavar="RUN_DIR",
+                    help="continue a stopped/crashed run: reuse RUN_DIR, "
+                         "restore its journal + claim board, re-run only the "
+                         "leaves that hadn't committed")
+    ap.add_argument("--stop", default="", metavar="RUN_DIR",
+                    help="ask a live run rooted at RUN_DIR to stop at the next "
+                         "node boundary (drops a STOP sentinel + signals its pid)")
     args = ap.parse_args()
+    # --stop is a one-shot control command: signal, then exit
+    if args.stop:
+        _stop_run(Path(args.stop))
+        return
     if args.gateway == "bifrost":
         os.environ["ANTHROPIC_BASE_URL"] = os.environ.get(
             "SPEC_FLOW_BIFROST_URL", "http://127.0.0.1:8080/anthropic")
@@ -519,8 +553,14 @@ def main() -> int:
             continue
         case = yaml.safe_load(path.read_text(encoding="utf-8"))
         name = case.get("name", path.stem)
-        case_dir = OUT_DIR / f"{stamp}__v{_next_run_no(name):03d}__{name}"
+        # --resume continues an existing run dir in place; a normal run mints
+        # a fresh, numbered one. The pidfile lets --stop signal this process.
+        resuming = bool(args.resume)
+        case_dir = (Path(args.resume) if resuming
+                    else OUT_DIR / f"{stamp}__v{_next_run_no(name):03d}__{name}")
         case_dir.mkdir(parents=True, exist_ok=True)
+        (case_dir / "run.pid").write_text(str(os.getpid()) + "\n",
+                                          encoding="utf-8")
         # persist the readable STARTING inputs (goal + givens) so the dashboard /
         # offline review shows what the plugin was asked to build — no hints
         inputs = {k: case[k] for k in
@@ -555,7 +595,7 @@ def main() -> int:
             meter = _cost.Meter()
         full = (_run_full(case, case_dir, args.depth, tools, args.decomposer,
                           implementer=args.implementer, meter=meter, model=args.model,
-                          workers=args.workers, hitl=args.hitl)
+                          workers=args.workers, hitl=args.hitl, resume=resuming)
                 if runnable else None)
 
         (case_dir / "SUMMARY.md").write_text(

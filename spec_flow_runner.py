@@ -180,6 +180,34 @@ def _lint_spec_traceability(nid: str, md: str) -> list:
     return out
 
 
+class RunStopped(RuntimeError):
+    """П1: a cooperative stop was requested (a STOP sentinel in the
+    workspace). The run halts at the NEXT node boundary and returns its
+    partial result — a later --resume picks up where it left off."""
+
+
+_STOP_REL = ".spec-flow/STOP"
+
+
+def request_stop(workspace_root: str) -> str:
+    """Ask a run rooted at ``workspace_root`` to stop. Drops a STOP sentinel
+    the engine checks at every node boundary. Returns the sentinel path."""
+    p = Path(workspace_root) / _STOP_REL
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("stop\n", encoding="utf-8")
+    return str(p)
+
+
+def clear_stop(workspace_root: str) -> None:
+    """Remove a STOP sentinel (called at run start so a stale stop from a
+    previous run never halts the resumed one)."""
+    p = Path(workspace_root) / _STOP_REL
+    try:
+        p.unlink()
+    except FileNotFoundError:
+        pass
+
+
 class IntegrateFailHalt(RuntimeError):
     """on_integrate_fail='halt': a FAILed integrate stops the run."""
 
@@ -852,6 +880,8 @@ class Engine:
         self._wave_lock = threading.RLock()
         # axis F: leaf isolation mode, set in run() from the project dict
         self._isolation = "none"
+        # П1: set True when a run ends via a cooperative STOP (partial result)
+        self._stopped = False
         self.agents = {**DEFAULT_AGENTS, **(agents or {})}
         self.contracts_dir = Path(contracts_dir) if contracts_dir else None
         self.events: list[Event] = []
@@ -1138,13 +1168,34 @@ class Engine:
                                 seed_files=self._seed_files)
             if self.resume:
                 self._journal_done = self.workspace.journal_nodes()
+            # П1: a STOP sentinel only governs the run that was live when it
+            # was dropped — clear any stale one so a resume never self-halts.
+            if getattr(self.workspace, "root", None):
+                clear_stop(self.workspace.root)
             self._journal_open()
-            return self._run(project)
+            try:
+                return self._run(project)
+            except RunStopped as stop:
+                self.emit("integrate", "verifier", "spec-flow", "L0:stop",
+                          "run STOPPED cooperatively — partial result kept",
+                          str(stop), verdict="STOPPED", level=L_MILESTONE)
+                self._wave([{"kind": "run_stopped", "node": str(stop),
+                             "completed": self._completed}])
+                self._stopped = True
+                return self._result(project)
         finally:
             self._journal_close()
             if self.sink is not None:
                 self.sink.close()
             self.workspace.finalize()
+
+    def _stop_requested(self) -> bool:
+        """П1: True when a STOP sentinel sits in the workspace — the run
+        halts cooperatively at the next node boundary."""
+        root = getattr(self.workspace, "root", None)
+        if not root:
+            return False
+        return (Path(root) / _STOP_REL).exists()
 
     def _module_for(self, nid: str) -> str:
         """Variant A: a deterministic, COLLISION-FREE module name per node.
@@ -1278,6 +1329,12 @@ class Engine:
         if self.runtime_guard and hasattr(self.tools, "assert_invariants"):
             self.tools.assert_invariants([vars(e) for e in self.events])
 
+        return self._result(project)
+
+    def _result(self, project: dict) -> RunResult:
+        """Assemble the RunResult from the engine's current state. Shared by
+        a normal finish and a cooperative STOP (П1), so a stopped run returns
+        the same shape — just with fewer completed nodes."""
         return RunResult(project, self.events, self.tasks, self.skills, self.profiles,
                          self.loops, self.gate_calls, self.verbosity, self.depth,
                          getattr(self.workspace, "root", None),
@@ -1584,6 +1641,10 @@ class Engine:
         if "metrics" not in node:
             node = self._expand_node(node, depth, parent, ancestors)
         nid = node["id"]
+        # П1: cooperative stop — checked at every node boundary. The current
+        # node has not started; a --resume re-enters here and continues.
+        if self._stop_requested():
+            raise RunStopped(nid)
         title = node.get("title", nid)
         self._node_registry[nid] = title
         self._dedup_children(node, nid, title, ancestors)
