@@ -601,6 +601,46 @@ def _build_state(run_dir: pathlib.Path) -> dict:
     }
 
 
+def _hitl_state(run_dir: "pathlib.Path | None") -> dict:
+    """Snapshot the bidirectional HITL channel for the ✋ tab:
+      * asks      — worker→human questions parsed from hitl/questions.md
+                    (each '[HITL?]'/'asks:' block, newest last);
+      * answered  — log of '**answer...**' lines already recorded;
+      * pending   — answer.md is present and non-empty (a reply written but
+                    not yet consumed by the worker);
+      * requirements — late requirements already injected (folder names).
+    Read-only; the human acts through the POST endpoints."""
+    if run_dir is None:
+        return {"empty": True}
+    hitl = run_dir / "hitl"
+    asks, answered = [], []
+    qmd = hitl / "questions.md"
+    if qmd.exists():
+        for line in qmd.read_text(encoding="utf-8", errors="ignore").splitlines():
+            s = line.strip()
+            if not s:
+                continue
+            if s.startswith("**answer"):
+                answered.append(s)
+            elif s.startswith("##") or "asks:" in s or "[HITL?]" in s:
+                asks.append(s.lstrip("# ").strip())
+    ans = hitl / "answer.md"
+    pending = ans.exists() and bool(ans.read_text(encoding="utf-8",
+                                                  errors="ignore").strip())
+    reqs = []
+    rdir = hitl / "requirements"
+    if rdir.is_dir():
+        for d in sorted(rdir.iterdir()):
+            if d.is_dir():
+                body = ""
+                rf = d / "REQUIREMENT.md"
+                if rf.exists():
+                    body = rf.read_text(encoding="utf-8", errors="ignore")
+                reqs.append({"name": d.name, "body": body})
+    return {"asks": asks[-30:], "answered": answered[-30:],
+            "pending": pending, "requirements": reqs}
+
+
 # ── server ───────────────────────────────────────────────────────────────────
 class _H(BaseHTTPRequestHandler):
     run_dir_override: pathlib.Path | None = None
@@ -630,6 +670,14 @@ class _H(BaseHTTPRequestHandler):
                 rows = [{"error": str(exc)}]
             payload = json.dumps(rows, ensure_ascii=False).encode("utf-8")
             return self._send(200, "application/json; charset=utf-8", payload)
+        if parsed.path == "/api/hitl":
+            # bidirectional HITL state for the ✋ tab: the worker→human asks
+            # (questions.md), whether an answer is still pending (answer.md
+            # present = not yet consumed), and the late requirements already
+            # injected. The human replies / injects via do_POST below.
+            return self._send(200, "application/json; charset=utf-8",
+                              json.dumps(_hitl_state(self._run_dir()),
+                                         ensure_ascii=False).encode("utf-8"))
         if parsed.path == "/api/file":
             rd = self._run_dir()
             rel = urllib.parse.parse_qs(parsed.query).get("path", [""])[0]
@@ -647,6 +695,52 @@ class _H(BaseHTTPRequestHandler):
                                   _md_to_html(text).encode("utf-8"))
             return self._send(200, "text/plain; charset=utf-8", text.encode("utf-8"))
         return self._send(404, "text/plain", b"not found")
+
+    def do_POST(self):                                             # noqa: N802
+        parsed = urllib.parse.urlparse(self.path)
+        rd = self._run_dir()
+        if rd is None:
+            return self._send(404, "application/json",
+                              b'{"ok":false,"error":"no active run"}')
+        try:
+            n = int(self.headers.get("Content-Length", "0"))
+            body = json.loads(self.rfile.read(n) or b"{}")
+        except Exception:                                  # noqa: BLE001
+            return self._send(400, "application/json",
+                              b'{"ok":false,"error":"bad json"}')
+        try:
+            if parsed.path == "/api/hitl/answer":
+                # human → worker: write answer.md; the worker's ask loop polls
+                # it, consumes it (non-empty) and unlinks. Mirrors the file the
+                # cron operator writes by hand.
+                text = str(body.get("text", "")).strip()
+                if not text:
+                    return self._send(400, "application/json",
+                                      b'{"ok":false,"error":"empty answer"}')
+                (rd / "hitl").mkdir(parents=True, exist_ok=True)
+                (rd / "hitl" / "answer.md").write_text(text + "\n",
+                                                       encoding="utf-8")
+                return self._send(200, "application/json",
+                                  b'{"ok":true,"wrote":"answer.md"}')
+            if parsed.path == "/api/hitl/inject":
+                # human → engine: a late requirement. One folder per
+                # requirement under hitl/requirements/<name>/REQUIREMENT.md,
+                # the same artifact the engine scans mid-run (a scope line
+                # '@scope: <nid>' may head the body).
+                name = re.sub(r"[^\w-]+", "_", str(body.get("name", ""))).strip("_")
+                text = str(body.get("text", "")).strip()
+                if not name or not text:
+                    return self._send(400, "application/json",
+                                      b'{"ok":false,"error":"name and text required"}')
+                d = rd / "hitl" / "requirements" / name
+                d.mkdir(parents=True, exist_ok=True)
+                (d / "REQUIREMENT.md").write_text(text + "\n", encoding="utf-8")
+                return self._send(200, "application/json",
+                                  json.dumps({"ok": True, "injected": name}).encode())
+        except Exception as exc:                           # noqa: BLE001
+            return self._send(500, "application/json",
+                              json.dumps({"ok": False, "error": str(exc)}).encode())
+        return self._send(404, "application/json", b'{"ok":false}')
 
     def _send(self, code, ctype, body):
         self.send_response(code)
@@ -843,7 +937,16 @@ const CMP_COLS=[['run','прогон'],['duration','время'],['ticks','ти�
  ['demotions','демоц'],['crashes','краш'],['leaf_timeouts','таймаут'],
  ['integrate_pass','интегр✓'],['integrate_red','интегрR'],
  ['quota_waits','квота'],['auto_answers','авто'],['reqs_attached','требов'],
- ['root_red','корень']];
+ ['root_red','корень'],
+ // normalized efficiency (size-independent) — compare runs of different power
+ ['calls_per_node','LLM/узел'],['errors_per_node','ошиб/узел'],
+ ['rework_per_node','реворк/узел'],['sec_per_node','сек/узел'],
+ ['first_pass_rate','1й-пасс'],['quota_per_call','квота/LLM']];
+// columns where LOWER is better (defect/cost density) vs HIGHER is better
+const CMP_LOWER=new Set(['calls_per_node','errors_per_node','rework_per_node',
+ 'sec_per_node','quota_per_call']);
+const CMP_HIGHER=new Set(['first_pass_rate']);
+const CMP_NORM=new Set([...CMP_LOWER,...CMP_HIGHER]);
 // short tooltips (<=2 sentences) for the abbreviated headers
 const CMP_TIPS={
  run:'Номер прогона (vNNN). Берётся из имени каталога runs-out.',
@@ -860,7 +963,13 @@ const CMP_TIPS={
  quota_waits:'Сколько раз прогон ждал сброса квоты вместо смерти. Высокое = free-пул жёстко лимитирован.',
  auto_answers:'Сколько вопросов воркеров закрыл автоответчик по известной политике (без 5-мин ожидания человека).',
  reqs_attached:'Сколько поздних требований движок материализовал в дерево (ATTACHED).',
- root_red:'Корневая интеграция дала FAIL: прогон дошёл до конца, но собранный продукт НЕ зелёный.'};
+ root_red:'Корневая интеграция дала FAIL: прогон дошёл до конца, но собранный продукт НЕ зелёный.',
+ calls_per_node:'Удельный расход: обращений к модели на один узел дерева. Меньше = экономнее. Сравнимо между кейсами разной мощности.',
+ errors_per_node:'Плотность дефектов: (реворк+интегрR+краш+таймаут) на узел. Меньше = чище идёт прогон.',
+ rework_per_node:'Доработок ревью на узел. Меньше = спеки рождаются зрелее.',
+ sec_per_node:'Пропускная способность: секунд стенных часов на узел. Меньше = быстрее.',
+ first_pass_rate:'Доля интеграций, зелёных с ПЕРВОЙ попытки = интегр✓/(интегр✓+интегрR). Больше = выше качество сборки.',
+ quota_per_call:'Давление квоты: ожиданий квоты на один LLM-вызов. Меньше = свободнее пул.'};
 function loadCompare(){
  fetch('/api/compare').then(r=>r.json()).then(d=>{CMP=d;render();})
   .catch(()=>{CMP=[{error:'не удалось загрузить'}];render();});
@@ -882,21 +991,81 @@ function compareHTML(){
   '<span class=dim>'+rows.length+' прогон(ов)</span></div>';
  // only the table BODY scrolls: the filter row + header stay put, the
  // data area gets its own scroll box sized to the remaining pane height
+ // per-column min/max over the SHOWN rows, for relative heat-coloring of
+ // the normalized efficiency columns (best=green, worst=red)
+ const ext={};
+ CMP_NORM.forEach(k=>{const xs=rows.map(r=>r[k]).filter(v=>typeof v==='number');
+  if(xs.length)ext[k]=[Math.min(...xs),Math.max(...xs)];});
+ const heat=(k,v)=>{if(typeof v!=='number'||!ext[k])return '';
+  const[mn,mx]=ext[k];if(mn===mx)return '';
+  const t=(v-mn)/(mx-mn);const good=CMP_LOWER.has(k)?(1-t):t; // 1=best
+  if(good>=0.66)return ' style="color:#3fb950"';
+  if(good<=0.33)return ' style="color:#f85149"';
+  return ' style="color:#e3b341"';};
  h+='<div class=cmpscroll><table class=cmp><thead><tr>'+CMP_COLS.map(([k,t])=>
-  `<th data-sort="${k}" title="${esc(CMP_TIPS[k]||'')}" style="cursor:help">${t}${CMP_SORT===k?(CMP_DESC?' ▾':' ▴'):''}</th>`).join('')+'</tr></thead><tbody>';
+  `<th data-sort="${k}" title="${esc(CMP_TIPS[k]||'')}" style="cursor:help"${CMP_NORM.has(k)?' class=normcol':''}>${t}${CMP_SORT===k?(CMP_DESC?' ▾':' ▴'):''}</th>`).join('')+'</tr></thead><tbody>';
  rows.forEach(r=>{h+='<tr>'+CMP_COLS.map(([k])=>{
   let v=r[k];if(typeof v==='boolean')v=v?'<b style="color:#f85149">RED</b>':'—';
-  return `<td>${v===undefined?'':v}</td>`;}).join('')+'</tr>';});
+  const hc=CMP_NORM.has(k)?heat(k,r[k]):'';
+  return `<td${hc}>${v===undefined?'':v}</td>`;}).join('')+'</tr>';});
  h+='</tbody></table></div>';
  return h;
 }
 
+// bidirectional HITL (✋): worker→human asks + human→worker answer/inject
+let HITL=null;
+function loadHitl(){
+ fetch('/api/hitl').then(r=>r.json()).then(d=>{HITL=d;if(GTAB==='hitl')render();})
+  .catch(()=>{HITL={error:'не удалось загрузить'};render();});
+}
+function hitlHTML(){
+ if(HITL===null){loadHitl();return '<p class=dim>загружаю HITL…</p>';}
+ if(HITL.error)return '<p class=dim>ошибка: '+esc(HITL.error)+'</p>';
+ if(HITL.empty)return '<p class=dim>нет активного прогона</p>';
+ const asks=HITL.asks||[],ans=HITL.answered||[],reqs=HITL.requirements||[];
+ let h='<h3 class=muted>✋ HITL — двусторонний канал с прогоном '+
+  '<span class="tab" id=hitlreload style="margin-left:8px">↻ обновить</span></h3>';
+ // worker → human: pending state + recent asks
+ h+='<div class='+(HITL.pending?'errbox':'fixbox')+'>'+
+  (HITL.pending?'⏳ <b>ответ записан, воркер ещё не забрал</b> (answer.md ждёт потребления)'
+   :'✓ <b>нет неотправленного ответа</b> — можно отвечать на новый вопрос')+'</div>';
+ h+='<h4>Вопросы воркеров (worker → человек)</h4>';
+ h+= asks.length? '<ol class="feed full">'+asks.map(a=>`<li>${esc(a)}</li>`).join('')+'</ol>'
+   : '<p class=dim>пока вопросов нет</p>';
+ // human → worker: answer box
+ h+='<h4>Ответить воркеру (человек → worker)</h4>'+
+  '<textarea id=hitlans rows=4 style="width:100%" placeholder="Текст ответа — попадёт в hitl/answer.md, воркер заберёт его из своего цикла ожидания"></textarea>'+
+  '<div style="margin:6px 0"><span class="tab" id=hitlsend>➤ отправить ответ</span> '+
+  '<span class=dim id=hitlmsg></span></div>';
+ // human → engine: inject a late requirement
+ h+='<h4>Вбросить позднее требование (человек → движок)</h4>'+
+  '<div class=dim>имя = папка под hitl/requirements/; первая строка тела может быть «@scope: &lt;узел&gt;»</div>'+
+  '<input id=hitlname placeholder="имя требования (web_ui)" style="width:240px;margin:4px 0">'+
+  '<textarea id=hitlreq rows=4 style="width:100%" placeholder="Текст требования (REQUIREMENT.md)"></textarea>'+
+  '<div style="margin:6px 0"><span class="tab" id=hitlinject>➤ вбросить</span> '+
+  '<span class=dim id=hitlimsg></span></div>';
+ // already-injected requirements
+ if(reqs.length){h+='<h4>Уже вброшено ('+reqs.length+')</h4><ul>'+
+  reqs.map(r=>`<li><b>${esc(r.name)}</b> <span class=dim>(${(r.body||'').length} симв.)</span></li>`).join('')+'</ul>';}
+ if(ans.length){h+='<h4 class=dim>Записанные ответы (история)</h4><ol class="feed">'+
+  ans.slice(-10).map(a=>`<li>${esc(a)}</li>`).join('')+'</ol>';}
+ return h;
+}
+function hitlPost(path,payload,msgEl){
+ fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify(payload)}).then(r=>r.json()).then(d=>{
+   const el=$(msgEl);if(el)el.textContent=d.ok?'✓ записано':('✗ '+(d.error||'ошибка'));
+   if(d.ok)loadHitl();
+  }).catch(e=>{const el=$(msgEl);if(el)el.textContent='✗ сеть';});
+}
+
 function renderGlobal(){
  const R=STATE.reports;
- const tabs=[['inputs','▶ Старт (цель+вход)'],['graph','🕸 Граф спеков'],['flow','🔀 Поток выполнения'],['timeline','⏱ Таймлайн'],['report','Отчёт+аудит'],['agents','🤖 Агенты сейчас'],['compare','📊 Сравнение прогонов'],['workflow','Воркфлоу'],['oracle','Оракул'],['commits','Версии/коммиты'],['summary','Итог']];
- let h='<div class=tabs>'+tabs.map(([k,t])=>(k==='timeline'||k==='graph'||k==='agents'||k==='compare'||R[k])?`<span class="tab${GTAB===k?' on':''}" data-g="${k}">${t}</span>`:'').join('')+'</div>';
+ const tabs=[['inputs','▶ Старт (цель+вход)'],['graph','🕸 Граф спеков'],['flow','🔀 Поток выполнения'],['timeline','⏱ Таймлайн'],['report','Отчёт+аудит'],['agents','🤖 Агенты сейчас'],['hitl','✋ HITL'],['compare','📊 Сравнение прогонов'],['workflow','Воркфлоу'],['oracle','Оракул'],['commits','Версии/коммиты'],['summary','Итог']];
+ let h='<div class=tabs>'+tabs.map(([k,t])=>(k==='timeline'||k==='graph'||k==='agents'||k==='hitl'||k==='compare'||R[k])?`<span class="tab${GTAB===k?' on':''}" data-g="${k}">${t}</span>`:'').join('')+'</div>';
  let body;
  if(GTAB==='agents')body='<h3 class=muted>Что делают агенты сейчас <span class=dim>(сверху — последнее)</span></h3><ol class="feed full" reversed>'+(STATE.feed||[]).slice().reverse().map(f=>`<li>${esc(f)}</li>`).join('')+'</ol>';
+ else if(GTAB==='hitl')body=hitlHTML();
  else if(GTAB==='compare')body=compareHTML();
  else if(GTAB==='timeline')body=timelineHTML();
  else if(GTAB==='graph')body='<p class=muted>граф задач, что построил плагин — <b>дабл-клик</b> = провалиться в спеку/код/версии · <b>клик</b> = свернуть поддерево / развернуть следующий уровень. 🌿 ветка · 🍃 лист · бейджи = эпизоды</p>'+graphSVG();
@@ -1019,6 +1188,14 @@ document.addEventListener('click',e=>{
  if(sorth){const k=sorth.dataset.sort;if(CMP_SORT===k)CMP_DESC=!CMP_DESC;else{CMP_SORT=k;CMP_DESC=false;}renderGlobal();return;}
  const g=e.target.closest('[data-g]');if(g){GTAB=g.dataset.g;renderGlobal();return;}
  const rl=e.target.closest('#cmpreload');if(rl){CMP=null;renderGlobal();return;}
+ if(e.target.closest('#hitlreload')){HITL=null;loadHitl();return;}
+ if(e.target.closest('#hitlsend')){const t=($('#hitlans')||{}).value||'';
+  if(t.trim())hitlPost('/api/hitl/answer',{text:t},'#hitlmsg');
+  else $('#hitlmsg').textContent='✗ пусто';return;}
+ if(e.target.closest('#hitlinject')){const nm=($('#hitlname')||{}).value||'',
+  t=($('#hitlreq')||{}).value||'';
+  if(nm.trim()&&t.trim())hitlPost('/api/hitl/inject',{name:nm,text:t},'#hitlimsg');
+  else $('#hitlimsg').textContent='✗ имя и текст обязательны';return;}
  const nt=e.target.closest('[data-n]');if(nt){if(nt.dataset.n==='__back'){SEL=null;render();}else{NTAB=nt.dataset.n;renderNode();}return;}
 });
 

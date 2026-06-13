@@ -108,6 +108,25 @@ def metrics(run_dir: pathlib.Path) -> dict:
     mem = meta.get("memory") or {}
     par = meta.get("parallel") or {}
 
+    llm_calls = count_event("call_start")
+    reviews_rejected = count_action("REJECT")
+    crashes = count_action("crashed")
+    leaf_timeouts = count_action("time ceiling")
+    integrate_red = count_event("integrate_red")
+    quota_waits = count_event("quota_wait")
+
+    # ── efficiency coefficients (normalized) ──────────────────────────
+    # Raw counts can't compare runs of different SIZE: a 40-node case will
+    # always show more rejects than a 6-node one. Dividing by the realized
+    # node count (and by call/integrate totals) yields rates that ARE
+    # comparable across cases — they measure how efficiently a run turns
+    # work into a green product, not how big it was.
+    def _ratio(num: float, den: float) -> float:
+        return round(num / den, 3) if den else 0.0
+
+    defects = reviews_rejected + integrate_red + crashes + leaf_timeouts
+    integ_total = integ_pass + integrate_red
+
     return {
         "run": run_dir.name.split("__")[1] if "__" in run_dir.name
         else run_dir.name,
@@ -117,15 +136,15 @@ def metrics(run_dir: pathlib.Path) -> dict:
         "duration": _fmt_dur(duration) + ("" if finished else "~"),
         "ticks": max((e.get("tick", 0) for e in trace), default=0),
         "tree_nodes": tree_nodes,
-        "llm_calls": count_event("call_start"),
-        "reviews_rejected": count_action("REJECT"),
+        "llm_calls": llm_calls,
+        "reviews_rejected": reviews_rejected,
         "lint_reworks": count_action("rework closed open decisions"),
         "demotions": count_action("demoted to leaf"),
-        "crashes": count_action("crashed"),
-        "leaf_timeouts": count_action("time ceiling"),
+        "crashes": crashes,
+        "leaf_timeouts": leaf_timeouts,
         "integrate_pass": integ_pass,
-        "integrate_red": count_event("integrate_red"),
-        "quota_waits": count_event("quota_wait"),
+        "integrate_red": integrate_red,
+        "quota_waits": quota_waits,
         "auto_answers": count_event("auto_answer"),
         "reqs_attached": reqs_attached,
         "root_red": root_red,
@@ -133,6 +152,15 @@ def metrics(run_dir: pathlib.Path) -> dict:
         if isinstance(mem, dict) else "—",
         "concurrency": (meta.get("workers") or {}).get("concurrency", "—")
         if isinstance(meta.get("workers"), dict) else "—",
+        # normalized efficiency (size-independent) — see _ratio note above
+        "calls_per_node": _ratio(llm_calls, tree_nodes),
+        "errors_per_node": _ratio(defects, tree_nodes),
+        "rework_per_node": _ratio(reviews_rejected, tree_nodes),
+        "sec_per_node": _ratio(duration, tree_nodes),
+        # share of integrations green on the FIRST try (higher = better)
+        "first_pass_rate": _ratio(integ_pass, integ_total),
+        # throttle pressure: quota waits per LLM call (lower = healthier pool)
+        "quota_per_call": _ratio(quota_waits, llm_calls),
     }
 
 
