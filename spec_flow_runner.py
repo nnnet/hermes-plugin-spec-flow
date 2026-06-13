@@ -2280,6 +2280,31 @@ class Engine:
         self.tasks[review].status = "done"
         self._completed += 2
 
+    def _derive_smoke_contract(self) -> None:
+        """#9 / П2: derive an API contract from the smoke acceptance tests and
+        write SMOKE-CONTRACT.md, so the contract is the executable truth (no
+        hand-maintained drift). Best effort — never blocks a run."""
+        ws = self.workspace
+        smoke = Path(ws.root or ".") / "tests" / "smoke"
+        if not (ws.enabled and ws.root and smoke.is_dir()):
+            return
+        try:
+            from tests.harness import contract_from_smoke as cfs
+        except Exception:  # noqa: BLE001
+            try:
+                from harness import contract_from_smoke as cfs  # type: ignore
+            except Exception:  # noqa: BLE001
+                return
+        blocks = []
+        for f in sorted(smoke.glob("test_*.py")):
+            md = cfs.contract_from_file(str(f))
+            if md:
+                blocks.append(f"<!-- from {f.name} -->\n{md}")
+        if blocks:
+            ws._write("SMOKE-CONTRACT.md",
+                      "# Smoke-derived API contract (auto-generated)\n\n"
+                      + "\n".join(blocks), "contract")
+
     def _verify_tests(self) -> None:
         ws = self.workspace
         if not ws.enabled or not ws.root:
@@ -2287,6 +2312,7 @@ class Engine:
         tests_dir = Path(ws.root) / "tests"
         if not tests_dir.exists():
             return
+        self._derive_smoke_contract()
         try:
             # run from the workspace root: paths stay short (tests/test_x.py),
             # confcutdir isolates the run from any host-project conftest.py;
