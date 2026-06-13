@@ -64,8 +64,15 @@ def run_suite(root: str, include_smoke: bool,
         return True, "(no tests yet)"
     scope = [t for t in (targets or []) if (Path(root) / t).is_file()]
     paths = scope or ["tests"]
+    # --continue-on-collection-errors: ONE unimportable file (e.g. a weak
+    # model wrote a non-ASCII char into Python) must not abort collection and
+    # zero the whole corpus — pytest's default makes a single SyntaxError look
+    # like total failure. With this flag the bad file is reported and isolated
+    # while the other tests still run, so the verdict stays honest and repair
+    # can target the one broken file.
     cmd = [sys.executable, "-m", "pytest", *paths, "-q", "--no-header",
-           "-p", "no:cacheprovider", "--import-mode=importlib"]
+           "-p", "no:cacheprovider", "--import-mode=importlib",
+           "--continue-on-collection-errors"]
     if not scope and not include_smoke and (Path(root) / SMOKE_DIR).is_dir():
         cmd += ["--ignore", SMOKE_DIR]
     with llm_backend.PYTEST_LOCK:
@@ -434,6 +441,36 @@ def _duplicate_table_owners(root: str) -> dict:
     return {t: m for t, m in owners.items() if len(m) > 1}
 
 
+def _non_ascii_offenders(root: str) -> list:
+    """Python files that fail to compile because a weak model wrote a non-ASCII
+    character into the source (e.g. '…' U+2026 instead of '...', or smart
+    quotes). Deterministic: pytest's collection abort hides WHICH char/line,
+    so report file:line:char precisely for repair. Returns a list of
+    (rel_path, line_no, char, codepoint)."""
+    out = []
+    base = Path(root)
+    for sub in ("src", "tests"):
+        d = base / sub
+        if not d.is_dir():
+            continue
+        for p in sorted(d.rglob("*.py")):
+            rel = str(p.relative_to(root))
+            try:
+                text = p.read_text(encoding="utf-8")
+                compile(text, rel, "exec")
+            except SyntaxError as e:                       # noqa: PERF203
+                # find the first non-ASCII char (the usual culprit)
+                bad = next((ch for ch in text if ord(ch) > 127), "")
+                if bad:
+                    line = text[:text.index(bad)].count("\n") + 1
+                    out.append((rel, line, bad, f"U+{ord(bad):04X}"))
+                elif e.lineno:
+                    out.append((rel, e.lineno, "", "syntax"))
+            except OSError:
+                continue
+    return out
+
+
 def make_verifier(model: Optional[str] = None,
                   max_repair: int = MAX_REPAIR,
                   channel: Optional[object] = None) -> Callable[[dict], dict]:
@@ -542,6 +579,24 @@ def make_verifier(model: Optional[str] = None,
                 llm_log.log({"event": "table_ownership_conflict",
                              "role": "verifier", "node": str(ctx.get("node")),
                              "tables": sorted(dupes)})
+            # NON-ASCII SYNTAX: a weak model writes '…'/smart-quotes into
+            # Python -> SyntaxError -> the file won't import. Deterministic and
+            # precise (pytest's collection abort hides the char/line).
+            offenders = _non_ascii_offenders(root)
+            if offenders:
+                lines = "; ".join(
+                    f"{f} line {ln}: invalid character {repr(ch)} ({cp})"
+                    if ch else f"{f} line {ln}: syntax error ({cp})"
+                    for f, ln, ch, cp in offenders)
+                out += ("\n\nROOT-CAUSE HINT: these files do not compile — a "
+                        "non-ASCII character slipped into Python source: "
+                        + lines + ". Replace each with its ASCII equivalent "
+                        "('…'→'...', smart quotes → straight quotes) and never "
+                        "put a literal '…(truncated)' placeholder in code.\n"
+                        + "\n".join(sorted({f for f, _, _, _ in offenders})))
+                llm_log.log({"event": "non_ascii_syntax", "role": "verifier",
+                             "node": str(ctx.get("node")),
+                             "files": sorted({f for f, _, _, _ in offenders})})
             # #3: a FLAKY acceptance test (proven non-deterministic) must not
             # redden the root. Re-run each red file FLAKY_RERUNS times; a file
             # that flips green↔red is quarantined — recorded, never silent —

@@ -124,3 +124,25 @@ def test_schema_module_paths_finds_registrars(tmp_path):
     got = set(pv._schema_module_paths(str(tmp_path)))
     assert "src/categories.py" in got
     assert "src/plain.py" not in got
+
+
+# ── non-ASCII syntax offender (weak-model class) ──────────────────────────
+
+def test_non_ascii_offender_detected(tmp_path):
+    src = tmp_path / "src"; src.mkdir()
+    tdir = tmp_path / "tests"; tdir.mkdir()
+    # a weak model wrote a U+2026 ellipsis into Python instead of '...'
+    (tdir / "test_cart.py").write_text(
+        "def test_x():\n    items = [1, 2, 3]\n    assert items  # …(truncated)\n"
+        "    x = …\n", encoding="utf-8")
+    (src / "clean.py").write_text("x = 1\n")
+    bad = pv._non_ascii_offenders(str(tmp_path))
+    assert len(bad) == 1
+    rel, line, ch, cp = bad[0]
+    assert rel == "tests/test_cart.py" and ch == "…" and cp == "U+2026"
+
+
+def test_no_offender_when_pure_ascii(tmp_path):
+    src = tmp_path / "src"; src.mkdir()
+    (src / "ok.py").write_text("def f():\n    return '...'\n")
+    assert pv._non_ascii_offenders(str(tmp_path)) == []
