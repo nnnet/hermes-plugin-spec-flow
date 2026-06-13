@@ -907,6 +907,9 @@ class Engine:
         self._isolation = "none"
         # #4: scope a branch integrate to its subtree's tests (root stays full)
         self._incremental_integrate = True
+        # #8: auto-spike thresholds (0 = off) — set in run() from the project
+        self._spike_open = 0
+        self._spike_loc = 0
         # П1: set True when a run ends via a cooperative STOP (partial result)
         self._stopped = False
         self.agents = {**DEFAULT_AGENTS, **(agents or {})}
@@ -1190,6 +1193,11 @@ class Engine:
         # a case may turn it off with incremental_integrate: false
         self._incremental_integrate = project.get(
             "incremental_integrate", True) is not False
+        # #8: auto-spike thresholds — a node at/above either flags a research
+        # spike before freeze. 0 = off (default), opt-in per case.
+        _spk = project.get("auto_spike") or {}
+        self._spike_open = int(_spk.get("open_decisions", 0) or 0)
+        self._spike_loc = int(_spk.get("estimated_loc", 0) or 0)
         if self._isolation == "worktree":
             self.workspace.git_provenance = True
         try:
@@ -1751,6 +1759,28 @@ class Engine:
                       "clarify answered → unblock", clar["resolution"], level=L_MILESTONE)
             self.tasks[nid].runs += 1
             self.loops.append({"type": "clarify", "task": nid, "detail": clar["decision"]})
+
+        # #8 (П8): auto-spike HARD nodes. A node with many open decisions or
+        # high estimated LOC gets a research spike before freeze even if the
+        # decomposer didn't request one — the researcher role runs it (config
+        # it to lead a STRONGER free model / the haiku subscription). Thresholds
+        # 0 = off. A decomposer-authored spike always wins.
+        if not node.get("spike") and (self._spike_open or self._spike_loc):
+            m = node.get("metrics") or {}
+            od = int(m.get("open_decisions", 0) or 0)
+            loc = int(m.get("estimated_loc", 0) or 0)
+            hard = ((self._spike_open and od >= self._spike_open)
+                    or (self._spike_loc and loc >= self._spike_loc))
+            if hard:
+                node["spike"] = {
+                    "question": (f"'{title}' is hard ({od} open decisions, "
+                                 f"~{loc} LOC). Research the SINGLE best "
+                                 "approach + the key risk before the spec is "
+                                 "frozen."),
+                    "recommendation": "(researcher to fill)"}
+                self.emit("research", "researcher", "spec-research", nid,
+                          "auto-spike: hard node flagged for research",
+                          f"open_decisions={od} loc={loc}", level=L_DETAIL)
 
         # spike before freeze (research)
         spike = node.get("spike")
