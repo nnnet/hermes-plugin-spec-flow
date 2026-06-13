@@ -62,6 +62,34 @@ def test_backend_is_pluggable():
         assert a.PARAM == "?"
 
 
+def test_constraints_indexes_and_fks():
+    # the schema features actually need: NOT NULL, UNIQUE, indexes (for
+    # 'queried by X' specs) and foreign keys — all portable, no raw SQL
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _load_seeded_db(tmp)
+        db.define_table("sellers", {"id": "id",
+                                    "email": "text unique not null",
+                                    "name": "text not null"})
+        db.define_table(
+            "payouts",
+            {"id": "id", "seller_id": "int not null", "status": "text not null",
+             "amount": "real not null"},
+            indexes=[["seller_id"], "status"],
+            foreign_keys={"seller_id": "sellers(id)"})
+        conn = db.connect()
+        try:
+            notnull = {r["name"]: r["notnull"]
+                       for r in conn.execute("PRAGMA table_info(payouts)")}
+            assert notnull["seller_id"] == 1 and notnull["status"] == 1
+            idx = [r["name"] for r in conn.execute("PRAGMA index_list(payouts)")]
+            assert "idx_payouts_seller_id" in idx and "idx_payouts_status" in idx
+            sellers = {r["name"]: r["notnull"]
+                       for r in conn.execute("PRAGMA table_info(sellers)")}
+            assert sellers["email"] == 1
+        finally:
+            conn.close()
+
+
 def test_legacy_register_schema_still_works():
     with tempfile.TemporaryDirectory() as tmp:
         db = _load_seeded_db(tmp)

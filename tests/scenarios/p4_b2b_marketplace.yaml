@@ -245,13 +245,17 @@ constitution_platform:
      registering endpoints with @registry.route(METHOD, PATH); a handler
      takes (payload, query) and returns (status_code, json_serialisable
      OR an HTML string when the route serves a page)."
-  - "Tables via db.define_table(name, {col: 'id|int|text|real|bool|timestamp'})
+  - "Tables via db.define_table(name, columns, indexes=..., foreign_keys=...)
      and read/write with db.insert/select/update/delete/execute — the portable
-     layer generates dialect SQL, so NEVER write raw CREATE/ALTER (in particular
-     SQLite has no 'ALTER TABLE ... ADD COLUMN IF NOT EXISTS'); put every column
-     in the define_table call. db.register_schema(SQL) survives as a legacy
-     escape hatch only. Tests set MARKETPLACE_DB to a fresh temp path before
-     connecting; never touch platform internals."
+     layer generates dialect SQL, so NEVER write raw CREATE/ALTER. Column spec
+     is 'base [modifiers]': base = id|int|text|real|bool|timestamp; modifiers =
+     'not null', 'unique', 'primary key' (e.g. {'seller_id': 'int not null',
+     'email': 'text unique not null'}). Express a needed index with
+     indexes=[['seller_id'], 'status'] (or {'cols': [...], 'unique': True}) and
+     a reference with foreign_keys={'seller_id': 'sellers(id)'} — do not hand-
+     write CREATE INDEX / FOREIGN KEY. db.register_schema(SQL) survives as a
+     legacy escape hatch only. Tests set MARKETPLACE_DB to a fresh temp path
+     before connecting; never touch platform internals."
 
 seed_files:
   src/app.py: "\"\"\"WSGI entry point. Features live in src/<feature>.py: importing\
@@ -294,8 +298,17 @@ seed_files:
     import os
     import sqlite3
 
-    _TABLES = {}    # name -> {column: portable_type}  (declared via define_table)
+    _TABLES = {}    # name -> {"columns": {...}, "indexes": [...], "fks": {...}}
     _SCHEMAS = []   # legacy raw-SQL escape hatch (register_schema)
+
+    # portable constraint words that may trail a column type, e.g.
+    # "int not null", "text unique not null", "text primary key".
+    _MODIFIERS = (
+        ("not null", "NOT NULL"),
+        ("primary key", "PRIMARY KEY"),
+        ("unique", "UNIQUE"),
+        ("autoincrement", "AUTOINCREMENT"),
+    )
 
 
     class SQLiteAdapter:
@@ -310,14 +323,34 @@ seed_files:
             conn = sqlite3.connect(
                 os.environ.get("MARKETPLACE_DB", "marketplace.db"))
             conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys = ON")
             return conn
 
-        def column_sql(self, col, typ):
-            return f"{col} {self._TYPES.get(typ, 'TEXT')}"
+        def column_sql(self, col, spec):
+            """spec = 'base [modifiers]', e.g. 'int not null', 'text unique'.
+            The base maps to a dialect type; portable modifier words become the
+            dialect's constraint keywords."""
+            s = str(spec).strip()
+            low = s.lower()
+            base = low.split()[0] if low.split() else "text"
+            out = self._TYPES.get(base, "TEXT")
+            for word, sql in _MODIFIERS:
+                if word in low and sql not in out:
+                    out += " " + sql
+            return f"{col} {out}"
 
-        def create_table_sql(self, name, columns):
-            body = ", ".join(self.column_sql(c, t) for c, t in columns.items())
-            return f"CREATE TABLE IF NOT EXISTS {name} ({body})"
+        def create_table_sql(self, name, columns, fks=None):
+            parts = [self.column_sql(c, t) for c, t in columns.items()]
+            for col, ref in (fks or {}).items():
+                parts.append(f"FOREIGN KEY ({col}) REFERENCES {ref}")
+            return f"CREATE TABLE IF NOT EXISTS {name} ({', '.join(parts)})"
+
+        def create_index_sql(self, table, cols, unique=False):
+            cols = [cols] if isinstance(cols, str) else list(cols)
+            uniq = "UNIQUE " if unique else ""
+            idx = f"idx_{table}_{'_'.join(cols)}"
+            return (f"CREATE {uniq}INDEX IF NOT EXISTS {idx} "
+                    f"ON {table} ({', '.join(cols)})")
 
 
     _ADAPTERS = {"sqlite": SQLiteAdapter}
@@ -330,10 +363,21 @@ seed_files:
         return _ADAPTERS.get(key, SQLiteAdapter)()
 
 
-    def define_table(name, columns):
-        """Declare a table portably. columns = {col: 'id|int|text|real|bool|
-        timestamp'}. Idempotent; dialect DDL is generated at connect()."""
-        _TABLES[name] = dict(columns)
+    def define_table(name, columns, indexes=None, foreign_keys=None):
+        """Declare a table portably. Idempotent; dialect DDL is generated at
+        connect().
+
+          columns      {col: 'base [modifiers]'} where base is id|int|text|real|
+                       bool|timestamp and modifiers may add 'not null', 'unique',
+                       'primary key' — e.g. {'seller_id': 'int not null'}.
+          indexes      optional list; each item is a column name, a list of
+                       columns, or {'cols': [...], 'unique': True} — translated to
+                       CREATE INDEX so 'queried by X' specs are satisfiable.
+          foreign_keys optional {col: 'other_table(col)'} referential constraints.
+        """
+        _TABLES[name] = {"columns": dict(columns),
+                         "indexes": list(indexes or []),
+                         "fks": dict(foreign_keys or {})}
 
 
     def register_schema(sql):
@@ -342,11 +386,20 @@ seed_files:
             _SCHEMAS.append(sql)
 
 
+    def _norm_index(item):
+        if isinstance(item, dict):
+            return item.get("cols", []), bool(item.get("unique"))
+        return item, False
+
+
     def connect():
         a = _adapter()
         conn = a.connect()
-        for name, cols in _TABLES.items():
-            conn.execute(a.create_table_sql(name, cols))
+        for name, spec in _TABLES.items():
+            conn.execute(a.create_table_sql(name, spec["columns"], spec["fks"]))
+            for item in spec["indexes"]:
+                cols, uniq = _norm_index(item)
+                conn.execute(a.create_index_sql(name, cols, uniq))
         for sql in _SCHEMAS:
             conn.executescript(sql)
         return conn
