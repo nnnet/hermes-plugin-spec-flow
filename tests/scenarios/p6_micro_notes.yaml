@@ -119,20 +119,39 @@ workers:
   max_decompose_calls: 40
   creator_ensemble: 2
   concurrency: 3
-  cycle_models: true
+  # cycle_models: false                 # ← SONNET diagnostic (restore with SONNET block)
+  cycle_models: true                    # FREE-PRIMARY: round-robin across free models
   quota_wait_s: 300
   quota_retries: 11
   fallback_models: [claude/haiku]
   providers:
     - {name: openrouter-free, kind: openai, model_prefix: "openrouter/", require_suffix: ":free", requests_per_day: 1000}
     - {name: claude-cli, kind: claude, model_prefix: "claude/"}
+  # ── MODEL CHAINS ───────────────────────────────────────────────────────
+  # SWITCH: free-primary is ACTIVE. To force sonnet (diagnostic), comment the FREE
+  # block and uncomment the SONNET block below (and set cycle_models: false above).
+  #
+  # FREE-PRIMARY (ACTIVE — free OpenRouter primary, haiku fallback):
   defaults:
     models: ["openrouter/qwen/qwen3-coder:free", "claude/haiku"]
   decomposer:
     models: ["openrouter/qwen/qwen3-next-80b-a3b-instruct:free", "claude/haiku"]
   implementer:
     models: ["openrouter/qwen/qwen3-coder:free", "openrouter/deepseek/deepseek-chat-v3.1:free", "claude/haiku"]
+    # D1: implementer orchestra — architect → coder → tester → fixer (free model).
+    team:
+      - {role: architect}
+      - {role: coder}
+      - {role: tester}
+      - {role: fixer}
   reviewer:
     models: ["claude/haiku", "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"]
   verifier:
     models: ["claude/haiku", "openrouter/qwen/qwen3-coder:free"]
+  #
+  # SONNET-PRIMARY (diagnostic — commented): sonnet via claude-cli subscription.
+  # defaults:   {models: ["claude/sonnet", "openrouter/qwen/qwen3-coder:free", "claude/haiku"]}
+  # decomposer: {models: ["claude/sonnet", "openrouter/qwen/qwen3-next-80b-a3b-instruct:free", "claude/haiku"]}
+  # implementer:{models: ["claude/sonnet", "openrouter/qwen/qwen3-coder:free", "claude/haiku"]}
+  # reviewer:   {models: ["claude/sonnet", "claude/haiku"]}
+  # verifier:   {models: ["claude/sonnet", "claude/haiku"]}

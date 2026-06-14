@@ -539,64 +539,86 @@ def _flow_timeaxis(events: list[dict], tree: dict | None = None) -> str | None:
             order.append(lane)
     lane_x = {lane: i for i, lane in enumerate(order)}
 
-    miles.sort(key=lambda e: float(e["t"]))
+    # Group milestones by whole-second timestamp: each second is ONE row, so
+    # parallel work in different lanes at the same instant shares a row (aligned
+    # horizontally). Rows go NEWEST-FIRST (top = later time). Within a row a
+    # lane's events STACK, so two events of the same lane never overlap.
+    secs: dict = {}
+    for e, lane in zip(miles, lane_of):
+        secs.setdefault(int(float(e["t"])), []).append((e, lane))
 
-    AXIS, LANEW, PADT, ROWH = 72, 250, 22, 60
-    n = len(miles)
-    width = AXIS + len(order) * LANEW + 16
-    height = PADT + n * ROWH + 16
+    AXIS, LANEW, PADT, BOXH, RGAP = 78, 250, 22, 56, 8
 
-    def hms(t: float) -> str:
+    def hms(t) -> str:
         return _time.strftime("%H:%M:%S", _time.localtime(float(t)))
+
+    rows = sorted(secs.keys(), reverse=True)        # newest second at the top
+    row_top, row_h, by_lane = {}, {}, {}
+    y = PADT
+    for sec in rows:
+        per_lane: dict = {}
+        for e, lane in secs[sec]:
+            per_lane.setdefault(lane, []).append(e)
+        by_lane[sec] = per_lane
+        row_h[sec] = max(len(v) for v in per_lane.values()) * BOXH + RGAP
+        row_top[sec] = y
+        y += row_h[sec]
+    width = AXIS + len(order) * LANEW + 16
+    height = y + 12
+
+    def _color(e):
+        v = str(e.get("verdict") or "")
+        ph = str(e.get("phase") or "")
+        if v in ("REJECT", "FAIL", "ERROR"):
+            return "#f85149", "#3a1620"
+        if ph in ("research", "drift", "respec", "hitl") \
+                or e.get("gate") in ("clarify", "drift", "hitl"):
+            return "#e3b341", "#3a2a12"
+        return "#2f5d40", "#161b22"
 
     p = [f'<div style="position:relative;width:{width}px;height:{height}px;'
          f'font-size:11px;min-width:{width}px">']
-    # vertical axis line spanning the packed rows
     p.append(f'<div style="position:absolute;left:{AXIS - 1}px;top:{PADT - 6}px;'
-             f'width:1px;height:{n * ROWH}px;background:#30363d"></div>')
-    # lane headers
+             f'width:1px;height:{y - PADT}px;background:#30363d"></div>')
     for lane in order:
         lx = AXIS + lane_x[lane] * LANEW
         p.append(f'<div style="position:absolute;left:{lx}px;top:0;'
                  f'width:{LANEW - 8}px;color:#79c0ff;font-weight:600;overflow:hidden;'
                  f'white-space:nowrap;text-overflow:ellipsis">{esc(lane)}</div>')
-    # per-lane connector through its rows (same column, different rows)
-    lane_rows: dict = {}
-    for rank, lane in enumerate(lane_of):
-        lane_rows.setdefault(lane, []).append(rank)
-    for lane, rows in lane_rows.items():
-        if len(rows) >= 2:
+    # lane connectors (behind boxes): a line through each lane's box centres
+    lane_cy: dict = {}
+    for sec in rows:
+        for lane, evs in by_lane[sec].items():
+            for k in range(len(evs)):
+                lane_cy.setdefault(lane, []).append(
+                    row_top[sec] + k * BOXH + BOXH / 2)
+    for lane, cys in lane_cy.items():
+        if len(cys) >= 2:
             lx = AXIS + lane_x[lane] * LANEW + 10
-            top = PADT + min(rows) * ROWH + 14
-            bot = PADT + max(rows) * ROWH + 14
-            p.append(f'<div style="position:absolute;left:{lx}px;top:{top}px;'
-                     f'width:2px;height:{bot - top}px;background:#30363d"></div>')
-    # DENSE rows: one milestone per row (uniform ROWH) — no proportional gaps,
-    # box capped to the row so adjacent rows never overlap; real time on the left.
-    for rank, (e, lane) in enumerate(zip(miles, lane_of)):
-        yy = PADT + rank * ROWH
-        p.append(f'<div style="position:absolute;left:0;top:{yy}px;'
-                 f'width:{AXIS - 6}px;text-align:right;color:#6e7681">{hms(e["t"])}</div>')
-        p.append(f'<div style="position:absolute;left:{AXIS}px;top:{yy + ROWH - 6}px;'
+            p.append(f'<div style="position:absolute;left:{lx}px;top:{min(cys):.0f}px;'
+                     f'width:2px;height:{max(cys) - min(cys):.0f}px;background:#30363d"></div>')
+    # rows: time label + gridline + stacked boxes (no same-lane overlap)
+    for sec in rows:
+        top = row_top[sec]
+        p.append(f'<div style="position:absolute;left:0;top:{top}px;'
+                 f'width:{AXIS - 6}px;text-align:right;color:#6e7681">{hms(sec)}</div>')
+        p.append(f'<div style="position:absolute;left:{AXIS}px;top:{top + row_h[sec] - 5}px;'
                  f'width:{width - AXIS}px;height:1px;background:#13171d"></div>')
-        v = str(e.get("verdict") or "")
-        ph = str(e.get("phase") or "")
-        if v in ("REJECT", "FAIL", "ERROR"):
-            border, bg = "#f85149", "#3a1620"
-        elif ph in ("research", "drift", "respec", "hitl") \
-                or e.get("gate") in ("clarify", "drift", "hitl"):
-            border, bg = "#e3b341", "#3a2a12"
-        else:
-            border, bg = "#2f5d40", "#161b22"
-        node = esc(str(e.get("task") or "").split(":")[0] or ph)
-        label = (f'<b style="color:#adbac7">{esc(ph)} · {node}</b>'
-                 f'<br><span style="color:#8b949e">{esc(e.get("action") or "")}</span>'
-                 + (f' <span style="color:#6e7681">· {esc(v)}</span>' if v else ''))
-        lx = AXIS + lane_x[lane] * LANEW + 6
-        p.append(f'<div style="position:absolute;left:{lx}px;top:{yy}px;'
-                 f'width:{LANEW - 18}px;max-height:{ROWH - 8}px;overflow:hidden;'
-                 f'background:{bg};border:1px solid {border};border-radius:6px;'
-                 f'padding:3px 6px;box-sizing:border-box;line-height:1.25">{label}</div>')
+        for lane, evs in by_lane[sec].items():
+            for k, e in enumerate(evs):
+                yy = top + k * BOXH
+                lx = AXIS + lane_x[lane] * LANEW + 6
+                border, bg = _color(e)
+                v = str(e.get("verdict") or "")
+                ph = str(e.get("phase") or "")
+                node = esc(str(e.get("task") or "").split(":")[0] or ph)
+                label = (f'<b style="color:#adbac7">{esc(ph)} · {node}</b>'
+                         f'<br><span style="color:#8b949e">{esc(e.get("action") or "")}</span>'
+                         + (f' <span style="color:#6e7681">· {esc(v)}</span>' if v else ''))
+                p.append(f'<div style="position:absolute;left:{lx}px;top:{yy}px;'
+                         f'width:{LANEW - 18}px;max-height:{BOXH - 6}px;overflow:hidden;'
+                         f'background:{bg};border:1px solid {border};border-radius:6px;'
+                         f'padding:3px 6px;box-sizing:border-box;line-height:1.2">{label}</div>')
     p.append('</div>')
     return "".join(p)
 
