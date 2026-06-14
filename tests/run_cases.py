@@ -136,7 +136,7 @@ def _load_tools():
 
 
 def _run_full(case: dict, case_dir: Path, depth: str, tools,
-              decomposer: str = "blueprint", implementer: str = "auto",
+              decomposer: str = "llm", implementer: str = "auto",
               meter=None, model: str = "", workers: str = "sim",
               hitl: str = "auto", resume: bool = False) -> dict:
     """The real production run: mandatory workspace inside the case folder,
@@ -465,12 +465,14 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Run scenario cases as real plugin runs")
     ap.add_argument("--depth", default="spec", choices=sorted(eng.DEPTHS, key=eng.DEPTHS.get))
     ap.add_argument("--case", default="", help="substring filter on the case file name")
-    ap.add_argument("--decomposer", default="blueprint", choices=["blueprint", "llm"],
-                    help="how the plugin BUILDS its tree: 'blueprint' = a "
-                         "deterministic decomposer fed by the case blueprint "
-                         "(offline, no quota); 'llm' = a live model builds it "
-                         "from the goal (local `claude` CLI). Either way the "
-                         "engine visits + gates every node itself")
+    ap.add_argument("--decomposer", default="llm", choices=["blueprint", "llm"],
+                    help="how the plugin BUILDS its tree (default 'llm'): 'llm' "
+                         "= a live model builds it from the goal (real, unaided "
+                         "capability); 'blueprint' = a deterministic decomposer "
+                         "replays the case's hand-written blueprint tree "
+                         "(offline, no quota — a pre-built tree, use only for "
+                         "deterministic engine tests). Either way the engine "
+                         "visits + gates every node itself")
     ap.add_argument("--implementer", default="auto", choices=["auto", "llm"],
                     help="'auto' deterministic stand-in; 'llm' live model "
                          "implementer (depth execute/product only)")
