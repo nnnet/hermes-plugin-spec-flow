@@ -927,13 +927,17 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
         # how many LLM calls were started inside this gap [t0, t1) — lets the
         # idle table show whether a cause's time was spent making requests
         llm = sum(1 for ct in calls if float(t0) <= ct < float(t1))
+        # A gap is the time the engine spent PRODUCING the next event, so it is
+        # attributed to that NEXT event's work — not the previous one. (Otherwise
+        # the idle after an auto-approved HITL checkpoint is mislabelled "ответ
+        # человека" when the engine was actually decomposing/implementing.)
         rows.append({
-            "tick": ev.get("tick"),
-            "node": ev.get("task", ""),
-            "phase": ev.get("phase", ""),
-            "action": str(ev.get("action", ""))[:60],
+            "tick": nxt.get("tick"),
+            "node": nxt.get("task", ""),
+            "phase": nxt.get("phase", ""),
+            "action": str(nxt.get("action", ""))[:60],
             "dur": round(gap, 1),
-            "cause": _cause(ev, gap, float(t0), float(t1)),
+            "cause": _cause(nxt, gap, float(t0), float(t1)),
             "llm": llm,
         })
 
