@@ -108,3 +108,93 @@ CV1–CV3 landed from the live cycle. Remaining: #11 (multiple smoke
 scenarios) and #12 (pluggable beads/redis board) — both low immediate value
 versus convergence, deferred until a p4 corpus goes fully green. Re-measure
 via the ⏱ idle tab + compare_runs.
+
+---
+
+## Update 2026-06-14 — status audit + speed/quality/orchestra roadmap
+
+### What is NOT done / changed
+- **#11 multiple smoke scenarios** — still open. Partially superseded: a new
+  minimal measurement case `p6_micro_notes` now exists (see below).
+- **#12 pluggable beads/redis board** — still open, still deferred (single host).
+- **CV1 (portable DB in the seed) + CV3 (constitution one-owner rule) — REVERTED.**
+  The user ruled seed skeletons and pre-solving constitution rules to be test
+  **scaffolding** (they hand the weak model the answer to its own failure
+  classes). `seed_files` + `constitution_platform` were deleted from p4/p5 and
+  are no longer consumed by `run_cases`. The deterministic **detectors** stay
+  and are the honest replacement: **CV2 cascade**, **CV3 dup-owner**, plus a
+  new **cross-module export-contract** detector (`from X import Y` where the
+  local module never binds Y — the real residual class after de-scaffolding).
+- **No-hardcode config refactor — DONE** (separate plan): all config defaults
+  left *.py; floor in `tests/.test.env`, per-case override in the `workers:`
+  block; `live-run.env.sh` deleted. Cases are self-contained.
+
+### Grounding — where the wall-clock goes (latest ⏱ split)
+spec review **47%** (49 ops) ≫ lifecycle **19%** (25) > integration **15%**
+(8 tests) > repair **14%** (14) > human **5%** (1); decompose/implement LLM
+≈ 0%. So **review is the dominant sink**, repair+integration the second front,
+LLM generation is NOT the bottleneck. Levers must attack review and rework.
+
+### Measurement harness — `p6_micro_notes` (new, this update)
+Minimal case that exercises the FULL pipeline in least time: fsm + LLM-built
+tree (no blueprint) + real code build + pytest at execute depth + a mid-run
+HITL web_ui injection + a delivered server-rendered UI. Tiny 2-endpoint goal
+⇒ small tree ⇒ few reviews; depth/width not hard-capped. Nothing seeded;
+`acceptance:` is the declarative oracle. web_ui injected from
+`/tmp/claude/web_ui_requirement_p6/`. This is the before/after ruler for every
+lever below — compare on calls, sec_per_node, first_pass_rate,
+errors_per_node, and review-op count.
+
+### Roadmap by goal (ranked: quality → speed → cost)
+
+**A. Speed — attack review (47%) + lifecycle (19%)**
+- **A1 Review tiering.** Atomic/leaf specs get ONE light pass (lint +
+  contract check); only branch / high-open-decision nodes get the full
+  spec-review. Most of the 49 review ops are trivial leaves. *How:* a
+  complexity gate in the reviewer dispatch (open_decisions, est_loc, child
+  count). Target: review ops −2–3×.
+- **A2 Parallel sibling review.** Review independent sibling specs
+  concurrently, mirroring #28's leaf pool. Review is serial today. *How:*
+  reuse `_run_child_pool` semaphore for the review phase.
+- **A3 Escalate-not-grind.** After N rejects, escalate the node to a stronger
+  model ONCE instead of looping max_rework rounds at the same model. Cuts the
+  review×repair product. *How:* reviewer/repair round counter → one
+  haiku-subscription pass, then stop.
+- **A4 Lifecycle trim.** Batch commits per branch, skip no-op transitions
+  (19%, 25 ops of bookkeeping). *How:* coalesce lifecycle events.
+
+**B. Fewer errors — attack repair (14%) + first-pass rate**
+- **B1 Pre-integrate contract gate.** Run the deterministic detectors
+  (cross-module import, dup-owner, non-ASCII) BEFORE the expensive integrate,
+  not after a red corpus — fail fast, cheaper repair. *How:* call detectors at
+  branch close, surface to repair before tests run.
+- **B2 Tune the creator ensemble (done) + measure** first-pass lift on p6.
+- **B3/B4** topological ordering (#2) and diff-repair (#1) — measure their
+  rework reduction on p6 now that a fast ruler exists.
+
+**C. Role specialization (П13 landed but unmeasured)**
+- **C1 Case-declared specialties.** `workers.<role>.specialties.<name>.models`
+  + `auto_specialty`; route the web_ui node to a web-capable model, db nodes
+  to another. Measure on p6 (its web_ui leaf is a natural specialty). *How:*
+  wiring already exists (specialty.py + chain_for); just declare + turn on.
+- **C2 Specialty-aware reviewer** — reviewer model picked per node domain.
+
+**D. Replace roles with orchestras (the big lever)**
+Generalise the creator ensemble (already shipped for the implementer) to the
+other roles — a role becomes a small panel, not one agent.
+- **D1 Reviewer orchestra.** 2–3 reviewer models vote; majority verdict. Kills
+  the false-reject churn that inflates review+repair AND the false-accept that
+  reddens integrate. *How:* `workers.reviewer.orchestra: 3, vote: majority`;
+  panel runs in parallel, verdict = majority, disagreements logged.
+- **D2 Decomposer orchestra.** 2 decomposers propose trees, a judge picks the
+  better one → fewer downstream errors (a bad tree is the most expensive
+  mistake). *How:* reuse the judge-panel pattern.
+- **D3 Declarative orchestra config** in the `workers:` block, defaulting to
+  size 1 (= today's single agent) so existing cases are unchanged.
+
+### Execution order
+p6 first (the ruler) → D1 reviewer orchestra (attacks the 47% sink at its
+quality root) → A1 review tiering (attacks it at the volume root) → B1
+pre-integrate gate → C1 specialties → A2/A3/A4 → D2. Each = baseline p6 run,
+change, p6 re-run, compare. Quality regressions (false accepts) veto a speed
+win.

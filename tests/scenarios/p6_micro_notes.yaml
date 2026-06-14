@@ -1,0 +1,90 @@
+# Project 6 — the MINIMAL end-to-end case. Its only purpose is to exercise the
+# whole live pipeline in the least wall-clock time:
+#   * fsm engine + an LLM-built tree (no blueprint)
+#   * a real code build verified by pytest at execute depth
+#   * a mid-run HITL requirement injection (web_ui) that must materialise
+#   * a working server-rendered web UI delivered at the root
+# The product surface is deliberately tiny (a 2-endpoint notes service) so the
+# tree the model builds is small — fewer nodes ⇒ fewer spec reviews, which the
+# ⏱ analysis showed is ~47% of wall-clock. Depth/width are NOT hard-capped;
+# the small goal keeps the tree small on its own.
+#
+# Nothing is seeded — no skeleton, no ready-made code. The `acceptance:` block
+# is the declarative oracle (success criteria), not an implementation. Workers
+# build the whole service themselves; this measures real, unaided capability.
+name: p6-micro-notes
+node_engine: fsm
+
+goal: >
+  A tiny notes service. Two HTTP endpoints over a WSGI app:
+  POST /notes accepts {"text": "..."} and stores it, returning {"id": <int>};
+  GET /notes returns {"items": [{"id": <int>, "text": "..."}]} newest-first.
+  Persistence is sqlite3; standard library only.
+
+target: >
+  POST then GET round-trips a note; the service starts and answers GET /health
+  with 200. Binary success — the acceptance suite is green on the assembled app.
+
+policy: {measurable_target: true, spend_per_action_usd: 0, human_in_loop: true,
+         involves_outreach: false, consent_obtained: true, legal_exposure: false,
+         legality_reviewed: true}
+
+constitution:
+  - "Standard library ONLY: HTTP through a WSGI app (src/app.py exposes
+     `wsgi_app`), storage through sqlite3 in src/db.py. No third-party packages."
+  - "The product API contract is FROZEN: POST /notes takes {text} and responds
+     {id}; GET /notes responds {items: [{id, text}]} newest-first; GET /health
+     responds 200. Accept exactly these fields — no extras required."
+  - "Every test sets the NOTES_DB env var to a fresh temp path BEFORE connecting
+     (db.connect reads it per call)."
+
+# HITL: autonomous approval; workers may ask the human, the human may inject.
+hitl:
+  approve_required: false
+  worker_may_ask_human: true
+  human_may_intervene: true
+
+# Review policy: rework to green, but a tight cap — review + repair are the
+# two biggest time sinks, so bound them and let the gate fail loudly instead
+# of grinding rounds.
+review:
+  on_reject: rework
+  max_rework: 2
+
+# Acceptance oracle (declarative). The assembled app must satisfy these; the
+# verifier turns them into the root gate. web_ui acceptance arrives mid-run via
+# the HITL requirement injection, not here.
+acceptance:
+  smoke:
+    - "service starts and answers GET /health -> 200"
+  e2e:
+    - "POST /notes {text:'hi'} -> {id}; GET /notes -> items contains that note"
+
+# Workers: self-contained run config (transport + free model chains + knobs),
+# tuned for minimum time. Applied over the tests/.test.env floor.
+workers:
+  backend: openai                       # Bifrost speaks the OpenAI protocol
+  base_url: http://127.0.0.1:8080/v1
+  retries: 6
+  leaf_depth: 3
+  max_children: 3
+  max_decompose_calls: 40
+  creator_ensemble: 2
+  concurrency: 3
+  cycle_models: true
+  quota_wait_s: 300
+  quota_retries: 11
+  fallback_models: [claude/haiku]
+  providers:
+    - {name: openrouter-free, kind: openai, model_prefix: "openrouter/", require_suffix: ":free", requests_per_day: 1000}
+    - {name: claude-cli, kind: claude, model_prefix: "claude/"}
+  defaults:
+    models: ["openrouter/qwen/qwen3-coder:free", "claude/haiku"]
+  decomposer:
+    models: ["openrouter/qwen/qwen3-next-80b-a3b-instruct:free", "claude/haiku"]
+  implementer:
+    models: ["openrouter/qwen/qwen3-coder:free", "openrouter/deepseek/deepseek-chat-v3.1:free", "claude/haiku"]
+  reviewer:
+    models: ["claude/haiku", "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"]
+  verifier:
+    models: ["claude/haiku", "openrouter/qwen/qwen3-coder:free"]
