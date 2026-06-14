@@ -26,7 +26,7 @@ import yaml
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from harness import run_engine as eng  # noqa: E402
 
-SCENARIOS_DIR = pathlib.Path(__file__).resolve().parent / "scenarios"
+SCENARIOS_DIR = pathlib.Path(__file__).resolve().parent.parent / "scenarios"
 CASES = ["p1_earn_for_living.yaml", "p4_b2b_marketplace.yaml"]
 
 

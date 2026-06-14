@@ -10,7 +10,7 @@ import datetime
 import pathlib
 import sys
 
-HERE = pathlib.Path(__file__).resolve().parent
+HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 from harness import run_engine as eng          # noqa: E402
 from harness import llm_implementer as li      # noqa: E402

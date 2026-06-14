@@ -1,10 +1,10 @@
 __pycache__/
 *.pyc
 
-# generated raw run trace (rebuild via tests/report.py)
+# generated raw run trace (rebuild via tests/lib/report.py)
 docs/full-run-trace.jsonl
 
-# per-case run outputs (regenerate via tests/run_cases.py)
+# per-case run outputs (regenerate via tests/lib/run_cases.py)
 tests/runs-out/
 
 # git worktrees created for parallel subagents

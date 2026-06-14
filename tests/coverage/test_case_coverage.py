@@ -18,7 +18,7 @@ import yaml
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from harness import run_engine as eng  # noqa: E402
 
-SCENARIOS_DIR = pathlib.Path(__file__).resolve().parent / "scenarios"
+SCENARIOS_DIR = pathlib.Path(__file__).resolve().parent.parent / "scenarios"
 TREE_CASES = [p for p in sorted(SCENARIOS_DIR.glob("*.yaml"))
               if "blueprint" in yaml.safe_load(p.read_text(encoding="utf-8"))]
 

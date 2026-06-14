@@ -151,7 +151,7 @@ recursion. A predefined ``tree`` in the case is just the deterministic replay
 mode for tests; with a live agent it is not needed:
 
 ```bash
-python3 tests/run_cases.py --case p2 --decomposer llm   # tree built from the goal
+python3 tests/lib/run_cases.py --case p2 --decomposer llm   # tree built from the goal
 ```
 
 | depth | what the run produces |
@@ -169,8 +169,8 @@ The deterministic engine is fully testable offline: `tools.registry` and
 
 ```bash
 python3 -m pytest tests/ -q        # 125 tests: unit + battle
-python3 tests/report.py            # human-readable reports -> docs/*.md
-python3 tests/run_cases.py         # real runs: one timestamped workspace per case
+python3 tests/lib/report.py            # human-readable reports -> docs/*.md
+python3 tests/lib/run_cases.py         # real runs: one timestamped workspace per case
                                    #   -> tests/runs-out/<stamp>__<case>/ (artifacts,
                                    #      trace, log, report, policy-report, SUMMARY)
 ```

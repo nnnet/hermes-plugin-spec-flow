@@ -11,7 +11,7 @@ PASS на настоящем pytest, сквозной смоук зелёный.
 ## 1. Поднять продукт
 
 ```bash
-python3 tests/serve_product.py \
+python3 tests/lib/serve_product.py \
   --workspace tests/runs-out/<прогон>/workspace --port 8508
 ```
 

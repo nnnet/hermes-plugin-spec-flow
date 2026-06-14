@@ -23,7 +23,7 @@ import json
 import pathlib
 import sys
 
-RUNS = pathlib.Path(__file__).resolve().parent / "runs-out"
+RUNS = pathlib.Path(__file__).resolve().parent.parent / "runs-out"
 
 
 def _read_jsonl(path: pathlib.Path) -> list[dict]:

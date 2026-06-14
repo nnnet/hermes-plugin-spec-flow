@@ -49,7 +49,7 @@ Current run: v023 (`2026-06-13T12-19-53__v023`, pid 587059, ~56min).
 (13:14) + smoke seeded; seller_consent question answered+consumed. Run
 progressing (tick 323). Next cron check: verify web_ui/seller_directory
 materialize + root PASS. Launch cmd for vNNN:
-`SPEC_FLOW_INTEGRATE_MAX_REPAIR=6 python3 tests/run_cases.py --case p4 --workers real --depth execute --hitl auto > /tmp/specflow_industrial_p4_vNNN.log 2>&1`
+`SPEC_FLOW_INTEGRATE_MAX_REPAIR=6 python3 tests/lib/run_cases.py --case p4 --workers real --depth execute --hitl auto > /tmp/specflow_industrial_p4_vNNN.log 2>&1`
 
 ## Hard rules
 - Free OpenRouter only + haiku/subscription fallback; paid NEVER.

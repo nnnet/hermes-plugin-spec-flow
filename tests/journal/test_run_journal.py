@@ -10,7 +10,7 @@ import textwrap
 
 import pytest
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 from spec_flow_journal import JournalLocked, RunJournal   # noqa: E402
 
 
@@ -42,7 +42,7 @@ def test_second_writer_refused(tmp_path):
         # so the contention must be proven across a process boundary
         code = textwrap.dedent(f"""
             import sys
-            sys.path.insert(0, {str(pathlib.Path(__file__).resolve().parents[1])!r})
+            sys.path.insert(0, {str(pathlib.Path(__file__).resolve().parents[2])!r})
             from spec_flow_journal import JournalLocked, RunJournal
             try:
                 RunJournal({str(path)!r}).open()

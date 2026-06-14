@@ -20,7 +20,7 @@ import tempfile
 import types
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parent.parent
 PLUGIN_DIR = HERE.parent
 sys.path.insert(0, str(HERE))
 from harness import simulator as sim  # noqa: E402

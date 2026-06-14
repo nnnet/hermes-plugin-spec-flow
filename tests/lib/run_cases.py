@@ -94,7 +94,7 @@ def _worker_models() -> dict:
 
 import yaml
 
-HERE = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parent.parent
 PLUGIN_DIR = HERE.parent
 SCENARIOS_DIR = HERE / "scenarios"
 OUT_DIR = HERE / "runs-out"

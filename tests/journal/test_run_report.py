@@ -17,7 +17,7 @@ import pytest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from harness import run_engine as eng  # noqa: E402
 
-FLAWED = pathlib.Path(__file__).resolve().parent / "runs" / "flawed_run.jsonl"
+FLAWED = pathlib.Path(__file__).resolve().parent.parent / "runs" / "flawed_run.jsonl"
 
 
 @pytest.fixture

@@ -5,7 +5,7 @@ one JSONL line per call (node, depth, latency, return code, reply size, parse
 outcome) to the file named by ``SPEC_FLOW_LLM_LOG``. Off when the env var is
 unset, so production/tests pay nothing.
 
-Analyse a run with: ``python3 tests/analyze_llm_log.py <log.jsonl>``.
+Analyse a run with: ``python3 tests/lib/analyze_llm_log.py <log.jsonl>``.
 """
 
 from __future__ import annotations

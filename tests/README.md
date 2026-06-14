@@ -5,7 +5,7 @@ stubbed; seed commands degrade gracefully when the `hermes` binary is absent).
 
 ```bash
 python3 -m pytest tests/ -q     # run everything (60 tests)
-python3 tests/report.py         # render a human report -> ../docs/test-report.md
+python3 tests/lib/report.py         # render a human report -> ../docs/test-report.md
 ```
 
 ## Layout
@@ -51,7 +51,7 @@ node to prove an unresolved decision forces expansion.
 
 `pytest -q` gives pass/fail; on a battle-test failure the assertion message
 includes the rendered ASCII tree and the exact diverging node. For a full
-picture run `tests/report.py` — it writes two reports under `docs/`:
+picture run `tests/lib/report.py` — it writes two reports under `docs/`:
 
 - `test-report.md` — one ASCII decomposition tree per project (✓/✗ per node),
   the DAG reconciliation, a contract-drift table and the research-lane timeline;
@@ -89,7 +89,7 @@ file. Each event carries a `level`: **1** = milestones (gate verdicts, loops),
   with a path or `SPEC_FLOW_RUN_WORKSPACE`) writes the run's real deliverables a
   reviewer can open and evaluate: `specs/<node>.md` (plan per node), the frozen
   `contracts/<file>`, `src/` + `tests/` scaffolds per leaf, a `COMMITS.md`
-  journal and `MANIFEST.json` (type/size/sha256). `tests/report.py` writes them
+  journal and `MANIFEST.json` (type/size/sha256). `tests/lib/report.py` writes them
   to `docs/run-workspace/`. Code/test files are honest scaffolds (header +
   NotImplementedError / failing assert), since no real LLM authored them; the
   specs, contract and manifest are real content.
@@ -102,12 +102,12 @@ own log-based functions (`spec_flow_tools.build_run_report` /
 (JSONL) and emit footprints + a methodology audit. Run it on any trace:
 
 ```bash
-python3 tests/run_report.py                      # docs/full-run-trace.jsonl
-python3 tests/run_report.py tests/runs/flawed_run.jsonl   # demo: audit catches errors
-python3 tests/run_report.py <trace> --level 1 -o out.md
+python3 tests/lib/run_report.py                      # docs/full-run-trace.jsonl
+python3 tests/lib/run_report.py tests/runs/flawed_run.jsonl   # demo: audit catches errors
+python3 tests/lib/run_report.py <trace> --level 1 -o out.md
 ```
 
-`tests/report.py` writes two run reports (footprints as a markdown table +
+`tests/lib/report.py` writes two run reports (footprints as a markdown table +
 audit): `docs/full-run-report.md` (the real/clean run → audit green) and
 `docs/flawed-run-report.md` (the deliberately-broken sample → audit lists the
 violations). The audit checks the **run**, not the plugin code.
@@ -125,9 +125,9 @@ Every scenario in `scenarios/*.yaml` is driven as a **real production run** of
 the plugin, each into its **own timestamped workspace**:
 
 ```bash
-python3 tests/run_cases.py                          # all cases, depth=spec
-python3 tests/run_cases.py --depth scaffold         # deeper: + code/test scaffolds
-python3 tests/run_cases.py --case p4 --depth verify # one case, + real pytest run
+python3 tests/lib/run_cases.py                          # all cases, depth=spec
+python3 tests/lib/run_cases.py --depth scaffold         # deeper: + code/test scaffolds
+python3 tests/lib/run_cases.py --case p4 --depth verify # one case, + real pytest run
 ```
 
 Output per case — everything in one folder, nothing outside it:

@@ -31,7 +31,7 @@ from pathlib import Path
 
 import yaml
 
-HERE = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 
 import run_cases as rc                      # noqa: E402 — reuse the case machinery

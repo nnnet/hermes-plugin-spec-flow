@@ -17,7 +17,7 @@ import pytest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from harness import simulator as sim  # noqa: E402
 
-CONTRACTS = pathlib.Path(__file__).resolve().parent / "contracts"
+CONTRACTS = pathlib.Path(__file__).resolve().parent.parent / "contracts"
 OPENAPI = CONTRACTS / "url_shortener.openapi.yaml"
 CART = CONTRACTS / "cart.openapi.yaml"
 CODE_CLEAN = CONTRACTS / "code_clean.json"

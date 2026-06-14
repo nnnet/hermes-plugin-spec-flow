@@ -2,7 +2,7 @@
 
 Чтобы не было «старых несуществующих отчётов», здесь ровно два типа файлов:
 **источники** (пишутся руками) и **генерируемые отчёты** (создаёт
-`tests/report.py`; перегенерируются одной командой, в git как снимок).
+`tests/lib/report.py`; перегенерируются одной командой, в git как снимок).
 
 | Файл | Тип | Что это |
 |---|---|---|
@@ -19,11 +19,11 @@
 Перегенерировать всё:
 
 ```bash
-python3 tests/report.py
+python3 tests/lib/report.py
 ```
 
 Отчёт по любому своему трейсу строит сам плагин:
 
 ```bash
-python3 tests/run_report.py <trace.jsonl>      # в Hermes: run_report(trace_path=...)
+python3 tests/lib/run_report.py <trace.jsonl>      # в Hermes: run_report(trace_path=...)
 ```

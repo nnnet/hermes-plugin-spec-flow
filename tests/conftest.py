@@ -29,7 +29,11 @@ def pytest_configure(config):
     """Seed the config floor from tests/.test.env BEFORE any harness module is
     imported during collection, so its (former) import-time defaults resolve
     from the file instead of hardcoded literals."""
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    _tests_dir = Path(__file__).resolve().parent
+    sys.path.insert(0, str(_tests_dir))
+    # Helper modules (live_dashboard, compare_runs, phase_overlap) moved under
+    # tests/lib/ — keep them importable by bare name from any test subfolder.
+    sys.path.insert(0, str(_tests_dir / "lib"))
     try:
         from harness import config as _cfg
         _cfg.load_test_env()
