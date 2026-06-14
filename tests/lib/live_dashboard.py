@@ -913,8 +913,9 @@ def _hitl_state(run_dir: "pathlib.Path | None") -> dict:
         if cur:
             asks.append(cur)
     ans = hitl / "answer.md"
-    pending = ans.exists() and bool(ans.read_text(encoding="utf-8",
-                                                  errors="ignore").strip())
+    pending_text = ans.read_text(encoding="utf-8", errors="ignore").strip() \
+        if ans.exists() else ""
+    pending = bool(pending_text)
     reqs = []
     rdir = hitl / "requirements"
     if rdir.is_dir():
@@ -925,8 +926,22 @@ def _hitl_state(run_dir: "pathlib.Path | None") -> dict:
                 if rf.exists():
                     body = rf.read_text(encoding="utf-8", errors="ignore")
                 reqs.append({"name": d.name, "body": body})
+    # human→worker messages sent from the dashboard, with read status. A message
+    # is "unread" only while it is still the staged answer.md (not yet consumed
+    # by a worker or poll_note); once answer.md no longer holds it, it was read.
+    sent = []
+    sf = hitl / "sent.jsonl"
+    if sf.is_file():
+        for line in sf.read_text(encoding="utf-8", errors="ignore").splitlines():
+            try:
+                e = json.loads(line)
+            except Exception:        # noqa: BLE001 — skip a torn line
+                continue
+            txt = str(e.get("text", "")).strip()
+            e["read"] = not (pending and txt == pending_text)
+            sent.append(e)
     return {"asks": asks[-30:], "answered": answered[-30:],
-            "pending": pending, "requirements": reqs}
+            "pending": pending, "requirements": reqs, "sent": sent[-30:]}
 
 
 # ── server ───────────────────────────────────────────────────────────────────
@@ -1068,6 +1083,16 @@ class _H(BaseHTTPRequestHandler):
                 (rd / "hitl").mkdir(parents=True, exist_ok=True)
                 (rd / "hitl" / "answer.md").write_text(text + "\n",
                                                        encoding="utf-8")
+                # Log the sent message so the chat shows it IMMEDIATELY as
+                # "unread"; _hitl_state flips it to "read" once a worker (or
+                # poll_note) consumes answer.md.
+                try:
+                    with open(rd / "hitl" / "sent.jsonl", "a",
+                              encoding="utf-8") as _fh:
+                        _fh.write(json.dumps({"t": round(_time.time(), 3),
+                                              "text": text}) + "\n")
+                except OSError:
+                    pass
                 return self._send(200, "application/json",
                                   b'{"ok":true,"wrote":"answer.md"}')
             if parsed.path == "/api/run/stop":
@@ -1301,7 +1326,10 @@ function mray(){if(window.mermaid){try{mermaid.run({querySelector:'#detail .merm
 
 async function poll(){
  if(!AUTO)return;
- try{const r=await fetch('/api/state');STATE=await r.json();render(false);}catch(e){}
+ try{const r=await fetch('/api/state');STATE=await r.json();render(false);
+   // keep the HITL chat live (sent→read status flips on its own) while open
+   if(!SEL && GTAB==='hitl') loadHitl();
+ }catch(e){}
 }
 // tabs whose content is interactive or lazily loaded (dropdowns, sortable
 // tables, the rendered graph): an auto tick must NOT rebuild them — it would
@@ -1534,14 +1562,16 @@ function idleHTML(){
 // bidirectional HITL (✋): worker→human asks + human→worker answer/inject
 let HITL=null;
 function loadHitl(){
- fetch('/api/hitl').then(r=>r.json()).then(d=>{HITL=d;if(GTAB==='hitl')render();})
-  .catch(()=>{HITL={error:'не удалось загрузить'};render();});
+ // render(false) → the auto-refresh guard keeps your scroll and never wipes the
+ // answer box while you are typing in it (focus guard in render()).
+ fetch('/api/hitl').then(r=>r.json()).then(d=>{HITL=d;if(GTAB==='hitl')render(false);})
+  .catch(()=>{HITL={error:'не удалось загрузить'};render(false);});
 }
 function hitlHTML(){
  if(HITL===null){loadHitl();return '<p class=dim>загружаю HITL…</p>';}
  if(HITL.error)return '<p class=dim>ошибка: '+esc(HITL.error)+'</p>';
  if(HITL.empty)return '<p class=dim>нет активного прогона</p>';
- const asks=HITL.asks||[],ans=HITL.answered||[],reqs=HITL.requirements||[];
+ const asks=HITL.asks||[],ans=HITL.answered||[],reqs=HITL.requirements||[],sent=HITL.sent||[];
  const open=asks.filter(a=>a&&typeof a==='object'&&!a.answered).length;
  let h='<h3 class=muted>✋ HITL — двусторонний канал с прогоном '+
   '<span class="tab" id=hitlreload style="margin-left:8px">↻ обновить</span></h3>';
@@ -1597,10 +1627,17 @@ function hitlHTML(){
  // standalone recorded answers not already shown
  (ans||[]).slice(-10).forEach(a=>{
    const txt=String(a).replace(/^\*\*answer[^:]*:\*\*\s*/i,'');
-   if(!asks.some(x=>x&&x.answer&&x.answer.indexOf(txt)>=0))
+   if(!asks.some(x=>x&&x.answer&&x.answer.indexOf(txt)>=0)
+      && !sent.some(s=>String(s.text||'').trim()===txt.trim()))
      chat+=bub('bout','🧑 ответ (история)',txt);
  });
- h+='<h4>История переписки ('+(asks.length+reqs.length)+')</h4>';
+ // direct human→worker messages with delivery status (from sent.jsonl): shown
+ // the instant you send (⏳ не прочитано) and flipped to ✓ once a worker consumes it.
+ sent.forEach(s=>{
+   chat+=bub('bout',(s.read?'✓ прочитано воркером':'⏳ не прочитано — ждёт воркера')
+             +' · 🧑 человек → worker', s.text||'');
+ });
+ h+='<h4>История переписки ('+(asks.length+reqs.length+sent.length)+')</h4>';
  h+= chat? '<div class=chat id=hitlchat>'+chat+'</div>'
    : '<p class=dim>пока сообщений нет</p>';
  return h;
