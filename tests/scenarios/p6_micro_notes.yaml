@@ -44,6 +44,23 @@ hitl:
   worker_may_ask_human: true
   human_may_intervene: true
 
+# Autonomous HITL script — replayed by the dispatcher (tests/lib/hitl_dispatcher.py)
+# so no human babysits the run. The dispatcher watches trace.jsonl and, on the
+# trigger, drops the SAME files a human would: it copies the requirement folder
+# into <run>/hitl/requirements/web_ui/ and answers blocked workers from `answers`.
+# This is the mid-run web_ui injection, fired once the service core is proven
+# (>=2 integrate gates PASS) — it never appears in `acceptance:` above.
+injections:
+  requirements:
+    - name: web_ui
+      from: tests/scenarios/injections/web_ui   # repo-relative: REQUIREMENT.md + test_web_ui.py
+      when: {integrate_passes: 2}
+  answers:
+    default: "Proceed with the simplest correct standard-library approach; do not block on this."
+    faq:
+      - {match: "port", reply: "Any free localhost port is fine; the acceptance drives the WSGI app directly, no real socket."}
+      - {match: "framework", reply: "Standard library only — no Flask/Django. Plain WSGI."}
+
 # Review policy: rework to green, but a tight cap — review + repair are the
 # two biggest time sinks, so bound them and let the gate fail loudly instead
 # of grinding rounds.

@@ -284,6 +284,24 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
     # own seed_files API stays for legitimate platform use (see test_seed_files).
     exec_case.pop("seed_files", None)
     exec_case.pop("constitution_platform", None)
+    # Autonomous HITL: a declarative `injections:` block lets a dispatcher
+    # materialise late requirements and answer worker questions on its own,
+    # writing the same files a human would (no babysitting). Only meaningful
+    # for a real-worker run with a live channel.
+    dispatcher = None
+    if workers == "real" and channel is not None and case.get("injections"):
+        try:
+            import hitl_dispatcher
+            dispatcher = hitl_dispatcher.Dispatcher(case_dir, case.get("injections"))
+            if dispatcher.enabled():
+                dispatcher.start()
+                print(f"  HITL dispatcher: autonomous injections active "
+                      f"({len(dispatcher.requirements)} requirement(s))")
+            else:
+                dispatcher = None
+        except Exception as exc:  # noqa: BLE001 — dispatcher never blocks a run
+            print(f"  HITL dispatcher failed to start: {exc}")
+            dispatcher = None
     try:
         res = eng.run_project(exec_case, workspace=str(case_dir / "workspace"), depth=depth,
                               tools=tools, agents=agents or None,
@@ -306,6 +324,9 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
         except Exception:        # noqa: BLE001 — memory never masks the abort
             pass
         raise
+    finally:
+        if dispatcher is not None:
+            dispatcher.stop()
     # persist the REALIZED task tree the plugin built (parent->children), so the
     # dashboard / offline review can walk the exact structure node by node
     (case_dir / "tree.json").write_text(
