@@ -34,23 +34,26 @@ import urllib.error
 import urllib.request
 
 from . import claude_cli
+from . import config
 
-BACKEND = os.environ.get("SPEC_FLOW_LLM_BACKEND", "claude")
-BASE_URL = os.environ.get("SPEC_FLOW_LLM_BASE_URL", "http://127.0.0.1:8080/v1")
-API_KEY = os.environ.get("SPEC_FLOW_LLM_API_KEY", "")
-RETRIES = int(os.environ.get("SPEC_FLOW_LLM_RETRIES", "3"))
-BACKOFF = float(os.environ.get("SPEC_FLOW_LLM_BACKOFF", "5"))
-TIMEOUT = int(os.environ.get("SPEC_FLOW_LLM_TIMEOUT", "300"))
+# Transport config: NO literal defaults — the floor lives in tests/.test.env
+# (config.env), and a case `workers:` block overrides it via configure_workers.
+# These stay module attributes so the call path (and tests) read them live.
+BACKEND = config.env("LLM_BACKEND")
+BASE_URL = config.env("LLM_BASE_URL")
+API_KEY = config.env("LLM_API_KEY", default="")
+RETRIES = config.env("LLM_RETRIES", int)
+BACKOFF = config.env("LLM_BACKOFF", float)
+TIMEOUT = config.env("LLM_TIMEOUT", int)
 
 # the OpenRouter free pool is the ONLY allowed primary for test runs
 # (~1000 requests/day); paid models are forbidden unless explicitly
 # unlocked. When the free pool is exhausted the ONE sanctioned fallback
 # is the claude CLI on haiku.
-DEFAULT_FREE_MODEL = os.environ.get(
-    "SPEC_FLOW_LLM_MODEL", "openrouter/qwen/qwen3-coder:free")
-ALLOW_PAID = os.environ.get("SPEC_FLOW_ALLOW_PAID", "") == "1"
-FALLBACK_MODEL = os.environ.get("SPEC_FLOW_FALLBACK_MODEL", "haiku")
-FALLBACK_COOLDOWN = float(os.environ.get("SPEC_FLOW_FALLBACK_COOLDOWN", "600"))
+DEFAULT_FREE_MODEL = config.env("LLM_MODEL")
+ALLOW_PAID = config.env("ALLOW_PAID", bool, default=False)
+FALLBACK_MODEL = config.env("FALLBACK_MODEL", default="")
+FALLBACK_COOLDOWN = config.env("FALLBACK_COOLDOWN", float)
 
 # once the free pool proves exhausted, skip it for a cooldown window
 # instead of burning the full retry ladder on every call
@@ -73,10 +76,31 @@ WORKERS_CFG: dict = {}
 
 
 def configure_workers(cfg: dict | None) -> None:
-    global _calls_made
+    global _calls_made, BACKEND, BASE_URL, API_KEY, RETRIES, BACKOFF, TIMEOUT
+    global FALLBACK_MODEL, FALLBACK_COOLDOWN
     WORKERS_CFG.clear()
     WORKERS_CFG.update(cfg or {})
     _calls_made = 0          # a fresh case starts with a fresh budget
+    # A case workers block overrides the transport floor (.test.env) ONLY for
+    # keys it explicitly carries — an absent key leaves the current value
+    # untouched (preserving the import-time floor and any test monkeypatch).
+    c = cfg or {}
+    if c.get("backend"):
+        BACKEND = c["backend"]
+    if c.get("base_url"):
+        BASE_URL = c["base_url"]
+    if "api_key" in c:
+        API_KEY = c["api_key"]
+    if "retries" in c:
+        RETRIES = int(c["retries"])
+    if "backoff" in c:
+        BACKOFF = float(c["backoff"])
+    if "timeout" in c:
+        TIMEOUT = int(c["timeout"])
+    if "fallback_model" in c:
+        FALLBACK_MODEL = c["fallback_model"]
+    if "fallback_cooldown_s" in c:
+        FALLBACK_COOLDOWN = float(c["fallback_cooldown_s"])
 
 
 class BudgetExhausted(RuntimeError):
