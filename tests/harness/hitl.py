@@ -163,7 +163,11 @@ class HumanChannel:
         import re as _re
         out = []
         if self.requirements_dir.is_dir():
-            for d in sorted(self.requirements_dir.iterdir()):
+            # order by injection time (mtime), NOT name — injections must
+            # materialise chronologically (web_ui before a later nice_ui), not
+            # alphabetically ("nice_ui" < "web_ui" would invert the order).
+            for d in sorted(self.requirements_dir.iterdir(),
+                            key=lambda p: p.stat().st_mtime):
                 f = d / "REQUIREMENT.md"
                 if d.is_dir() and f.is_file():
                     text = f.read_text(encoding="utf-8").strip()

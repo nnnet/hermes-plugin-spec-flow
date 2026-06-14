@@ -1064,7 +1064,8 @@ def _hitl_state(run_dir: "pathlib.Path | None") -> dict:
     reqs = []
     rdir = hitl / "requirements"
     if rdir.is_dir():
-        for d in sorted(rdir.iterdir()):
+        # chronological (injection time), not alphabetical — matches the engine
+        for d in sorted(rdir.iterdir(), key=lambda p: p.stat().st_mtime):
             if d.is_dir():
                 body = ""
                 rf = d / "REQUIREMENT.md"
