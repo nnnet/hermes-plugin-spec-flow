@@ -539,52 +539,46 @@ def _flow_timeaxis(events: list[dict], tree: dict | None = None) -> str | None:
             order.append(lane)
     lane_x = {lane: i for i, lane in enumerate(order)}
 
-    t0 = min(float(e["t"]) for e in miles)
-    t_n = max(float(e["t"]) for e in miles)
-    span = max(t_n - t0, 1.0)
+    miles.sort(key=lambda e: float(e["t"]))
 
-    AXIS, LANEW, PADT = 72, 250, 8
-    draw_h = max(420, min(int(span * 10), 6000))
+    AXIS, LANEW, PADT, ROWH = 72, 250, 22, 60
+    n = len(miles)
     width = AXIS + len(order) * LANEW + 16
-    height = PADT + draw_h + 30
-
-    def y_of(t: float) -> float:
-        return PADT + (float(t) - t0) / span * draw_h
+    height = PADT + n * ROWH + 16
 
     def hms(t: float) -> str:
         return _time.strftime("%H:%M:%S", _time.localtime(float(t)))
 
     p = [f'<div style="position:relative;width:{width}px;height:{height}px;'
          f'font-size:11px;min-width:{width}px">']
-    # vertical time axis + ticks + faint gridlines
-    p.append(f'<div style="position:absolute;left:{AXIS - 1}px;top:{PADT}px;'
-             f'width:1px;height:{draw_h}px;background:#30363d"></div>')
-    for i in range(9):
-        tt = t0 + span * i / 8
-        yy = y_of(tt)
-        p.append(f'<div style="position:absolute;left:0;top:{yy - 7:.0f}px;'
-                 f'width:{AXIS - 6}px;text-align:right;color:#6e7681">{hms(tt)}</div>')
-        p.append(f'<div style="position:absolute;left:{AXIS}px;top:{yy:.0f}px;'
-                 f'width:{width - AXIS}px;height:1px;background:#161b22"></div>')
+    # vertical axis line spanning the packed rows
+    p.append(f'<div style="position:absolute;left:{AXIS - 1}px;top:{PADT - 6}px;'
+             f'width:1px;height:{n * ROWH}px;background:#30363d"></div>')
     # lane headers
     for lane in order:
         lx = AXIS + lane_x[lane] * LANEW
         p.append(f'<div style="position:absolute;left:{lx}px;top:0;'
                  f'width:{LANEW - 8}px;color:#79c0ff;font-weight:600;overflow:hidden;'
                  f'white-space:nowrap;text-overflow:ellipsis">{esc(lane)}</div>')
-    # per-lane connector line through its boxes
-    lane_ys: dict = {}
-    for e, lane in zip(miles, lane_of):
-        lane_ys.setdefault(lane, []).append(y_of(float(e["t"])))
-    for lane, ys in lane_ys.items():
-        if len(ys) >= 2:
+    # per-lane connector through its rows (same column, different rows)
+    lane_rows: dict = {}
+    for rank, lane in enumerate(lane_of):
+        lane_rows.setdefault(lane, []).append(rank)
+    for lane, rows in lane_rows.items():
+        if len(rows) >= 2:
             lx = AXIS + lane_x[lane] * LANEW + 10
-            p.append(f'<div style="position:absolute;left:{lx}px;top:{min(ys):.0f}px;'
-                     f'width:2px;height:{max(ys) - min(ys):.0f}px;background:#30363d"></div>')
-    # milestone boxes positioned by time, coloured like the mermaid flow
-    for e, lane in zip(miles, lane_of):
-        yy = y_of(float(e["t"]))
-        lx = AXIS + lane_x[lane] * LANEW + 6
+            top = PADT + min(rows) * ROWH + 14
+            bot = PADT + max(rows) * ROWH + 14
+            p.append(f'<div style="position:absolute;left:{lx}px;top:{top}px;'
+                     f'width:2px;height:{bot - top}px;background:#30363d"></div>')
+    # DENSE rows: one milestone per row (uniform ROWH) — no proportional gaps,
+    # box capped to the row so adjacent rows never overlap; real time on the left.
+    for rank, (e, lane) in enumerate(zip(miles, lane_of)):
+        yy = PADT + rank * ROWH
+        p.append(f'<div style="position:absolute;left:0;top:{yy}px;'
+                 f'width:{AXIS - 6}px;text-align:right;color:#6e7681">{hms(e["t"])}</div>')
+        p.append(f'<div style="position:absolute;left:{AXIS}px;top:{yy + ROWH - 6}px;'
+                 f'width:{width - AXIS}px;height:1px;background:#13171d"></div>')
         v = str(e.get("verdict") or "")
         ph = str(e.get("phase") or "")
         if v in ("REJECT", "FAIL", "ERROR"):
@@ -597,11 +591,12 @@ def _flow_timeaxis(events: list[dict], tree: dict | None = None) -> str | None:
         node = esc(str(e.get("task") or "").split(":")[0] or ph)
         label = (f'<b style="color:#adbac7">{esc(ph)} · {node}</b>'
                  f'<br><span style="color:#8b949e">{esc(e.get("action") or "")}</span>'
-                 f'<br><span style="color:#6e7681">{hms(e["t"])}'
-                 + (f' · {esc(v)}' if v else '') + '</span>')
-        p.append(f'<div style="position:absolute;left:{lx}px;top:{yy:.0f}px;'
-                 f'width:{LANEW - 18}px;background:{bg};border:1px solid {border};'
-                 f'border-radius:6px;padding:3px 6px;box-sizing:border-box">{label}</div>')
+                 + (f' <span style="color:#6e7681">· {esc(v)}</span>' if v else ''))
+        lx = AXIS + lane_x[lane] * LANEW + 6
+        p.append(f'<div style="position:absolute;left:{lx}px;top:{yy}px;'
+                 f'width:{LANEW - 18}px;max-height:{ROWH - 8}px;overflow:hidden;'
+                 f'background:{bg};border:1px solid {border};border-radius:6px;'
+                 f'padding:3px 6px;box-sizing:border-box;line-height:1.25">{label}</div>')
     p.append('</div>')
     return "".join(p)
 

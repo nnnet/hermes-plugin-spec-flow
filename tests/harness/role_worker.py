@@ -599,6 +599,213 @@ def _ensemble_generate(prompt: str, *, node: str, system: str, allowed: list,
     return best[1]
 
 
+# ── implementer orchestra (D1) ──────────────────────────────────────────
+# Off by default: with no `team` config the implementer is the SINGLE-agent
+# path, byte-for-byte unchanged. When a `team` list IS configured the leaf is
+# produced by a sequence of sub-roles run in order with handoffs — architect →
+# coder → tester → fixer — each step's structured output fed to the next. The
+# orchestra ORCHESTRATES the same building blocks (_ensemble_generate,
+# _write_reply_files, _leaf_bar, _apply_diff_repair, ws_tx); it never
+# duplicates them. Config: workers.implementer.team (list of {role, skill?,
+# model?}) or env SPEC_FLOW_IMPLEMENTER_TEAM (JSON), consistent with the other
+# knobs (mirrors _ensemble_size's WORKERS_CFG access pattern).
+
+
+def _implementer_team() -> list[dict]:
+    """The configured implementer team (orchestra), or [] for the default
+    single-agent path. Env SPEC_FLOW_IMPLEMENTER_TEAM (JSON list) overrides the
+    case YAML for testability, mirroring how the other knobs read env first."""
+    env = os.environ.get("SPEC_FLOW_IMPLEMENTER_TEAM")
+    raw: Any = None
+    if env is not None and env.strip():
+        try:
+            raw = json.loads(env)
+        except (ValueError, TypeError):
+            raw = None
+    if raw is None:
+        cfg = getattr(llm_backend, "WORKERS_CFG", None) or {}
+        raw = (cfg.get("implementer") or {}).get("team")
+    if not isinstance(raw, list):
+        return []
+    team = []
+    for item in raw:
+        if isinstance(item, dict) and item.get("role"):
+            team.append({"role": str(item["role"]),
+                         "skill": item.get("skill"),
+                         "model": item.get("model")})
+    return team
+
+
+def _step_model(step: dict, specialty: str) -> str:
+    """A team step's model: its declared `model`, else the implementer chain
+    head for this specialty (the same resolver the single path uses)."""
+    return str(step.get("model") or llm_backend.model_for("implementer", specialty))
+
+
+def _step_system(step: dict, default_system: str) -> str:
+    """A team step's system prompt: its declared skill SKILL.md when given,
+    else a short inline role prompt layered on the implementer's own system."""
+    skill = step.get("skill")
+    if skill:
+        try:
+            return _with_language(load_skill_md(str(skill)))
+        except OSError:
+            pass            # missing skill md → fall back to the role prompt
+    role = step.get("role", "")
+    inline = _ORCHESTRA_ROLE_PROMPTS.get(
+        role, f"You act as the '{role}' sub-role of the implementer team.")
+    return _with_language(default_system + "\n\n## Orchestra sub-role\n" + inline)
+
+
+_ORCHESTRA_ROLE_PROMPTS = {
+    "architect": (
+        "Produce a SHORT interface plan for this leaf's module: the public"
+        " functions/classes with signatures, the files to create, and how it"
+        " wires into the assembled app. Plain text, no code, no file writes."),
+    "coder": (
+        "Implement the module and its tests following the architect's plan"
+        " above and the spec. Reply with ONLY the files JSON."),
+    "tester": (
+        "Strengthen the leaf's tests so every acceptance criterion of the spec"
+        " is covered, consistent with the architect interface. Reply with ONLY"
+        " the files JSON (you may return only tests/test_<fn>.py)."),
+    "fixer": (
+        "The tests fail. Repair with the SMALLEST possible edit (SEARCH/REPLACE"
+        " diff blocks against the current files)."),
+}
+
+_ARCHITECT_TASK = """You are the ARCHITECT sub-role of the implementer team for
+ONE leaf of a Spec-Driven Development run.
+
+Leaf: "{title}" (id: {id})
+Its approved spec ({spec}):
+---
+{spec_body}
+---
+
+Produce a short interface/plan for src/{fn}.py: the public functions/classes
+(with signatures), the files to create, and how it wires into the assembled
+app. Text only — do NOT write any files, do NOT emit code blocks. Keep it
+under 25 lines; the coder will implement against it."""
+
+
+def _orchestra_run(ctx: dict, ws_root: str, nid: str, fn: str, *,
+                   system: str, allowed: list, disallowed: list,
+                   channel: Any, team: list[dict]) -> Any:
+    """Run the declared implementer team in order, threading a shared handoff
+    context between steps. Reuses the SAME machinery as the single path — git
+    transaction, _write_reply_files, _leaf_bar, _apply_diff_repair, memory
+    retain, llm_log. A failing sub-step never crashes the run differently than
+    today: it is logged and skipped, and the leaf is still verified by the same
+    two-tier _leaf_bar gate at the end."""
+    from . import pytest_verifier as pv
+    from . import ws_tx
+    specialty = str(ctx.get("specialty", "") or "")
+    ws = ctx["workspace"]
+    spec_body = _inline_file(ws_root, ctx.get("spec", ""))
+    base_prompt = _IMPLEMENT_CHAT_TASK.format(
+        title=ctx["title"], id=nid, spec=ctx.get("spec", ""),
+        spec_body=spec_body, fn=fn)
+    handoff: dict[str, Any] = {"architect_plan": "", "test_output": ""}
+    passed, test_out, wrote = False, "(no files written)", False
+    baseline = 0
+    llm_log.log({"event": "orchestra_start", "node": nid,
+                 "steps": [s["role"] for s in team]})
+
+    for step in team:
+        role = step["role"]
+        s_model = _step_model(step, specialty)
+        s_system = _step_system(step, system)
+        llm_log.log({"event": "orchestra_step", "node": nid, "role": role,
+                     "model": s_model})
+        try:
+            if role == "architect":
+                prompt = _ARCHITECT_TASK.format(
+                    title=ctx["title"], id=nid, spec=ctx.get("spec", ""),
+                    spec_body=spec_body, fn=fn)
+                handoff["architect_plan"] = _dialog_round(
+                    prompt, role="implementer", node=nid, system=s_system,
+                    allowed=allowed, disallowed=disallowed, cwd=ws_root,
+                    model=s_model, channel=channel, specialty=specialty)
+
+            elif role in ("coder", "tester"):
+                prompt = base_prompt
+                if handoff["architect_plan"]:
+                    prompt += ("\n\nARCHITECT PLAN (build to this interface):\n"
+                               + handoff["architect_plan"])
+                if role == "tester":
+                    prompt += ("\n\nTESTER PASS — strengthen the tests to cover"
+                               " every acceptance criterion of the spec.")
+                raw = _ensemble_generate(
+                    prompt, node=nid, system=s_system, allowed=allowed,
+                    disallowed=disallowed, cwd=ws_root, model=s_model,
+                    channel=channel, specialty=specialty)
+                try:
+                    out = _extract_json(raw)
+                except ValueError:
+                    out = {}
+                with ws_tx.transaction(ws_root, f"leaf:{nid}",
+                                       f"orchestra {role}"):
+                    base_passed, base_out = pv.run_suite(
+                        ws_root, include_smoke=False)
+                    baseline = pv._badness(base_passed, base_out)
+                    if _write_reply_files(ws, out.get("files") or {}, fn):
+                        wrote = True
+                        passed, test_out = _leaf_bar(ws_root, fn, baseline, pv)
+                        handoff["test_output"] = test_out
+
+            elif role == "fixer":
+                if passed or not wrote:
+                    continue                # nothing to fix
+                cur_src = _inline_file(ws_root, f"src/{fn}.py") or ""
+                cur_test = _inline_file(ws_root, f"tests/test_{fn}.py") or ""
+                repair = (base_prompt + "\n\n" + _REPAIR_DIFF_TASK.format(
+                    output=handoff["test_output"], fn=fn,
+                    src=cur_src, test=cur_test))
+                raw2 = _call_model(
+                    repair, system=s_system, allowed=allowed,
+                    disallowed=disallowed, cwd=ws_root, model=s_model,
+                    role="implementer", specialty=specialty)
+                with ws_tx.transaction(ws_root, f"leaf:{nid}",
+                                       "orchestra repair"):
+                    if _apply_diff_repair(ws, ws_root, fn, raw2):
+                        passed, test_out = _leaf_bar(ws_root, fn, baseline, pv)
+                    else:
+                        try:
+                            out2 = _extract_json(raw2)
+                        except ValueError:
+                            out2 = {}
+                        if _write_reply_files(ws, out2.get("files") or {}, fn):
+                            passed, test_out = _leaf_bar(
+                                ws_root, fn, baseline, pv)
+                handoff["test_output"] = test_out
+        except Exception as exc:           # noqa: BLE001 — a sub-step never
+            # crashes the run differently than the single path: log and skip
+            llm_log.log({"event": "orchestra_step_error", "node": nid,
+                         "role": role, "error": str(exc)[:150]})
+            continue
+
+    # the SAME completion contract as the single path: a green leaf is
+    # remembered, a red one teaches; the leaf is judged by its artifacts.
+    if passed:
+        memory.retain_role(
+            "implementer",
+            f"Leaf '{nid}' ({ctx.get('title', '')}) landed green via orchestra"
+            f" as src/{fn}.py with its own tests and no suite regression.",
+            context="green leaf", tags=["leaf"])
+    elif wrote:
+        memory.retain_role(
+            "implementer",
+            f"Leaf '{nid}' ({ctx.get('title', '')}) orchestra surrendered RED;"
+            f" failing output tail: {test_out[-300:]}",
+            context="red leaf", tags=["fail"])
+    llm_log.log_outcome(role="implementer", worker=True, node=nid, depth=-1,
+                        model=_model_for("implementer", specialty),
+                        ok=True, tests_passed=passed,
+                        test_output=test_out[-300:], orchestra=True)
+    return None     # the engine judges by the artifacts, not the reply
+
+
 _IMPLEMENT_TASK = """You are running the skill above as the implementer
 worker for ONE leaf of a Spec-Driven Development run.
 
@@ -825,8 +1032,17 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
                 llm_log.log({"event": "dedup", "node": nid,
                              "reused": claim["owner_module"]})
                 return None     # no implementer call — the work already exists
-        out = (_implement_chat(ctx, ws_root, nid, fn) if _chat_only()
-               else _implement_claude(ctx, ws_root, nid, fn))
+        # D1: a configured `team` runs the orchestra; with NO team (the
+        # default, and p4/p5) we fall through to the existing single-agent
+        # path, byte-for-byte unchanged.
+        team = _implementer_team()
+        if team:
+            out = _orchestra_run(ctx, ws_root, nid, fn, system=system,
+                                 allowed=allowed, disallowed=disallowed,
+                                 channel=channel, team=team)
+        else:
+            out = (_implement_chat(ctx, ws_root, nid, fn) if _chat_only()
+                   else _implement_claude(ctx, ws_root, nid, fn))
         if claim is not None:
             claims.BOARD.complete(nid, claim["hash"])
         return out
