@@ -15,6 +15,7 @@ end-to-end, so it only gates the ROOT integrate — partial trees skip it.
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -471,6 +472,76 @@ def _non_ascii_offenders(root: str) -> list:
     return out
 
 
+def _module_exports(path: Path) -> set | None:
+    """Top-level names a module binds (def/class/assignment/re-import) — the
+    names another module can legally `from <mod> import`. None if unparsable."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError):
+        return None
+    names: set = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    names.add(t.id)
+                elif isinstance(t, (ast.Tuple, ast.List)):
+                    names.update(e.id for e in t.elts if isinstance(e, ast.Name))
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names.add(node.target.id)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for a in node.names:
+                if a.name != "*":
+                    names.add(a.asname or a.name.split(".")[0])
+    return names
+
+
+def _cross_module_import_violations(root: str) -> list:
+    """`from <local_module> import <name>` where the LOCAL src module does not
+    bind <name> at top level — distinct weak-model leaves agreeing on a module
+    but not on its exported symbol names (one writes create_jwt, another's test
+    imports generate_jwt). Each leaf is green alone; the corpus aborts at
+    collection with ImportError. Deterministic, src-local only (stdlib and
+    third-party imports are never flagged). Returns sorted unique
+    (importer_rel, module, missing_name)."""
+    base = Path(root)
+    sdir = base / "src"
+    if not sdir.is_dir():
+        return []
+    # exported-name set per local module (src/<mod>.py)
+    exports: dict[str, set] = {}
+    for p in sdir.glob("*.py"):
+        ex = _module_exports(p)
+        if ex is not None:
+            exports[p.stem] = ex
+    local = set(exports)
+    viol: set = set()
+    for sub in ("src", "tests"):
+        d = base / sub
+        if not d.is_dir():
+            continue
+        for p in sorted(d.rglob("*.py")):
+            rel = str(p.relative_to(root))
+            if not _safe_rel(rel):
+                continue
+            try:
+                tree = ast.parse(p.read_text(encoding="utf-8"))
+            except (OSError, SyntaxError):
+                continue
+            for node in ast.walk(tree):
+                if not (isinstance(node, ast.ImportFrom) and node.level == 0):
+                    continue
+                mod = (node.module or "").split(".")[0]
+                if mod not in local or mod == p.stem:
+                    continue
+                for a in node.names:
+                    if a.name != "*" and a.name not in exports[mod]:
+                        viol.add((rel, mod, a.name))
+    return sorted(viol)
+
+
 def make_verifier(model: Optional[str] = None,
                   max_repair: int = MAX_REPAIR,
                   channel: Optional[object] = None) -> Callable[[dict], dict]:
@@ -597,6 +668,26 @@ def make_verifier(model: Optional[str] = None,
                 llm_log.log({"event": "non_ascii_syntax", "role": "verifier",
                              "node": str(ctx.get("node")),
                              "files": sorted({f for f, _, _, _ in offenders})})
+            # CROSS-MODULE IMPORT CONTRACT: a test/module does
+            # `from <local> import <name>` but <local>.py never binds <name>
+            # (one leaf wrote create_jwt, another's test imports generate_jwt).
+            # Green per-leaf, but the corpus aborts at collection with
+            # ImportError. Deterministic; names the exact missing export.
+            imp = _cross_module_import_violations(root)
+            if imp:
+                lines = "; ".join(
+                    f"{f} imports '{name}' from '{mod}' but src/{mod}.py "
+                    f"does not define it" for f, mod, name in imp)
+                out += ("\n\nROOT-CAUSE HINT: cross-module export contract "
+                        "broken — " + lines + ". Fix by exporting the expected "
+                        "name from the owning module (add the function/class, "
+                        "or alias the existing one to the imported name); do "
+                        "NOT change every caller. Keep one canonical symbol "
+                        "name per capability across modules.\n"
+                        + "\n".join(sorted({f for f, _, _ in imp})))
+                llm_log.log({"event": "cross_module_import_contract",
+                             "role": "verifier", "node": str(ctx.get("node")),
+                             "missing": [f"{mod}.{name}" for _, mod, name in imp]})
             # #3: a FLAKY acceptance test (proven non-deterministic) must not
             # redden the root. Re-run each red file FLAKY_RERUNS times; a file
             # that flips green↔red is quarantined — recorded, never silent —
