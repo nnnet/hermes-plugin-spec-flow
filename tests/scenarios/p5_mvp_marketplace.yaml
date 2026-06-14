@@ -60,3 +60,35 @@ review:
   on_reject: rework
   max_rework: 3
 
+# Workers: this case carries its OWN run config — transport, model chains and
+# tree-shaping knobs — so it runs self-contained (no live-run.env.sh, no
+# exported env). configure_workers applies it over the tests/.test.env floor.
+workers:
+  # transport — Bifrost speaks the OpenAI protocol; free OpenRouter pool
+  backend: openai
+  base_url: http://127.0.0.1:8080/v1
+  retries: 6
+  # tree shaping (override the .test.env floor for a live run)
+  leaf_depth: 3
+  max_children: 4
+  max_decompose_calls: 80
+  creator_ensemble: 2
+  concurrency: 3
+  cycle_models: true
+  quota_wait_s: 300
+  quota_retries: 11
+  fallback_models: [claude/haiku]
+  providers:
+    - {name: openrouter-free, kind: openai, model_prefix: "openrouter/", require_suffix: ":free", requests_per_day: 1000}
+    - {name: claude-cli, kind: claude, model_prefix: "claude/"}
+  defaults:
+    models: ["openrouter/qwen/qwen3-coder:free", "claude/haiku"]
+  decomposer:
+    models: ["openrouter/qwen/qwen3-next-80b-a3b-instruct:free", "claude/haiku"]
+  implementer:
+    models: ["openrouter/qwen/qwen3-coder:free", "openrouter/deepseek/deepseek-chat-v3.1:free", "claude/haiku"]
+  reviewer:
+    models: ["claude/haiku", "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"]
+  verifier:
+    models: ["claude/haiku", "openrouter/qwen/qwen3-coder:free"]
+

@@ -245,6 +245,15 @@ memory:
 # ('claude/<model>') ONLY — paid API models are forbidden. Author \!= judge:
 # the reviewer model differs from the implementer model (defaults).
 workers:
+  # transport + tree-shaping config carried by the case (replaces the former
+  # live-run.env.sh exports); applied over the tests/.test.env floor.
+  backend: openai                       # Bifrost speaks the OpenAI protocol
+  base_url: http://127.0.0.1:8080/v1
+  retries: 6
+  leaf_depth: 6
+  max_children: 4
+  max_decompose_calls: 160
+  creator_ensemble: 2
   concurrency: 3
   # working language for specs and in-plugin communication (specs, code
   # comments, HITL questions). English keeps the auto-responder and

@@ -116,7 +116,7 @@ def test_leaf_depth_clamp_drops_children(monkeypatch):
     dec = rw.make_decomposer()
     out = dec({"project": {"goal": "g", "target": "", "constitution": []},
                "node": {"id": "deep", "title": "Deep"}, "parent": "p",
-               "depth": rw.LEAF_DEPTH})
+               "depth": rw._leaf_depth()})
     assert "children" not in out
 
 

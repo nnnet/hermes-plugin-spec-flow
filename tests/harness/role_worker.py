@@ -360,8 +360,15 @@ sections:
   ## Acceptance criteria — measurable checks tied to the REQ ids
 Keep it under 60 lines. Escape newlines as \n inside the JSON string."""
 
-LEAF_DEPTH = config.env("LLM_LEAF_DEPTH", int)
-MAX_CHILDREN = config.env("LLM_MAX_CHILDREN", int)
+def _leaf_depth() -> int:
+    # a case workers block overrides the .test.env floor per run
+    return int(llm_backend.WORKERS_CFG.get("leaf_depth")
+               or config.env("LLM_LEAF_DEPTH", int))
+
+
+def _max_children() -> int:
+    return int(llm_backend.WORKERS_CFG.get("max_children")
+               or config.env("LLM_MAX_CHILDREN", int))
 
 
 def make_decomposer(workspace_dir: Optional[str] = None,
@@ -433,9 +440,9 @@ def make_decomposer(workspace_dir: Optional[str] = None,
                 prompt += (f"\n\nParent approved spec: {spec_rel} —"
                            " READ it first (Read tool, relative to the"
                            " current directory)." + trace_rule)
-        if ctx["depth"] >= LEAF_DEPTH:
+        if ctx["depth"] >= _leaf_depth():
             prompt += (f"\n\nHARD CONSTRAINT: depth {ctx['depth']} >= "
-                       f"{LEAF_DEPTH} — this node MUST be atomic (no children).")
+                       f"{_leaf_depth()} — this node MUST be atomic (no children).")
         from . import repo_map
         rmap = repo_map.build_map(workspace_dir, subdirs=("src",))
         if rmap:
@@ -447,7 +454,7 @@ def make_decomposer(workspace_dir: Optional[str] = None,
             "decomposer",
             f"{ctx['node'].get('title', nid)}:"
             f" {ctx['project'].get('goal', '')}")
-        branch_capable = ctx["depth"] < LEAF_DEPTH
+        branch_capable = ctx["depth"] < _leaf_depth()
         # standing human requirements (possibly added MID-RUN) bind every
         # branch decomposition — a late requirement enters the tree here
         # (getattr: transport channels may predate this capability)
@@ -497,10 +504,10 @@ def make_decomposer(workspace_dir: Optional[str] = None,
             parsed = _extract_json(raw)
         out = _handle_operator_reply(parsed, role="decomposer",
                                      node=nid, note=note, channel=channel)
-        if ctx["depth"] >= LEAF_DEPTH:
+        if ctx["depth"] >= _leaf_depth():
             out.pop("children", None)
         if out.get("children"):
-            out["children"] = out["children"][:MAX_CHILDREN]
+            out["children"] = out["children"][:_max_children()]
         # canonical role name + children ids — the live dashboard rebuilds
         # the growing tree from exactly these fields; ``worker`` marks the
         # real-worker (skill+profile) origin
@@ -525,8 +532,9 @@ def make_decomposer(workspace_dir: Optional[str] = None,
 
 def _ensemble_size() -> int:
     try:
-        n = config.env("CREATOR_ENSEMBLE", int)
-    except ValueError:
+        n = int(llm_backend.WORKERS_CFG.get("creator_ensemble")
+                or config.env("CREATOR_ENSEMBLE", int))
+    except (ValueError, TypeError):
         n = 1
     return max(1, min(n, 4))
 

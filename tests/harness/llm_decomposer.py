@@ -91,9 +91,16 @@ MODEL = config.env("DECOMPOSER_MODEL", default="") or config.env("LLM_MODEL")
 # call count / wall time) for tractable live calibration. Default 3; the p1
 # calibration showed fanout ~4 to depth 3 = ~85 calls > the 80 budget, so a
 # tighter cap (e.g. 2) makes a run ~13-21 nodes. Override: SPEC_FLOW_LLM_LEAF_DEPTH.
-LEAF_DEPTH = config.env("LLM_LEAF_DEPTH", int)
+def _leaf_depth() -> int:
+    # a case workers block overrides the .test.env floor per run
+    return int(llm_backend.WORKERS_CFG.get("leaf_depth")
+               or config.env("LLM_LEAF_DEPTH", int))
+
+
 # soft cap on children per node (the prompt asks the model to respect it)
-MAX_CHILDREN = config.env("LLM_MAX_CHILDREN", int)
+def _max_children() -> int:
+    return int(llm_backend.WORKERS_CFG.get("max_children")
+               or config.env("LLM_MAX_CHILDREN", int))
 
 
 def _ask(prompt: str) -> str:
@@ -123,8 +130,8 @@ def decompose(ctx: dict) -> dict:
         existing=existing_lines)
     if ctx["depth"] == 0:
         prompt += ROOT_RULE
-    if ctx["depth"] >= LEAF_DEPTH:
-        prompt += LEAF_RULE.format(depth=ctx["depth"], leaf_depth=LEAF_DEPTH)
+    if ctx["depth"] >= _leaf_depth():
+        prompt += LEAF_RULE.format(depth=ctx["depth"], leaf_depth=_leaf_depth())
     nid = ctx["node"]["id"]
     # a weaker free model often returns malformed/partial JSON on the first try;
     # re-prompt with the exact failure instead of crashing the whole run on one
@@ -150,12 +157,12 @@ def decompose(ctx: dict) -> dict:
         raise ValueError(f"decomposer failed after {attempts} attempts: {last}")
     # keep only the keys the engine understands (incl. the atomicity judgment)
     keep = {k: out[k] for k in ("atomic", "metrics", "children", "spike", "clarify") if k in out}
-    if ctx["depth"] >= LEAF_DEPTH:
+    if ctx["depth"] >= _leaf_depth():
         keep.pop("children", None)          # convergence is enforced, not hoped for
         keep["atomic"] = True               # forced-leaf depth ⇒ declare atomic
     # bound fan-out so a wide tree cannot blow the call budget
-    if keep.get("children") and len(keep["children"]) > MAX_CHILDREN:
-        keep["children"] = keep["children"][:MAX_CHILDREN]
+    if keep.get("children") and len(keep["children"]) > _max_children():
+        keep["children"] = keep["children"][:_max_children()]
     for child in keep.get("children", []) or []:
         child.pop("metrics", None)          # children are sized on their own visit
     children = [c.get("id", "?") for c in keep.get("children", []) or []]

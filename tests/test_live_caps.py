@@ -35,7 +35,7 @@ def _stub(monkeypatch, payload: dict) -> None:
 def test_below_leaf_depth_model_branching_is_kept(monkeypatch):
     """Why: under the cap the FLEXIBLE judgment rules — a branch proposal
     must pass through untouched (the engine's leaf_check arbitrates later)."""
-    monkeypatch.setattr(ld, "LEAF_DEPTH", 3)
+    monkeypatch.setenv("SPEC_FLOW_LLM_LEAF_DEPTH", "3")
     _stub(monkeypatch, {"atomic": False, "metrics": {"modules": 3},
                         "children": [{"id": "a", "title": "A"}]})
     out = ld.decompose({**CTX, "depth": 1})
@@ -46,7 +46,7 @@ def test_below_leaf_depth_model_branching_is_kept(monkeypatch):
 def test_leaf_depth_forces_atomic_and_strips_children(monkeypatch):
     """Why: at the cap convergence is enforced, not hoped for — even if the
     model still proposes children they are dropped and the node is a leaf."""
-    monkeypatch.setattr(ld, "LEAF_DEPTH", 3)
+    monkeypatch.setenv("SPEC_FLOW_LLM_LEAF_DEPTH", "3")
     _stub(monkeypatch, {"atomic": False, "metrics": {"modules": 9},
                         "children": [{"id": "a", "title": "A"},
                                      {"id": "b", "title": "B"}]})
@@ -57,8 +57,8 @@ def test_leaf_depth_forces_atomic_and_strips_children(monkeypatch):
 
 def test_max_children_trims_fanout(monkeypatch):
     """Why: a wide tree must not blow the call budget — fan-out is capped."""
-    monkeypatch.setattr(ld, "LEAF_DEPTH", 9)
-    monkeypatch.setattr(ld, "MAX_CHILDREN", 2)
+    monkeypatch.setenv("SPEC_FLOW_LLM_LEAF_DEPTH", "9")
+    monkeypatch.setenv("SPEC_FLOW_LLM_MAX_CHILDREN", "2")
     kids = [{"id": f"c{i}", "title": str(i)} for i in range(6)]
     _stub(monkeypatch, {"atomic": False, "metrics": {}, "children": kids})
     out = ld.decompose({**CTX, "depth": 1})
@@ -68,7 +68,7 @@ def test_max_children_trims_fanout(monkeypatch):
 def test_children_never_carry_metrics(monkeypatch):
     """Why: children are sized on their own visit — pre-supplied metrics from
     the model would smuggle the parent's view into the child's gate."""
-    monkeypatch.setattr(ld, "LEAF_DEPTH", 9)
+    monkeypatch.setenv("SPEC_FLOW_LLM_LEAF_DEPTH", "9")
     _stub(monkeypatch, {"atomic": False, "metrics": {},
                         "children": [{"id": "a", "title": "A",
                                       "metrics": {"modules": 1}}]})

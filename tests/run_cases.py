@@ -249,7 +249,8 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
         # live tree building: same blueprint/revision drop as llm mode
         exec_case = {k: v for k, v in case.items()
                      if k not in ("blueprint", "revisions", "revision", "hitl")}
-        max_calls = _cfg.env("MAX_DECOMPOSE_CALLS", int)
+        max_calls = int((case.get("workers") or {}).get("max_decompose_calls")
+                        or _cfg.env("MAX_DECOMPOSE_CALLS", int))
     elif decomposer == "llm":
         from harness import llm_decomposer
         dec_fn = llm_decomposer.decompose
@@ -259,9 +260,11 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
         # the live LLM builds its own ids → the blueprint and the id-bound
         # revisions are dropped; the oracle still checks the realized run
         exec_case = {k: v for k, v in case.items() if k not in ("blueprint", "revisions", "revision")}
-        # live budget: env-overridable so a "flexible atomicity" run can widen
-        # the bounds (the engine still dies loudly on non-convergence)
-        max_calls = _cfg.env("MAX_DECOMPOSE_CALLS", int)
+        # live budget: case workers block overrides the .test.env floor so a
+        # "flexible atomicity" run can widen the bounds (the engine still dies
+        # loudly on non-convergence)
+        max_calls = int((case.get("workers") or {}).get("max_decompose_calls")
+                        or _cfg.env("MAX_DECOMPOSE_CALLS", int))
     else:
         from harness import blueprint_decomposer
         agents["decomposer"] = blueprint_decomposer.make(case["blueprint"])
@@ -523,10 +526,10 @@ def main() -> int:
     elif args.gateway == "direct":
         os.environ.pop("ANTHROPIC_BASE_URL", None)
     os.environ["SPEC_FLOW_LLM_MODEL"] = args.model
-    # HARD RULE: test runs go to the OpenRouter free pool (openai backend);
-    # llm_backend guards ':free' and falls back to haiku ONLY on exhaustion.
-    # Must be set before harness.role_worker / llm_backend import.
-    os.environ.setdefault("SPEC_FLOW_LLM_BACKEND", "openai")
+    # Transport (backend) is NOT hardcoded here anymore: it comes from the case
+    # `workers:` block (applied by configure_workers, which wins over the
+    # tests/.test.env floor). A case run via Bifrost declares `backend: openai`
+    # in its workers block — see scenarios/p5_mvp_marketplace.yaml.
     if (args.decomposer == "llm" or args.workers == "real") and not args.case:
         # live LLM runs cost real quota: one call per tree node — keep the
         # default to the single smallest case; widen explicitly via --case
