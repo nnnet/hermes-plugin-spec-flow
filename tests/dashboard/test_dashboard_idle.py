@@ -30,14 +30,15 @@ def test_none_run():
     assert dash._idle_analysis(None) == {"empty": True}
 
 
-def test_gap_is_attributed_to_owner_event(tmp_path):
+def test_gap_is_attributed_to_next_event(tmp_path):
     rows = [_ev(0, task="a", phase="review"),
             _ev(10, task="b", phase="implement"),
-            _ev(13, task="b", phase="implement")]
+            _ev(13, task="c", phase="implement")]
     a = dash._idle_analysis(_run(tmp_path, rows))
-    # two gaps: 10s owned by the review event, 3s by the implement event
+    # a gap is the time spent PRODUCING the next event, so it is attributed to
+    # that next event: 10s -> b, 3s -> c.
     durs = {r["node"]: r["dur"] for r in a["top"]}
-    assert durs["a"] == 10.0 and durs["b"] == 3.0
+    assert durs["b"] == 10.0 and durs["c"] == 3.0
     assert a["total_s"] == 13.0 and a["events"] == 2
 
 
@@ -47,10 +48,11 @@ def test_cause_classification(tmp_path):
             _ev(40, task="x", phase="implement", action="rework round 1"),
             _ev(60, task="x", phase="implement")]
     a = dash._idle_analysis(_run(tmp_path, rows))
+    # next-event attribution: gap before tick T is labelled by event T's work
     causes = {r["tick"]: r["cause"] for r in a["top"]}
-    assert causes[0] == "ревью спеки"
     assert causes[5] == "интеграция (тесты)"
     assert causes[40] == "починка"
+    assert causes[60] == "реализация (LLM)"
 
 
 def test_quota_wait_window_is_detected(tmp_path):
@@ -68,9 +70,10 @@ def test_rollups_sorted_by_total(tmp_path):
             _ev(110, task="b", phase="integrate", action="acceptance"),
             _ev(130, task="a", phase="review")]
     a = dash._idle_analysis(_run(tmp_path, rows))
+    # next-event attribution: 100s+10s -> integrate, 20s -> the final review
     by_cause = {r["cause"]: r["total"] for r in a["by_cause"]}
-    assert by_cause["ревью спеки"] == 100.0
-    assert by_cause["интеграция (тесты)"] == 30.0
+    assert by_cause["интеграция (тесты)"] == 110.0
+    assert by_cause["ревью спеки"] == 20.0
     # by_cause is sorted descending
     totals = [r["total"] for r in a["by_cause"]]
     assert totals == sorted(totals, reverse=True)

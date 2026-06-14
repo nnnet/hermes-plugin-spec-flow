@@ -1476,14 +1476,12 @@ function mray(){if(window.mermaid){try{mermaid.run({querySelector:'#detail .merm
 async function poll(){
  if(!AUTO)return;
  try{const r=await fetch('/api/state');STATE=await r.json();render(false);
-   // keep the HITL chat live (sent→read status flips on its own) while open
+   // re-fetch the open lazily-loaded tab so it stays LIVE (not just re-rendered
+   // from a stale cache): HITL chat status, idle analysis of the running case.
    if(!SEL && GTAB==='hitl') loadHitl();
+   else if(!SEL && GTAB==='idle') loadIdle();
  }catch(e){}
 }
-// tabs whose content is interactive or lazily loaded (dropdowns, sortable
-// tables, the rendered graph): an auto tick must NOT rebuild them — it would
-// reset a selection, jump the scroll, or reflow the diagram under the cursor.
-const FROZEN_TABS=new Set(['compare','idle','workflow','oracle','commits','summary','graph','report']);
 function focusInside(el){const a=document.activeElement;
  return a&&el&&el.contains(a)&&/^(SELECT|INPUT|TEXTAREA|OPTION)$/.test(a.tagName);}
 function withScroll(el,fn){if(!el){fn();return;}
@@ -1542,10 +1540,14 @@ function render(user){
  updElapsed();
  // the tree updates live (new nodes appear) but must never yank the scroll
  withScroll($('#tree'),()=>{$('#tree').innerHTML='<ul>'+treeHTML(STATE.tree)+'</ul>';});
- // on an auto tick, leave the right pane alone when the user is mid-interaction:
- // an open/sortable tab or a focused control would be reset by a rebuild.
+ // Every tab auto-updates. The ONLY thing that pauses a rebuild is the user
+ // actively typing/selecting in a control (focusInside) — otherwise the rebuild
+ // is non-disruptive: scroll is preserved (withScroll + .keepscroll), and
+ // collapse/sort/selection live in persistent vars (EXPANDED, *_SORT, *_CASE),
+ // so nothing is reset. No tab is ever "frozen" (which could leave it stale
+ // forever without a user action).
  const det=$('#detail');
- if(!user && (focusInside(det) || (!SEL && FROZEN_TABS.has(GTAB))))return;
+ if(!user && focusInside(det))return;
  withScroll(det,()=>{ if(!SEL) renderGlobal(); else renderNode(); });
 }
 
@@ -1658,8 +1660,8 @@ function compareHTML(){
 // duration / idle analysis (⏱): where the wall-clock went, by op + cause
 let IDLE=null, IDLE_SORT='dur', IDLE_DESC=true;
 function loadIdle(){
- fetch('/api/idle').then(r=>r.json()).then(d=>{IDLE=d;if(GTAB==='idle')render();})
-  .catch(()=>{IDLE={error:'не удалось загрузить'};render();});
+ fetch('/api/idle').then(r=>r.json()).then(d=>{IDLE=d;if(GTAB==='idle')render(false);})
+  .catch(()=>{IDLE={error:'не удалось загрузить'};render(false);});
 }
 function fmtDur(s){if(s>=60)return (s/60).toFixed(1)+'м';return s.toFixed(0)+'с';}
 function idleHTML(){

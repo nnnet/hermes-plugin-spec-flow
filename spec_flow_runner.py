@@ -1343,6 +1343,36 @@ class Engine:
         # the case carried no `tree`, this is where it becomes inspectable.
         project["tree"] = root
 
+        # B2 mechanism 3 (minimal "emit FAIL" variant): if the constitution
+        # DECLARES a product entry (wsgi_app/app.py) but no module built it,
+        # the engine itself flags an "entry not built" gate FAIL at the root.
+        # The hard RED is already owned by the verifier's boot-gate (which
+        # tries to assemble the real entry in a fresh subprocess); this engine
+        # emit makes the missing assembly explicit at the engine layer. We
+        # chose the minimal emit over synthesizing a standing-requirement node
+        # because the standing-requirement machinery is a project-supplied
+        # callable consumed DURING the visit loop (already finished here), so
+        # injecting an engine-generated requirement post-decomposition would
+        # be invasive and risk perturbing p4/p5; the boot-gate covers the hard
+        # failure regardless. Constitution-keyed + behind SPEC_FLOW_PRE_GATE,
+        # so with the flag OFF / no entry declared, behavior is unchanged.
+        if os.environ.get("SPEC_FLOW_PRE_GATE", "") not in ("", "0", "false",
+                                                            "False", "no"):
+            try:
+                from tests.harness import contract_checks
+                entry = contract_checks.constitution_declares_entry(
+                    self._constitution)
+            except Exception:  # noqa: BLE001 — gate never breaks the run
+                entry = None
+            if entry and not (Path(self.workspace.root) / entry).is_file():
+                self.emit("integrate", "engine", "spec-integrate",
+                          "L0:integrate",
+                          "declared product entry not built",
+                          f"constitution declares {entry} (wsgi_app) but it "
+                          f"was never built — root integrate cannot assemble "
+                          f"the product",
+                          "integrate_verify", "FAIL", level=L_MILESTONE)
+
         # Sweep: fire any declared revision that did not meet its in-run
         # trigger condition (back-compat + nothing declared is silently dropped).
         self._revision_sweep()
@@ -2058,7 +2088,14 @@ class Engine:
                     try:
                         vctx = {"node": nid, "title": title,
                                 "children": child_ids, "depth": depth,
-                                "workspace_root": self.workspace.root}
+                                "workspace_root": self.workspace.root,
+                                # B2 boot-gate is constitution-keyed: the
+                                # verifier reads the declared product entry
+                                # (wsgi_app/app.py) from here. No entry
+                                # declared ⇒ the boot-gate skips itself, so
+                                # p4/p5 stay unaffected.
+                                "constitution": self._constitution,
+                                "goal": self._goal}
                         # #4: scope a BRANCH integrate to its subtree's tests;
                         # the root (depth 0 / L0) runs the whole corpus.
                         if self._incremental_integrate and depth > 0:

@@ -561,7 +561,44 @@ def make_verifier(model: Optional[str] = None,
         # the root (L0) passes none and runs the whole corpus. Repair re-runs and
         # diagnostics below stay full-suite — a scoped green still owes the root.
         targets = None if include_smoke else (ctx.get("test_targets") or None)
-        passed, out = run_suite(root, include_smoke, targets)
+        # B1 PRE-INTEGRATE CONTRACT GATE: before the (expensive) full pytest,
+        # run pure static/mechanical contract checks. They catch the
+        # hollow-green class — import-but-unbuilt glue, a test mocking its own
+        # local module, stubbed handlers, a corpus that won't even collect —
+        # that a green pytest run papers over. On a hit we fail FAST (no full
+        # run) and hand the violations to the SAME repair loop as the hint.
+        # Default OFF (SPEC_FLOW_PRE_GATE) so p4/p5 are unaffected.
+        # B2 BOOT-GATE is appended at ROOT only and is constitution-keyed:
+        # it assembles + drives the real product entry in a FRESH subprocess
+        # (worker-test sys.modules mocks / conftest cannot leak there), so a
+        # product that does not actually boot is RED even if pytest is green.
+        gate_hint = ""
+        if config.env("PRE_GATE", bool, default=False):
+            try:
+                from . import contract_checks
+                gate_viol = contract_checks.run_all(root)
+                if include_smoke:
+                    ok, detail = contract_checks.boot_gate(
+                        root, ctx.get("constitution"), str(ctx.get("goal", "")))
+                    if not ok:
+                        gate_viol.append(detail)
+            except Exception as exc:  # noqa: BLE001 — gate never breaks verdict
+                gate_viol = []
+                llm_log.log({"event": "pre_gate_error", "role": "verifier",
+                             "node": str(ctx.get("node")), "error": str(exc)[:200]})
+            if gate_viol:
+                gate_hint = ("PRE-INTEGRATE CONTRACT GATE failed — fix these "
+                             "before the suite can be trusted (a green pytest "
+                             "run over these is hollow):\n- "
+                             + "\n- ".join(gate_viol[:40]))
+                llm_log.log({"event": "pre_gate_fail", "role": "verifier",
+                             "node": str(ctx.get("node")),
+                             "violations": gate_viol[:40]})
+                # fail fast: mark red and feed the violations to the repair
+                # loop as ``out``; we skip the full pytest this round.
+                passed, out = False, gate_hint
+        if not gate_hint:
+            passed, out = run_suite(root, include_smoke, targets)
         first_red = ""
         if not passed:
             # the FIRST red output is the diagnosis — keep it on record
