@@ -179,18 +179,21 @@ errors_per_node, and review-op count.
   wiring already exists (specialty.py + chain_for); just declare + turn on.
 - **C2 Specialty-aware reviewer** — reviewer model picked per node domain.
 
-**D. Replace roles with orchestras (the big lever)**
-Generalise the creator ensemble (already shipped for the implementer) to the
-other roles — a role becomes a small panel, not one agent.
-- **D1 Reviewer orchestra.** 2–3 reviewer models vote; majority verdict. Kills
-  the false-reject churn that inflates review+repair AND the false-accept that
-  reddens integrate. *How:* `workers.reviewer.orchestra: 3, vote: majority`;
-  panel runs in parallel, verdict = majority, disagreements logged.
-- **D2 Decomposer orchestra.** 2 decomposers propose trees, a judge picks the
-  better one → fewer downstream errors (a bad tree is the most expensive
-  mistake). *How:* reuse the judge-panel pattern.
-- **D3 Declarative orchestra config** in the `workers:` block, defaulting to
-  size 1 (= today's single agent) so existing cases are unchanged.
+**D. Replace a single-agent role with an orchestra (a TEAM of heterogeneous
+agents running a mini-workflow — NOT a vote of identical models)**
+Today a role = one model call. Make a role = a small team of specialised
+sub-agents collaborating in a sub-workflow on each node.
+- **D1 Implementer orchestra.** Per leaf, a pipeline of distinct agents instead
+  of one coder: architect (defines the module interface/contract) → coder
+  (writes it) → tester (writes + runs the tests) → fixer (repairs failures).
+  Each is its own specialised agent. *How:* a per-leaf sub-workflow; the
+  creator ensemble becomes the "coder" stage of it.
+- **D2 Decomposer orchestra.** One agent drafts the task tree, a second
+  critiques/improves it, a third reconciles → a better tree (a bad tree is the
+  most expensive mistake downstream).
+- **D3 Declarative team config** in the `workers:` block: declare a role's team
+  + its sub-workflow; default = a team of one = today's single agent, so
+  existing cases are unchanged.
 
 ### Execution order
 p6 first (the ruler) → D1 reviewer orchestra (attacks the 47% sink at its
