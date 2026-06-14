@@ -30,6 +30,7 @@ import os
 import time as _time
 import pathlib
 import re
+import shutil
 import sys
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -44,9 +45,28 @@ REFRESH_MS = 2000
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+def _is_run_dir(p: pathlib.Path) -> bool:
+    """A real run folder: a directory whose name carries the `__vNNN__`
+    separator. Filters out side-folders like `_archive/` and `.run-counter`."""
+    return p.is_dir() and "__" in p.name and not p.name.startswith((".", "_"))
+
+
 def _latest_run() -> pathlib.Path | None:
-    dirs = [p for p in OUT_DIR.iterdir() if p.is_dir()] if OUT_DIR.exists() else []
+    dirs = [p for p in OUT_DIR.iterdir() if _is_run_dir(p)] if OUT_DIR.exists() else []
     return max(dirs, key=lambda p: p.stat().st_mtime) if dirs else None
+
+
+def _resolve_run(name: str) -> pathlib.Path | None:
+    """Validate a run-folder name from a request body and return its path,
+    or None. The name must be a direct child of OUT_DIR and a real run dir —
+    this is the traversal guard for select/delete (no '/', no '..')."""
+    name = str(name or "").strip()
+    if not name or "/" in name or "\\" in name:
+        return None
+    p = (OUT_DIR / name).resolve()
+    if p.parent != OUT_DIR.resolve() or not _is_run_dir(p):
+        return None
+    return p
 
 
 def _read_jsonl(path: pathlib.Path) -> list[dict]:
@@ -916,14 +936,54 @@ class _H(BaseHTTPRequestHandler):
     def _run_dir(self) -> pathlib.Path | None:
         return self.run_dir_override or _latest_run()
 
+    def _run_admin(self, path: str, body: dict):
+        """Select a run for viewing (pins run_dir_override) or archive one.
+        Delete is a reversible move into runs-out/_archive/, never an
+        on-disk erase, and is refused for a live or currently-pinned run."""
+        raw = body.get("run") or body.get("dir") or ""
+        # an empty run on select clears the pin → follow the live/latest run
+        if path == "/api/run/select" and not str(raw).strip():
+            _H.run_dir_override = None
+            return self._send(200, "application/json",
+                              b'{"ok":true,"selected":null}')
+        target = _resolve_run(raw)
+        if target is None:
+            return self._send(400, "application/json",
+                              b'{"ok":false,"error":"unknown run"}')
+        if path == "/api/run/select":
+            _H.run_dir_override = target
+            return self._send(200, "application/json",
+                              json.dumps({"ok": True, "selected": target.name}).encode())
+        # delete → archive
+        if _pid_alive(target):
+            return self._send(409, "application/json",
+                              b'{"ok":false,"error":"run is alive"}')
+        if _H.run_dir_override and _H.run_dir_override.resolve() == target.resolve():
+            return self._send(409, "application/json",
+                              b'{"ok":false,"error":"run is selected"}')
+        arch = OUT_DIR / "_archive"
+        arch.mkdir(exist_ok=True)
+        dest = arch / target.name
+        i = 2
+        while dest.exists():
+            dest = arch / f"{target.name}__dup{i}"
+            i += 1
+        shutil.move(str(target), str(dest))
+        return self._send(200, "application/json",
+                          json.dumps({"ok": True, "archived": target.name}).encode())
+
     def do_GET(self):                                              # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path in ("/", "/index.html"):
             return self._send(200, "text/html; charset=utf-8", _PAGE.encode("utf-8"))
         if parsed.path == "/api/state":
             rd = self._run_dir()
-            payload = json.dumps(_build_state(rd) if rd else {"empty": True},
-                                 ensure_ascii=False).encode("utf-8")
+            st = _build_state(rd) if rd else {"empty": True}
+            if rd is not None:
+                # tell the frontend whether this run is pinned by an explicit
+                # selection (vs. just following the live/latest run)
+                st["pinned"] = _H.run_dir_override is not None
+            payload = json.dumps(st, ensure_ascii=False).encode("utf-8")
             return self._send(200, "application/json; charset=utf-8", payload)
         if parsed.path == "/api/compare":
             # run-comparison table (П5): every run's metrics as JSON for
@@ -972,6 +1032,20 @@ class _H(BaseHTTPRequestHandler):
 
     def do_POST(self):                                             # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
+        # run select/delete act on a run named in the body — independent of
+        # the currently-shown run, so they run before the active-run guard.
+        if parsed.path in ("/api/run/select", "/api/run/delete"):
+            try:
+                n = int(self.headers.get("Content-Length", "0"))
+                body = json.loads(self.rfile.read(n) or b"{}")
+            except Exception:                              # noqa: BLE001
+                return self._send(400, "application/json",
+                                  b'{"ok":false,"error":"bad json"}')
+            try:
+                return self._run_admin(parsed.path, body)
+            except Exception as exc:                       # noqa: BLE001
+                return self._send(500, "application/json",
+                                  json.dumps({"ok": False, "error": str(exc)}).encode())
         rd = self._run_dir()
         if rd is None:
             return self._send(404, "application/json",
@@ -1096,6 +1170,10 @@ body{margin:0;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;background:#0d
 .runbtn{cursor:pointer;border-radius:6px;padding:2px 10px;font-weight:700;border:1px solid #30363d}
 #runstop{background:#3d1518;color:#f85149}#runstop:hover{background:#5a1d22}
 #runstart{background:#11281a;color:#3fb950}#runstart:hover{background:#163a25}
+#runlive{background:#16202c;color:#58a6ff}#runlive:hover{background:#1d2c3d}
+.cmp tbody tr[data-run]{cursor:pointer}.cmp tbody tr[data-run]:hover{background:#161b22}
+.cmp tr.selrow{background:#15324a}.cmp tr.selrow:hover{background:#1b3d59}
+.cmpact{text-align:center}.delrun{cursor:pointer;color:#8b949e}.delrun:hover{color:#f85149}
 .runbtn.off{opacity:.35;cursor:not-allowed;pointer-events:none;filter:grayscale(.6)}
 .live{color:#3fb950}.donec{color:#8b949e}
 .bar2{position:sticky;top:38px;z-index:4;background:#0f141a;border-bottom:1px solid #21262d;padding:3px 14px;display:block;font-size:12px}
@@ -1147,6 +1225,7 @@ pre.code{background:#161b22;padding:10px;border-radius:6px;overflow:auto;white-s
  <span class=pill id=mode title="клик — вкл/выкл авторефреш"></span>
  <span class=runbtn id=runstop title="кооперативная остановка прогона (STOP + SIGTERM)">⏹ стоп</span>
  <span class=runbtn id=runstart title="запустить новый прогон того же кейса">▶ ран</span>
+ <span class=runbtn id=runlive title="открепить выбранный прогон — показывать живой/последний" style="display:none">⟲ к живому</span>
  <span class=dim id=runmsg></span>
 </div>
 <div class=bar2>
@@ -1255,6 +1334,8 @@ function render(){
  const bs=$('#runstop'),br=$('#runstart');
  if(bs){bs.classList.toggle('off',!active);bs.title=active?'остановить активный прогон (STOP + SIGTERM)':'нет активного прогона';}
  if(br){br.classList.toggle('off',active);br.title=active?'прогон уже идёт — сначала останови':'запустить новый прогон того же кейса';}
+ // the "back to live" button shows only while a specific run is pinned
+ const bl=$('#runlive');if(bl)bl.style.display=STATE.pinned?'':'none';
  $('#goal').textContent=STATE.goal?('🎯 '+STATE.goal):'';
  trackActive();
  // the line is ALWAYS rendered (finished runs show the final state) — an emptied div collapses and the header jumps between 1 and 2 lines
@@ -1335,7 +1416,8 @@ function compareHTML(){
   if(x<y)return CMP_DESC?1:-1;if(x>y)return CMP_DESC?-1:1;return 0;});
  const opts=['<option value="">все кейсы</option>'].concat(
   cases.map(c=>`<option value="${esc(c)}"${CMP_CASE===c?' selected':''}>${esc(c)}</option>`)).join('');
- let h='<p class=muted>сравнение прогонов — фильтр по кейсу, клик по заголовку = сортировка. '+
+ let h='<p class=muted>сравнение прогонов — фильтр по кейсу, клик по заголовку = сортировка, '+
+  'клик по строке = показать этот прогон на дашборде, 🗑 = в архив. '+
   '«~» у времени = прогон не финиширован. Данные из tests/compare_runs.py</p>';
  h+='<div style="margin:8px 0"><label>кейс: <select id=cmpcase>'+opts+'</select></label> '+
   '<span class="tab" id=cmpreload style="margin-left:8px">↻ обновить</span> '+
@@ -1353,12 +1435,16 @@ function compareHTML(){
   if(good>=0.66)return ' style="color:#3fb950"';
   if(good<=0.33)return ' style="color:#f85149"';
   return ' style="color:#e3b341"';};
+ const curName=(STATE&&STATE.name)||'';
  h+='<div class=cmpscroll><table class=cmp><thead><tr>'+CMP_COLS.map(([k,t])=>
-  `<th data-sort="${k}" title="${esc(CMP_TIPS[k]||'')}" style="cursor:help"${CMP_NORM.has(k)?' class=normcol':''}>${t}${CMP_SORT===k?(CMP_DESC?' ▾':' ▴'):''}</th>`).join('')+'</tr></thead><tbody>';
- rows.forEach(r=>{h+='<tr>'+CMP_COLS.map(([k])=>{
+  `<th data-sort="${k}" title="${esc(CMP_TIPS[k]||'')}" style="cursor:help"${CMP_NORM.has(k)?' class=normcol':''}>${t}${CMP_SORT===k?(CMP_DESC?' ▾':' ▴'):''}</th>`).join('')+'<th title="перенести прогон в архив"></th></tr></thead><tbody>';
+ rows.forEach(r=>{
+  const sel=(r.dir&&r.dir===curName)?' class=selrow':'';
+  h+=`<tr data-run="${esc(r.dir||'')}" title="клик — показать этот прогон"${sel}>`+CMP_COLS.map(([k])=>{
   let v=r[k];if(typeof v==='boolean')v=v?'<b style="color:#f85149">RED</b>':'—';
   const hc=CMP_NORM.has(k)?heat(k,r[k]):'';
-  return `<td${hc}>${v===undefined?'':v}</td>`;}).join('')+'</tr>';});
+  return `<td${hc}>${v===undefined?'':v}</td>`;}).join('')+
+  `<td class=cmpact><span class=delrun data-del="${esc(r.dir||'')}" title="в архив (runs-out/_archive/)">🗑</span></td></tr>`;});
  h+='</tbody></table></div>';
  return h;
 }
@@ -1506,6 +1592,12 @@ function runCtl(path,payload){
    if(el)el.textContent=d.ok?(d.stopped?'⏹ остановлен'+(d.signalled?' (pid '+d.signalled+')':''):'▶ запущен: '+esc(d.started||'')):('✗ '+(d.error||'ошибка'));
   }).catch(()=>{if(el)el.textContent='✗ сеть';});
 }
+// pin the dashboard to a chosen run (empty name = follow the live/latest run)
+function runSelect(name){
+ fetch('/api/run/select',{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({run:name})}).then(()=>{SEL=null;poll();renderGlobal();})
+  .catch(()=>{});
+}
 function hitlPost(path,payload,msgEl){
  fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},
   body:JSON.stringify(payload)}).then(r=>r.json()).then(d=>{
@@ -1642,6 +1734,16 @@ document.addEventListener('click',e=>{
  if(gn){const id=gn.dataset.id;clearTimeout(CLICKT);CLICKT=setTimeout(()=>toggleGraph(id),260);return;}
  const sorth=e.target.closest('th[data-sort]');
  if(sorth){const k=sorth.dataset.sort;if(CMP_SORT===k)CMP_DESC=!CMP_DESC;else{CMP_SORT=k;CMP_DESC=false;}renderGlobal();return;}
+ const del=e.target.closest('[data-del]');
+ if(del){const n=del.dataset.del;
+  if(confirm('Перенести прогон '+n+' в архив? (runs-out/_archive/, обратимо)'))
+   fetch('/api/run/delete',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({run:n})}).then(r=>r.json()).then(d=>{
+    if(!d.ok)alert('Не удалось: '+(d.error||'?'));CMP=null;poll();renderGlobal();});
+  return;}
+ const rr=e.target.closest('tr[data-run]');
+ if(rr&&rr.dataset.run){runSelect(rr.dataset.run);return;}
+ if(e.target.closest('#runlive')){runSelect('');return;}
  const g=e.target.closest('[data-g]');if(g){GTAB=g.dataset.g;renderGlobal();return;}
  const rl=e.target.closest('#cmpreload');if(rl){CMP=null;renderGlobal();return;}
  if(e.target.closest('#runstop')){
