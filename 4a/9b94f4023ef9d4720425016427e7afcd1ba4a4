@@ -1,0 +1,24 @@
+tests/workers/test_orchestra.py
+  s_a7f45290e91181::t_9308ac9072856e 1-242
+tests/lib/live_dashboard.py
+  s_a7f45290e91181::t_9c697eff7e974e 542,544-545,547,554-556,563-568,570-581,594-599
+tests/harness/role_worker.py
+  s_a7f45290e91181::t_fd4c5199cf8e19 602-808
+  s_a7f45290e91181::t_17813edb2fadf7 1035-1045
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "4a9b94f4023ef9d4720425016427e7afcd1ba4a4",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
