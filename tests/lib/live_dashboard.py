@@ -659,6 +659,7 @@ def _build_state(run_dir: pathlib.Path) -> dict:
             le = events[-1]
             current = f"🟢 {le.get('phase')}: {le.get('action')}"
     timeline = [{"tick": e.get("tick"), "t": e.get("t"), "phase": e.get("phase"),
+                 "node": e.get("task"),
                  "text": str(e.get("action")), "verdict": e.get("verdict")}
                 for e in events if int(e.get("level") or 2) <= 2]
 
@@ -762,8 +763,9 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
                 trace.append(json.loads(line))
             except json.JSONDecodeError:
                 continue
-    # quota / error wait windows from the llm-log (start time + seconds)
+    # quota / error wait windows + LLM call timestamps from the llm-log
     waits = []
+    calls = []
     lf = run_dir / "llm-log.jsonl"
     if lf.exists():
         for line in lf.read_text(encoding="utf-8", errors="ignore").splitlines():
@@ -771,10 +773,15 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
                 e = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if e.get("event") in ("quota_wait", "error_round"):
+            ev_ = e.get("event")
+            if ev_ in ("quota_wait", "error_round"):
                 t = e.get("t")
                 if t is not None:
                     waits.append((float(t), float(e.get("wait_s", 0) or 0)))
+            elif ev_ == "call_start":
+                t = e.get("t")
+                if t is not None:
+                    calls.append(float(t))
 
     def _cause(ev: dict, gap: float, t0: float, t1: float) -> str:
         for wt, _ws in waits:
@@ -806,6 +813,9 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
         gap = float(t1) - float(t0)
         if gap <= 0:
             continue
+        # how many LLM calls were started inside this gap [t0, t1) — lets the
+        # idle table show whether a cause's time was spent making requests
+        llm = sum(1 for ct in calls if float(t0) <= ct < float(t1))
         rows.append({
             "tick": ev.get("tick"),
             "node": ev.get("task", ""),
@@ -813,16 +823,19 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
             "action": str(ev.get("action", ""))[:60],
             "dur": round(gap, 1),
             "cause": _cause(ev, gap, float(t0), float(t1)),
+            "llm": llm,
         })
 
     def _rollup(key: str) -> list:
         agg: dict = {}
         for r in rows:
             k = r[key] or "—"
-            a = agg.setdefault(k, {"total": 0.0, "count": 0})
+            a = agg.setdefault(k, {"total": 0.0, "count": 0, "llm": 0})
             a["total"] += r["dur"]
             a["count"] += 1
-        out = [{key: k, "total": round(v["total"], 1), "count": v["count"]}
+            a["llm"] += int(r.get("llm", 0) or 0)
+        out = [{key: k, "total": round(v["total"], 1),
+                "count": v["count"], "llm": v["llm"]}
                for k, v in agg.items()]
         return sorted(out, key=lambda x: x["total"], reverse=True)
 
@@ -1359,7 +1372,16 @@ const FROZEN_TABS=new Set(['compare','idle','workflow','oracle','commits','summa
 function focusInside(el){const a=document.activeElement;
  return a&&el&&el.contains(a)&&/^(SELECT|INPUT|TEXTAREA|OPTION)$/.test(a.tagName);}
 function withScroll(el,fn){if(!el){fn();return;}
- const top=el.scrollTop,left=el.scrollLeft;fn();el.scrollTop=top;el.scrollLeft=left;}
+ const top=el.scrollTop,left=el.scrollLeft;
+ // also preserve the scroll of any inner ".keepscroll" panes (HITL chat, flow
+ // timeline): match them by id before/after fn so an auto-refresh rebuild does
+ // not jump them back to the top while the user is reading mid-scroll.
+ const keep={};
+ el.querySelectorAll('.keepscroll[id]').forEach(k=>{keep[k.id]={t:k.scrollTop,l:k.scrollLeft};});
+ fn();
+ el.scrollTop=top;el.scrollLeft=left;
+ el.querySelectorAll('.keepscroll[id]').forEach(k=>{const s=keep[k.id];
+  if(s){k.scrollTop=s.t;k.scrollLeft=s.l;}});}
 const BADGE_ICON={spike:'🔬',clarify:'❓',contract:'📐',drift:'🌀',hitl:'✋',review_fails:'⚖️',error:'❌',pruned:'✂️',reworked:'🔧'};
 const BADGE_TIP={spike:'было исследование (spike) перед решением',clarify:'было уточнение',contract:'есть контракт',drift:'зафиксирован дрейф',hitl:'вмешивался человек',review_fails:'ревью не прошло',error:'НЕзакрытая ошибка — подробности на странице узла',pruned:'дубль отрезан dedup-гейтом',reworked:'был REJECT — доработан, повторное ревью PASS'};
 function badgeStr(eps){return (eps||[]).map(e=>BADGE_ICON[e]||'').join('');}
@@ -1545,10 +1567,10 @@ function idleHTML(){
   'причина атрибутирована по фазе/действию и окнам ожидания квоты.</p>';
  // roll-up by cause — where the time structurally goes
  h+='<h4>По причинам (куда уходит время)</h4><div class=cmpscroll style="max-height:none">'+
-  '<table class=cmp><thead><tr><th>причина</th><th>суммарно</th><th>операций</th><th>доля</th></tr></thead><tbody>';
+  '<table class=cmp><thead><tr><th>причина</th><th>суммарно</th><th>операций</th><th>запросов LLM</th><th>доля</th></tr></thead><tbody>';
  (IDLE.by_cause||[]).forEach(r=>{const sh=IDLE.total_s?Math.round(100*r.total/IDLE.total_s):0;
   h+=`<tr><td style="color:${causeColor(r.cause)}">${esc(r.cause)}</td>`+
-   `<td>${fmtDur(r.total)}</td><td>${r.count}</td>`+
+   `<td>${fmtDur(r.total)}</td><td>${r.count}</td><td>${r.llm||0}</td>`+
    `<td><span style="display:inline-block;height:8px;background:${causeColor(r.cause)};width:${sh}px;max-width:120px"></span> ${sh}%</td></tr>`;});
  h+='</tbody></table></div>';
  // token economics by role+model (#6) — real spend, not call counts
@@ -1594,7 +1616,10 @@ function hitlHTML(){
  if(HITL.empty)return '<p class=dim>нет активного прогона</p>';
  const asks=HITL.asks||[],ans=HITL.answered||[],reqs=HITL.requirements||[],sent=HITL.sent||[];
  const open=asks.filter(a=>a&&typeof a==='object'&&!a.answered).length;
- let h='<h3 class=muted>✋ HITL — двусторонний канал с прогоном '+
+ // the HITL panel is a flex column filling the detail pane: banner + answer box
+ // + inject form stay fixed at the top, only the chat history (flex:1) scrolls.
+ let h='<div class=hitlwrap>';
+ h+='<h3 class=muted>✋ HITL — двусторонний канал с прогоном '+
   '<span class="tab" id=hitlreload style="margin-left:8px">↻ обновить</span></h3>';
  h+='<div class='+(HITL.pending?'errbox':'fixbox')+'>'+
   (HITL.pending?'⏳ <b>ответ записан, воркер ещё не забрал</b> (answer.md ждёт потребления)'
@@ -1616,7 +1641,12 @@ function hitlHTML(){
  // the right; meta header (time/sender/node) atop each bubble; unanswered
  // questions flagged red + ⏳.
  const chatCss=
-   '.chat{max-height:60vh;overflow-y:auto;padding:8px;margin-top:4px;'+
+   // the HITL panel is a flex column that fills the detail height; only the
+   // chat history scrolls (flex:1; min-height:0) — the banner, answer box and
+   // inject form above it stay fixed regardless of viewport size.
+   '.hitlwrap{display:flex;flex-direction:column;height:calc(100vh - 130px);min-height:320px}'+
+   '.hitlwrap>h3,.hitlwrap>h4,.hitlwrap>div:not(.chat),.hitlwrap>input,.hitlwrap>textarea{flex:0 0 auto}'+
+   '.chat{flex:1 1 auto;min-height:0;overflow-y:auto;padding:8px;margin-top:4px;'+
    'background:#0e1117;border:1px solid #222;border-radius:8px;display:flex;flex-direction:column}'+
    '.bub{max-width:78%;margin:4px 0;padding:6px 9px;border-radius:12px;'+
    'white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.35}'+
@@ -1662,8 +1692,9 @@ function hitlHTML(){
  posts.sort((x,y)=>(x.t||0)-(y.t||0));
  const chat=posts.map(p=>p.html).join('');
  h+='<h4>История переписки ('+(asks.length+reqs.length+sent.length)+')</h4>';
- h+= chat? '<div class=chat id=hitlchat>'+chat+'</div>'
+ h+= chat? '<div class="chat keepscroll" id=hitlchat>'+chat+'</div>'
    : '<p class=dim>пока сообщений нет</p>';
+ h+='</div>';  // .hitlwrap
  return h;
 }
 function runCtl(path,payload){
@@ -1687,13 +1718,71 @@ function hitlPost(path,payload,msgEl){
   }).catch(e=>{const el=$(msgEl);if(el)el.textContent='✗ сеть';});
 }
 
+// flow tab (🔀): a client-side SVG with a vertical TIME axis. Events from
+// STATE.timeline are placed by their epoch `t`; columns ("lanes") group by
+// phase. Consecutive events of the SAME node are linked top-to-bottom so a
+// node's progress reads down the page. The drawing height scales with the run
+// duration so long runs scroll; the SVG lives in a .keepscroll container so an
+// auto-refresh rebuild does not reset the scroll position.
+function flowTimeHTML(){
+ const all=(STATE&&STATE.timeline)||[];
+ const ev=all.filter(e=>e&&typeof e.t==='number'&&isFinite(e.t))
+   .slice().sort((a,b)=>a.t-b.t);
+ if(!ev.length)return '<p class=dim>событий со временем ещё нет…</p>';
+ const t0=ev[0].t, tN=Math.max(ev[ev.length-1].t, Date.now()/1000);
+ const span=Math.max(1,tN-t0);
+ // distinct phases in first-seen order → stable lanes; unknown → "other"
+ const lanes=[];
+ ev.forEach(e=>{const p=e.phase||'other';if(lanes.indexOf(p)<0)lanes.push(p);});
+ const laneIdx=p=>{const i=lanes.indexOf(p||'other');return i<0?lanes.length:i;};
+ const LANEW=140, PADL=78, PADT=10, PADB=20;
+ const drawH=Math.max(480,Math.min(6000,Math.round(span*8)));
+ const W=PADL+lanes.length*LANEW+20;
+ const H=PADT+drawH+PADB;
+ const laneX=p=>PADL+laneIdx(p)*LANEW+LANEW/2;
+ const y=t=>PADT+((t-t0)/span)*drawH;
+ const hms=t=>new Date(t*1000).toTimeString().slice(0,8);
+ const vColor=v=>v==='PASS'?'#3fb950':(v==='FAIL'||v==='REJECT'?'#f85149':'#8b949e');
+ let s=`<svg width="${W}" height="${H}" style="min-width:${W}px;font-size:10px">`;
+ // left time axis line + ~6-10 tick labels
+ s+=`<line x1="${PADL-8}" y1="${PADT}" x2="${PADL-8}" y2="${PADT+drawH}" stroke="#30363d"/>`;
+ const TICKS=8;
+ for(let i=0;i<=TICKS;i++){const tt=t0+span*i/TICKS, yy=y(tt);
+  s+=`<line x1="${PADL-12}" y1="${yy}" x2="${PADL-8}" y2="${yy}" stroke="#30363d"/>`+
+     `<text x="${PADL-14}" y="${yy+3}" text-anchor="end" fill="#6e7681">${hms(tt)}</text>`+
+     `<line x1="${PADL-8}" y1="${yy}" x2="${W}" y2="${yy}" stroke="#161b22"/>`;}
+ // node polylines: link consecutive same-node events top→bottom
+ const byNode={};
+ ev.forEach(e=>{const n=e.node||'';if(!n)return;(byNode[n]=byNode[n]||[]).push(e);});
+ Object.keys(byNode).forEach(n=>{const pts=byNode[n];if(pts.length<2)return;
+  const d=pts.map(e=>`${laneX(e.phase).toFixed(1)},${y(e.t).toFixed(1)}`).join(' ');
+  s+=`<polyline points="${d}" fill="none" stroke="#30363d" stroke-width="1" opacity="0.5"/>`;});
+ // event dots, colored by verdict, with an HH:MM:SS · phase · node · text tooltip
+ ev.forEach(e=>{const cx=laneX(e.phase),cy=y(e.t);
+  const tip=hms(e.t)+' · '+(e.phase||'')+' · '+(e.node||'')+' · '+(e.text||'');
+  s+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="4" fill="${vColor(e.verdict)}" `+
+     `stroke="#0d1117" stroke-width="1"><title>${esc(tip)}</title></circle>`;});
+ s+='</svg>';
+ // fixed lane-name header row ABOVE the scroll area so it stays visible
+ let head='<div style="display:flex;padding-left:'+PADL+'px;border-bottom:1px solid #21262d">';
+ lanes.forEach(p=>{head+=`<div style="width:${LANEW}px;text-align:center;color:#79c0ff;`+
+   `font-size:11px;padding:2px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p)}</div>`;});
+ head+='</div>';
+ return '<p class=muted>ось — время (сверху раньше, снизу позже); колонки — фазы; '+
+   'точка = событие (цвет = вердикт), линия связывает события одного узла. '+
+   'наведите на точку — время/фаза/узел/текст.</p>'+head+
+   '<div id=flowscroll class=keepscroll style="overflow:auto;max-height:70vh;'+
+   'border:1px solid #21262d;border-radius:6px">'+s+'</div>';
+}
+
 function renderGlobal(){
  const R=STATE.reports;
  const tabs=[['inputs','▶ Старт (цель+вход)'],['graph','🕸 Граф спеков'],['flow','🔀 Поток выполнения'],['timeline','⏱ Таймлайн'],['report','Отчёт+аудит'],['agents','🤖 Агенты сейчас'],['hitl','✋ HITL'],['idle','⏱ Простои'],['compare','📊 Сравнение прогонов'],['workflow','Воркфлоу'],['oracle','Оракул'],['commits','Версии/коммиты'],['summary','Итог']];
- let h='<div class=tabs>'+tabs.map(([k,t])=>(k==='timeline'||k==='graph'||k==='agents'||k==='hitl'||k==='idle'||k==='compare'||R[k])?`<span class="tab${GTAB===k?' on':''}" data-g="${k}">${t}</span>`:'').join('')+'</div>';
+ let h='<div class=tabs>'+tabs.map(([k,t])=>(k==='timeline'||k==='graph'||k==='agents'||k==='hitl'||k==='flow'||k==='idle'||k==='compare'||R[k])?`<span class="tab${GTAB===k?' on':''}" data-g="${k}">${t}</span>`:'').join('')+'</div>';
  let body;
  if(GTAB==='agents')body='<h3 class=muted>Что делают агенты сейчас <span class=dim>(сверху — последнее)</span></h3><ol class="feed full" reversed>'+(STATE.feed||[]).slice().reverse().map(f=>`<li>${esc(f)}</li>`).join('')+'</ol>';
  else if(GTAB==='hitl')body=hitlHTML();
+ else if(GTAB==='flow')body=flowTimeHTML();
  else if(GTAB==='idle')body=idleHTML();
  else if(GTAB==='compare')body=compareHTML();
  else if(GTAB==='timeline')body=timelineHTML();
