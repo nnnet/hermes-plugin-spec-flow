@@ -146,12 +146,16 @@ class Dispatcher:
         if self.answer.exists() or not self.questions.is_file():
             return
         text = self.questions.read_text(encoding="utf-8", errors="replace")
-        asked = text.count("asks:")
-        answered = text.count("**answer:**")
-        if asked <= answered or asked <= self._answered:
+        # a worker question is a markdown header "## [HH:MM:SS] role @ node"
+        # (hitl.py ask() writes that to questions.md — NOT the literal "asks:",
+        # which only appears on the interactive TTY prompt). Counting "asks:"
+        # meant questions were never detected, so the worker burned the full
+        # ASK_TIMEOUT (~3 min) waiting for an answer that never came.
+        asked = text.count("## ")
+        if asked <= self._answered:
             return
         # the last question block is the pending one
-        last = text.rsplit("asks:", 1)[-1]
+        last = text.rsplit("## ", 1)[-1]
         reply = self.answer_default
         for item in self.answer_faq:
             m = str(item.get("match") or "")
