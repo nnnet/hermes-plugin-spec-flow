@@ -20,14 +20,14 @@ Test: tests/test_memory_provider.py.
 from __future__ import annotations
 
 import json
-import os
 import re
 import urllib.error
 import urllib.request
 from typing import Any, Optional
 
-DEFAULT_URL = os.environ.get("SPEC_FLOW_HINDSIGHT_URL",
-                             "http://127.0.0.1:8888")
+from . import config
+
+DEFAULT_URL = config.env("HINDSIGHT_URL")
 RECALL_LIMIT = 3            # entries per recall block
 RECALL_BUDGET_CHARS = 1200  # hard cap on what reaches a prompt
 

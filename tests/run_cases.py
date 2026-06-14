@@ -249,7 +249,7 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
         # live tree building: same blueprint/revision drop as llm mode
         exec_case = {k: v for k, v in case.items()
                      if k not in ("blueprint", "revisions", "revision", "hitl")}
-        max_calls = int(os.environ.get("SPEC_FLOW_MAX_DECOMPOSE_CALLS", "80"))
+        max_calls = _cfg.env("MAX_DECOMPOSE_CALLS", int)
     elif decomposer == "llm":
         from harness import llm_decomposer
         dec_fn = llm_decomposer.decompose
@@ -261,7 +261,7 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
         exec_case = {k: v for k, v in case.items() if k not in ("blueprint", "revisions", "revision")}
         # live budget: env-overridable so a "flexible atomicity" run can widen
         # the bounds (the engine still dies loudly on non-convergence)
-        max_calls = int(os.environ.get("SPEC_FLOW_MAX_DECOMPOSE_CALLS", "80"))
+        max_calls = _cfg.env("MAX_DECOMPOSE_CALLS", int)
     else:
         from harness import blueprint_decomposer
         agents["decomposer"] = blueprint_decomposer.make(case["blueprint"])
@@ -489,9 +489,7 @@ def main() -> int:
                          "checkpoint (terminal prompt; timeout auto-approves "
                          "with an honest note); 'auto' keeps the default")
     ap.add_argument("--model",
-                    default=os.environ.get(
-                        "SPEC_FLOW_LLM_MODEL",
-                        "openrouter/qwen/qwen3-coder:free"),
+                    default=_cfg.env("LLM_MODEL"),
                     help="LLM model for live agents — the OpenRouter free"
                          " pool is the only allowed primary (default"
                          " qwen3-coder:free via Bifrost); haiku is the"
@@ -521,8 +519,7 @@ def main() -> int:
         _stop_run(Path(args.stop))
         return
     if args.gateway == "bifrost":
-        os.environ["ANTHROPIC_BASE_URL"] = os.environ.get(
-            "SPEC_FLOW_BIFROST_URL", "http://127.0.0.1:8080/anthropic")
+        os.environ["ANTHROPIC_BASE_URL"] = _cfg.env("BIFROST_URL")
     elif args.gateway == "direct":
         os.environ.pop("ANTHROPIC_BASE_URL", None)
     os.environ["SPEC_FLOW_LLM_MODEL"] = args.model
@@ -575,7 +572,7 @@ def main() -> int:
             "implementer": args.implementer, "model": args.model, "stamp": stamp,
             "node_engine": case.get("node_engine", "inline"),
             "gateway": args.gateway,
-            "backend": os.environ.get("SPEC_FLOW_LLM_BACKEND", "claude"),
+            "backend": _cfg.env("LLM_BACKEND"),
             "workspace": "workspace", "run_dir": str(case_dir),
             # who answered for whom — verifies the author-vs-judge split
             "worker_models": _worker_models(),

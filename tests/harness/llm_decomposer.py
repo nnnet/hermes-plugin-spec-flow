@@ -17,7 +17,7 @@ import os
 import re
 import subprocess
 
-from . import llm_backend, llm_log
+from . import config, llm_backend, llm_log
 
 PROMPT = """You are the spec-decomposer of a Spec-Driven Development run.
 
@@ -86,14 +86,14 @@ Return metrics WITHIN the leaf thresholds and NO children."""
 
 # cheap & fast model for tree decomposition test runs; override via env
 # per-role model: SPEC_FLOW_DECOMPOSER_MODEL overrides the shared SPEC_FLOW_LLM_MODEL
-MODEL = os.environ.get("SPEC_FLOW_DECOMPOSER_MODEL") or os.environ.get("SPEC_FLOW_LLM_MODEL", "haiku")
+MODEL = config.env("DECOMPOSER_MODEL", default="") or config.env("LLM_MODEL")
 # depth at which the decomposer is forced to leaf — bound the tree (and thus the
 # call count / wall time) for tractable live calibration. Default 3; the p1
 # calibration showed fanout ~4 to depth 3 = ~85 calls > the 80 budget, so a
 # tighter cap (e.g. 2) makes a run ~13-21 nodes. Override: SPEC_FLOW_LLM_LEAF_DEPTH.
-LEAF_DEPTH = int(os.environ.get("SPEC_FLOW_LLM_LEAF_DEPTH", "3"))
+LEAF_DEPTH = config.env("LLM_LEAF_DEPTH", int)
 # soft cap on children per node (the prompt asks the model to respect it)
-MAX_CHILDREN = int(os.environ.get("SPEC_FLOW_LLM_MAX_CHILDREN", "4"))
+MAX_CHILDREN = config.env("LLM_MAX_CHILDREN", int)
 
 
 def _ask(prompt: str) -> str:
@@ -129,7 +129,7 @@ def decompose(ctx: dict) -> dict:
     # a weaker free model often returns malformed/partial JSON on the first try;
     # re-prompt with the exact failure instead of crashing the whole run on one
     # bad node. Only a persistent failure is fatal. Mirrors llm_implementer.
-    attempts = int(os.environ.get("SPEC_FLOW_DECOMPOSE_ATTEMPTS", "3"))
+    attempts = config.env("DECOMPOSE_ATTEMPTS", int)
     out, last = None, None
     for i in range(attempts):
         p = prompt if i == 0 else (

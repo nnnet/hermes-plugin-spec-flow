@@ -24,11 +24,11 @@ import sys
 from pathlib import Path
 from typing import Callable, Optional
 
-from . import llm_backend, llm_log, memory
+from . import config, llm_backend, llm_log, memory
 
-PYTEST_TIMEOUT = int(os.environ.get("SPEC_FLOW_PYTEST_TIMEOUT", "180"))
-MAX_REPAIR = int(os.environ.get("SPEC_FLOW_INTEGRATE_MAX_REPAIR", "2"))
-INLINE_LIMIT = int(os.environ.get("SPEC_FLOW_INLINE_FILE_LIMIT", "8000"))
+PYTEST_TIMEOUT = config.env("PYTEST_TIMEOUT", int)
+MAX_REPAIR = config.env("INTEGRATE_MAX_REPAIR", int)
+INLINE_LIMIT = config.env("INLINE_FILE_LIMIT", int)
 SMOKE_DIR = "tests/smoke"
 
 _FILE_RE = re.compile(r"((?:tests|src)/[\w/]+\.py)")
@@ -212,7 +212,7 @@ def _badness(passed: bool, output: str) -> int:
     return score
 
 
-BISECT_MAX_FILES = int(os.environ.get("SPEC_FLOW_BISECT_MAX_FILES", "16"))
+BISECT_MAX_FILES = config.env("BISECT_MAX_FILES", int)
 
 
 def _run_one(root: str, rel: str) -> bool:
@@ -249,7 +249,7 @@ def _run_without(root: str, rels: list, drop: str, include_smoke: bool) -> bool:
     return proc.returncode in (0, 5)
 
 
-FLAKY_RERUNS = int(os.environ.get("SPEC_FLOW_FLAKY_RERUNS", "0"))
+FLAKY_RERUNS = config.env("FLAKY_RERUNS", int)
 
 
 def detect_flaky(root: str, rel: str, runs: int) -> bool:
@@ -573,7 +573,7 @@ def make_verifier(model: Optional[str] = None,
             # repair worker cannot see from the suite output. Bisect once and
             # name the poisoner so the repair gets a PRECISE target instead of
             # blindly rewriting innocent files.
-            if str(os.environ.get("SPEC_FLOW_BISECT", "1")) != "0":
+            if config.env("BISECT") != "0":
                 try:
                     diag = bisect_poisoners(root, include_smoke)
                 except Exception:  # noqa: BLE001 — never breaks the verdict

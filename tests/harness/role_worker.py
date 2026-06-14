@@ -33,17 +33,17 @@ from typing import Any, Callable, Optional
 
 import yaml
 
-from . import claims, claude_cli, llm_backend, llm_log, memory
+from . import claims, claude_cli, config, llm_backend, llm_log, memory
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 SKILLS_DIR = PLUGIN_ROOT / "skills"
 PROFILES_DIR = PLUGIN_ROOT / "profiles"
 
-TIMEOUT = int(os.environ.get("SPEC_FLOW_WORKER_TIMEOUT", "600"))
-RETRIES = int(os.environ.get("SPEC_FLOW_WORKER_RETRIES", "2"))
+TIMEOUT = config.env("WORKER_TIMEOUT", int)
+RETRIES = config.env("WORKER_RETRIES", int)
 # how much of a referenced file is inlined into a chat-only prompt
-INLINE_FILE_LIMIT = int(os.environ.get("SPEC_FLOW_INLINE_FILE_LIMIT", "8000"))
-PYTEST_TIMEOUT = int(os.environ.get("SPEC_FLOW_PYTEST_TIMEOUT", "120"))
+INLINE_FILE_LIMIT = config.env("INLINE_FILE_LIMIT", int)
+PYTEST_TIMEOUT = config.env("PYTEST_TIMEOUT", int)
 
 # Hermes toolset name → Claude Code tool names. ``kanban`` and ``memory``
 # have no standalone counterpart (they ARE the Hermes adapter) — empty.
@@ -360,8 +360,8 @@ sections:
   ## Acceptance criteria — measurable checks tied to the REQ ids
 Keep it under 60 lines. Escape newlines as \n inside the JSON string."""
 
-LEAF_DEPTH = int(os.environ.get("SPEC_FLOW_LLM_LEAF_DEPTH", "3"))
-MAX_CHILDREN = int(os.environ.get("SPEC_FLOW_LLM_MAX_CHILDREN", "4"))
+LEAF_DEPTH = config.env("LLM_LEAF_DEPTH", int)
+MAX_CHILDREN = config.env("LLM_MAX_CHILDREN", int)
 
 
 def make_decomposer(workspace_dir: Optional[str] = None,
@@ -525,7 +525,7 @@ def make_decomposer(workspace_dir: Optional[str] = None,
 
 def _ensemble_size() -> int:
     try:
-        n = int(os.environ.get("SPEC_FLOW_CREATOR_ENSEMBLE", "1"))
+        n = config.env("CREATOR_ENSEMBLE", int)
     except ValueError:
         n = 1
     return max(1, min(n, 4))

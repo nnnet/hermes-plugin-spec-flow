@@ -41,10 +41,11 @@ from pathlib import Path
 from typing import Optional
 
 from . import auto_responder
+from . import config
 
 
-TIMEOUT = float(os.environ.get("SPEC_FLOW_HITL_TIMEOUT", "120"))
-ASK_TIMEOUT = float(os.environ.get("SPEC_FLOW_HITL_ASK_TIMEOUT", "300"))
+TIMEOUT = config.env("HITL_TIMEOUT", float)
+ASK_TIMEOUT = config.env("HITL_ASK_TIMEOUT", float)
 _POLL_SEC = 3.0
 
 

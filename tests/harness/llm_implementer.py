@@ -19,7 +19,7 @@ import os
 import re
 import subprocess
 
-from . import llm_backend, llm_log
+from . import config, llm_backend, llm_log
 
 PROMPT = """You are the implementer of a Spec-Driven Development run.
 
@@ -57,7 +57,7 @@ _STUB_MARKERS = ("NotImplementedError", "# TODO", "#TODO", "# FIXME", "#FIXME",
 
 # cheap & fast model for the test runs; override via env (shared with decomposer)
 # per-role model: SPEC_FLOW_IMPLEMENTER_MODEL overrides the shared SPEC_FLOW_LLM_MODEL
-MODEL = os.environ.get("SPEC_FLOW_IMPLEMENTER_MODEL") or os.environ.get("SPEC_FLOW_LLM_MODEL", "haiku")
+MODEL = config.env("IMPLEMENTER_MODEL", default="") or config.env("LLM_MODEL")
 
 
 def _snake(s: str) -> str:
@@ -123,7 +123,7 @@ def make_implementer(ask=_ask):
         # a weaker model often returns a parse-failure or a stub on the first
         # try; re-prompt with the exact rejection reason instead of crashing the
         # whole run on one bad leaf. Only a persistent failure is fatal.
-        attempts = int(os.environ.get("SPEC_FLOW_IMPL_ATTEMPTS", "3"))
+        attempts = config.env("IMPL_ATTEMPTS", int)
         last = None
         for i in range(attempts):
             p = prompt if i == 0 else (

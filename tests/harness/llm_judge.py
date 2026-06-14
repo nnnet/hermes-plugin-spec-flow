@@ -13,7 +13,7 @@ import json
 import os
 import re
 
-from . import llm_log
+from . import config, llm_log
 
 PROMPT = """You are an independent reviewer in a Spec-Driven Development run.
 
@@ -34,7 +34,7 @@ Return ONLY a JSON object, no prose, no fence:
 """
 
 # per-role model: SPEC_FLOW_JUDGE_MODEL overrides the shared SPEC_FLOW_LLM_MODEL
-MODEL = os.environ.get("SPEC_FLOW_JUDGE_MODEL") or os.environ.get("SPEC_FLOW_LLM_MODEL", "haiku")
+MODEL = config.env("JUDGE_MODEL", default="") or config.env("LLM_MODEL")
 
 
 def _ask(prompt: str) -> str:
