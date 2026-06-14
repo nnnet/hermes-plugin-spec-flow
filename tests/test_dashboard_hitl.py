@@ -28,9 +28,20 @@ def test_hitl_state_parses_asks_and_answers(tmp_path):
         "## [12:05] implementer @ pay asks: where is the spec?\n",
         encoding="utf-8")
     st = dash._hitl_state(d)
-    assert any("cart" in a for a in st["asks"])
-    assert any("pay" in a for a in st["asks"])
+    # asks are structured blocks {header, body, answer, answered} so the
+    # dashboard can show each question's full text, not just the header
+    def _txt(a):
+        return a if isinstance(a, str) else " ".join(
+            str(a.get(k, "")) for k in ("header", "body", "answer"))
+    assert any("cart" in _txt(a) for a in st["asks"])
+    assert any("pay" in _txt(a) for a in st["asks"])
     assert any("auto/routing" in a for a in st["answered"])
+    # the cart ask got an auto/routing boilerplate reply — not a real answer
+    cart = next(a for a in st["asks"] if "cart" in _txt(a))
+    assert cart["answered"] is False
+    # the pay ask has no reply at all
+    pay = next(a for a in st["asks"] if "pay" in _txt(a))
+    assert pay["answer"] == "" and pay["answered"] is False
     assert st["pending"] is False
 
 
