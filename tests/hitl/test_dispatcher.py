@@ -13,8 +13,8 @@ import hitl_dispatcher  # tests/lib is on sys.path (conftest)
 
 _REQ = {"requirements": [
             {"name": "web_ui",
-             "from": "tests/scenarios/injections/web_ui",
-             "when": {"integrate_passes": 2}}],
+             "when": {"integrate_passes": 2},
+             "statement": "MINIMAL WEB INTERFACE — serve GET /ui as an HTML page."}],
         "answers": {"default": "do the simplest correct thing",
                     "faq": [{"match": "port", "reply": "any free localhost port"}]}}
 
@@ -51,9 +51,12 @@ def test_requirement_fires_only_after_trigger(run_dir):
         # one PASS is below the threshold — must NOT materialise
         assert not _wait(lambda: (req / "REQUIREMENT.md").exists(), timeout=2.0)
         _append(trace, gate="integrate_verify", verdict="PASS")
-        # second PASS crosses integrate_passes:2 — requirement appears verbatim
+        # second PASS crosses integrate_passes:2 — the requirement materialises
+        # from the INLINE prose: statement → REQUIREMENT.md, and NOTHING else
         assert _wait(lambda: (req / "REQUIREMENT.md").exists())
-        assert (req / "test_web_ui.py").exists()
+        assert "MINIMAL WEB INTERFACE" in (req / "REQUIREMENT.md").read_text()
+        # the human hands no test — building+proving the feature is the system's job
+        assert not (req / "test_web_ui.py").exists()
     finally:
         d.stop()
 

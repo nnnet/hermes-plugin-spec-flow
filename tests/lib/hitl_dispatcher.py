@@ -9,17 +9,20 @@ watches ``trace.jsonl`` and, at the right moment, drops the same files by hand
 that, driven by the case's ``injections:`` block, on a daemon thread inside the
 run process — it writes the very files a human would.
 
-Declared in the case YAML::
+Declared INLINE in the case YAML — the whole injection lives in the scenario,
+no sidecar files. A human only states a requirement IN WORDS and answers
+clarifying questions; the system builds AND verifies the feature itself::
 
     injections:
       requirements:
         - name: web_ui
-          from: tests/scenarios/injections/web_ui   # repo-relative dir with
-          when: {integrate_passes: 2}               # REQUIREMENT.md + test_*.py
-      answers:
-        default: "Proceed with the simplest correct approach; do not block."
-        faq:
-          - {match: "port", reply: "Bind 0.0.0.0:8092."}
+          when: {event: "minimal impl"}
+          statement: |                  # → hitl/requirements/web_ui/REQUIREMENT.md
+            MINIMAL WEB INTERFACE ...    # the prose a person types; no test handed
+      answers:                          # possible human replies, given ONLY when a
+        default: "Do the simplest correct thing; don't block."   # worker asks, and
+        faq:                            # only the one matching the actual question
+          - {match: "port", reply: "Any free localhost port is fine."}
 
 Triggers (``when:``) — first match fires the requirement once:
   * ``integrate_passes: N`` — ≥N ``integrate_verify`` gates reached PASS
@@ -32,14 +35,11 @@ into ``<run>/hitl/``, identical to manual operation.
 from __future__ import annotations
 
 import json
-import shutil
 import threading
 import time
 from pathlib import Path
 from typing import Optional
 
-# repo root = .../spec-flow  (this file is tests/lib/hitl_dispatcher.py)
-_REPO_ROOT = Path(__file__).resolve().parents[2]
 _POLL_SEC = 1.0
 
 
@@ -126,18 +126,18 @@ class Dispatcher:
 
     # -- actions ----------------------------------------------------------
     def _fire_requirement(self, req: dict) -> None:
+        """Materialise the late requirement from its inline prose: the
+        ``statement:`` (what a human types in the HITL box) becomes
+        REQUIREMENT.md, read by the engine and shown to the decomposer. The
+        human hands NO test — building the feature AND proving it works is the
+        system's own job (the worker writes the leaf and its test)."""
         name = str(req.get("name") or "")
-        src_rel = req.get("from")
-        if not name or not src_rel:
-            return
-        src = (_REPO_ROOT / src_rel).resolve()
-        if not src.is_dir():
+        statement = req.get("statement")
+        if not name or not statement:
             return
         dst = self.req_root / name
         dst.mkdir(parents=True, exist_ok=True)
-        for f in sorted(src.iterdir()):
-            if f.is_file():
-                shutil.copy2(f, dst / f.name)
+        (dst / "REQUIREMENT.md").write_text(str(statement), encoding="utf-8")
         self._fired.add(name)
 
     def _answer_pending(self) -> None:
