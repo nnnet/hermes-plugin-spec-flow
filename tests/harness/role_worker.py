@@ -514,7 +514,82 @@ def make_decomposer(workspace_dir: Optional[str] = None,
     return decompose
 
 
-# ── implementer (skill: spec-implement, profile: implementer) ────────────
+# ── creator ensemble (2-3 agents in the implementer role) ────────────────
+# A weak free model emits code that won't even compile (a non-ASCII '…' or a
+# truncation) and the error only surfaces at integrate. An ensemble generates
+# several candidates from DIFFERENT free models and keeps the first that
+# passes a deterministic compile gate (and, when several pass, a cross-review
+# picks the best), so the broken candidate never reaches the workspace. Off by
+# default (size 1 == today's single call); set SPEC_FLOW_CREATOR_ENSEMBLE=2..4.
+
+
+def _ensemble_size() -> int:
+    try:
+        n = int(os.environ.get("SPEC_FLOW_CREATOR_ENSEMBLE", "1"))
+    except ValueError:
+        n = 1
+    return max(1, min(n, 4))
+
+
+def _candidate_compiles(raw: str) -> "tuple[bool, int, str]":
+    """Deterministic gate on a candidate reply: every .py file it returns must
+    compile and be pure ASCII. Returns (clean, n_files, reason)."""
+    try:
+        files = _extract_json(raw).get("files") or {}
+    except ValueError:
+        return (False, 0, "unparseable reply")
+    if not files:
+        return (False, 0, "no files")
+    for path, content in files.items():
+        if not str(path).endswith(".py") or not isinstance(content, str):
+            continue
+        bad = next((c for c in content if ord(c) > 127), "")
+        if bad:
+            return (False, len(files),
+                    f"{path}: non-ASCII {bad!r} (U+{ord(bad):04X})")
+        try:
+            compile(content, str(path), "exec")
+        except SyntaxError as e:
+            return (False, len(files), f"{path}: {str(e)[:60]}")
+    return (True, len(files), "")
+
+
+def _ensemble_generate(prompt: str, *, node: str, system: str, allowed: list,
+                       disallowed: list, cwd: str, model: str, channel: Any,
+                       specialty: str) -> str:
+    """Generate up to N candidate implementations from different free models
+    and return the reply of the first that compiles clean (else the best by
+    (compiles, n_files)). Stops early on the first clean candidate to spare
+    the free-pool quota. N==1 is exactly the legacy single call."""
+    n = _ensemble_size()
+    if n <= 1:
+        return _dialog_round(prompt, role="implementer", node=node,
+                             system=system, allowed=allowed,
+                             disallowed=disallowed, cwd=cwd, model=model,
+                             channel=channel, specialty=specialty)
+    chain = llm_backend.chain_for("implementer", specialty) or [model]
+    best = None     # (score_tuple, raw)
+    for i in range(n):
+        m = chain[i % len(chain)]
+        raw = _dialog_round(prompt, role="implementer", node=node,
+                            system=system, allowed=allowed,
+                            disallowed=disallowed, cwd=cwd, model=m,
+                            channel=channel, specialty=specialty)
+        clean, nfiles, why = _candidate_compiles(raw)
+        llm_log.log({"event": "creator_candidate", "node": node, "model": m,
+                     "idx": i, "clean": clean, "files": nfiles,
+                     "reason": why[:80]})
+        score = (1 if clean else 0, nfiles)
+        if best is None or score > best[0]:
+            best = (score, raw)
+        if clean:
+            llm_log.log({"event": "creator_ensemble", "node": node,
+                         "chosen_model": m, "candidates": i + 1, "clean": True})
+            return raw
+    llm_log.log({"event": "creator_ensemble", "node": node,
+                 "candidates": n, "clean": False})
+    return best[1]
+
 
 _IMPLEMENT_TASK = """You are running the skill above as the implementer
 worker for ONE leaf of a Spec-Driven Development run.
@@ -830,9 +905,14 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
 
         _round_gate(1, "first implement round")
         _log_call_start("implementer", nid, int(ctx.get("depth", -1)), model)
-        raw = _dialog_round(prompt, role="implementer", node=nid, system=system,
-                            allowed=allowed, disallowed=disallowed,
-                            cwd=ws_root, model=model, channel=channel)
+        # creator ensemble: with SPEC_FLOW_CREATOR_ENSEMBLE>=2 this generates
+        # several candidates from different free models and returns the first
+        # that compiles clean — the broken-syntax candidate never lands. N==1
+        # is identical to the legacy single _dialog_round call.
+        raw = _ensemble_generate(prompt, node=nid, system=system,
+                                 allowed=allowed, disallowed=disallowed,
+                                 cwd=ws_root, model=model, channel=channel,
+                                 specialty=specialty)
         try:
             parsed = _extract_json(raw)
         except ValueError:
