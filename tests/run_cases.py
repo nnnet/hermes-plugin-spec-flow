@@ -271,27 +271,20 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
     exec_case.pop("memory", None)
     review_policy = case.get("review") or None
     exec_case.pop("review", None)
-    # seed files: the case may ship a deterministic skeleton (app entry,
-    # router/db plumbing, the end-to-end smoke suite) the workers build INTO.
-    # Passed to the ENGINE — Workspace.open wipes the dir on a fresh run, so
-    # seeding it beforehand is futile by design.
-    seeds = case.get("seed_files") or None
+    # Case-level scaffolding is intentionally NOT consumed: a case must not
+    # hand the workers a ready-made skeleton (seed_files) or pre-solve its
+    # known failure classes via extra rules (constitution_platform). That
+    # fakes the result — the test must measure real, unaided capability. The
+    # keys are stripped so a stale one in a YAML has zero effect; the engine's
+    # own seed_files API stays for legitimate platform use (see test_seed_files).
     exec_case.pop("seed_files", None)
-    # platform conventions live in their own block (keeps the case's domain
-    # constitution readable) and merge into the constitution for execution
-    plat = exec_case.pop("constitution_platform", None)
-    if plat:
-        exec_case["constitution"] = list(exec_case.get("constitution") or []) \
-            + list(plat)
-    if seeds:
-        # the seeded skeleton is immutable for workers and repair rounds
-        os.environ["SPEC_FLOW_PROTECTED_FILES"] = json.dumps(sorted(seeds))
+    exec_case.pop("constitution_platform", None)
     try:
         res = eng.run_project(exec_case, workspace=str(case_dir / "workspace"), depth=depth,
                               tools=tools, agents=agents or None,
                               contracts_dir=str(eng.CONTRACTS), sink=sink,
                               max_decompose_calls=max_calls, node_engine=node_engine,
-                              review_policy=review_policy, seed_files=seeds, resume=resume,
+                              review_policy=review_policy, resume=resume,
                               standing_requirements=getattr(
                                   channel, "standing_requirements", None),
                               human_ask=getattr(channel, "ask", None))
