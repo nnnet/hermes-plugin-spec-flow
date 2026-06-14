@@ -116,7 +116,12 @@ via the ⏱ idle tab + compare_runs.
 ### What is NOT done / changed
 - **#11 multiple smoke scenarios** — still open. Partially superseded: a new
   minimal measurement case `p6_micro_notes` now exists (see below).
-- **#12 pluggable beads/redis board** — still open, still deferred (single host).
+- **#12 persistent claim/board store (beads/redis) for STOP + RESUME** — still
+  open. Real driver is NOT multi-host but durability: a run must be stoppable
+  and later resumable with its claim/board state intact (which leaf is done,
+  owned, in-rework). Today that state is in-process and lost on stop; #35
+  `--resume` replays from the workspace but the claim ledger is volatile.
+  *Goal:* persist the board so STOP → RESUME continues exactly where it paused.
 - **CV1 (portable DB in the seed) + CV3 (constitution one-owner rule) — REVERTED.**
   The user ruled seed skeletons and pre-solving constitution rules to be test
   **scaffolding** (they hand the weak model the answer to its own failure
@@ -148,11 +153,14 @@ errors_per_node, and review-op count.
 ### Roadmap by goal (ranked: quality → speed → cost)
 
 **A. Speed — attack review (47%) + lifecycle (19%)**
-- **A1 Review tiering.** Atomic/leaf specs get ONE light pass (lint +
-  contract check); only branch / high-open-decision nodes get the full
-  spec-review. Most of the 49 review ops are trivial leaves. *How:* a
-  complexity gate in the reviewer dispatch (open_decisions, est_loc, child
-  count). Target: review ops −2–3×.
+- **A1 Review tiering.** Cheap nodes get ONE light pass (lint + contract
+  check); only expensive nodes get the full spec-review. Most of the 49 review
+  ops are trivial. *Simple (light pass):* atomic leaf, `open_decisions == 0`,
+  small `estimated_loc` (≈ < 60), no children, at/over leaf_depth. *Complex
+  (full review):* a branch (has children), OR any open decisions, OR large LOC,
+  OR shallow depth (architectural node whose mistakes cascade). *How:* a
+  complexity gate on the node's existing metrics in the reviewer dispatch.
+  Target: review ops −2–3×.
 - **A2 Parallel sibling review.** Review independent sibling specs
   concurrently, mirroring #28's leaf pool. Review is serial today. *How:*
   reuse `_run_child_pool` semaphore for the review phase.
@@ -172,12 +180,21 @@ errors_per_node, and review-op count.
 - **B3/B4** topological ordering (#2) and diff-repair (#1) — measure their
   rework reduction on p6 now that a fast ruler exists.
 
-**C. Role specialization (П13 landed but unmeasured)**
-- **C1 Case-declared specialties.** `workers.<role>.specialties.<name>.models`
-  + `auto_specialty`; route the web_ui node to a web-capable model, db nodes
-  to another. Measure on p6 (its web_ui leaf is a natural specialty). *How:*
-  wiring already exists (specialty.py + chain_for); just declare + turn on.
-- **C2 Specialty-aware reviewer** — reviewer model picked per node domain.
+**C. Role specialization — by AGENT, not by model**
+The point is a roster of domain-specialist **agents** (each with its own
+prompt/skill/tools), and the dispatcher picks the agent whose specialty fits
+the node's task — a DB agent does DB work, a Python agent the Python code, a
+web agent the web. Swapping only the underlying LLM model (П13) is the thin
+version; this is the real one.
+- **C1 Agent roster + task→agent routing.** Define specialist implementer
+  agents (db / python / web / api …); for each leaf, infer the task domain and
+  dispatch the matching agent. Each agent carries its own system prompt and
+  allowed tools, not just a model id. Measure on p6 (its web_ui leaf routes to
+  the web agent). *How:* extend the П13 specialty resolver from "role×model" to
+  "role×agent" — `workers.<role>.specialists.<domain>` names an agent profile;
+  `resolve_specialty` already infers the domain.
+- **C2 Specialist reviewer** — the reviewer for a node is the agent expert in
+  that node's domain, not a generic one.
 
 **D. Replace a single-agent role with an orchestra (a TEAM of heterogeneous
 agents running a mini-workflow — NOT a vote of identical models)**
@@ -191,9 +208,14 @@ sub-agents collaborating in a sub-workflow on each node.
 - **D2 Decomposer orchestra.** One agent drafts the task tree, a second
   critiques/improves it, a third reconciles → a better tree (a bad tree is the
   most expensive mistake downstream).
-- **D3 Declarative team config** in the `workers:` block: declare a role's team
-  + its sub-workflow; default = a team of one = today's single agent, so
-  existing cases are unchanged.
+- **D3 Declarative team + workflow config** in the `workers:` block: declare
+  not only the team roster but HOW the agents work and interact — the
+  sub-workflow (order, who hands off to whom, branch/loop/parallel, what each
+  agent sees from the others). e.g. architect → coder → tester, tester loops
+  back to fixer on red, fixer hands to tester again. Default = a team of one
+  with a trivial one-step workflow = today's single agent, so existing cases
+  are unchanged. *How:* a small workflow schema (nodes = agents, edges =
+  handoffs) the engine runs per role.
 
 ### Execution order
 p6 first (the ruler) → D1 reviewer orchestra (attacks the 47% sink at its
