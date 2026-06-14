@@ -36,3 +36,8 @@ export SPEC_FLOW_LLM_RETRIES=6              # free pools throttle; be patient
 export SPEC_FLOW_LLM_LEAF_DEPTH=6
 export SPEC_FLOW_LLM_MAX_CHILDREN=4
 export SPEC_FLOW_MAX_DECOMPOSE_CALLS=160
+
+# creator ensemble: generate N implementer candidates from different free
+# models, keep the first that compiles clean (catches weak-model non-ASCII /
+# syntax before integrate). 2 = the two free models in the implementer chain.
+export SPEC_FLOW_CREATOR_ENSEMBLE="${SPEC_FLOW_CREATOR_ENSEMBLE:-2}"
