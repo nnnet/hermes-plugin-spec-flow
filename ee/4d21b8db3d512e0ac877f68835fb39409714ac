@@ -1,0 +1,42 @@
+tests/harness/llm_decomposer.py
+  s_a7f45290e91181::t_cf95e44271d445 94-99,101-103
+  s_a7f45290e91181::t_3d2fae60726212 160
+  s_a7f45290e91181::t_35613dee32978d 133-134
+  s_a7f45290e91181::t_22c5abc3c14344 164-165
+tests/test_role_workers.py
+  s_a7f45290e91181::t_28c48e9906fe23 119
+tests/test_live_caps.py
+  s_a7f45290e91181::t_87dd12ae85ab97 61
+  s_a7f45290e91181::t_786faa03dcd870 60,71
+  s_a7f45290e91181::t_14b38871326093 38,49
+tests/harness/role_worker.py
+  s_a7f45290e91181::t_c1530395c75423 443,445
+  s_a7f45290e91181::t_5d4ca4e2791dac 535-537
+  s_a7f45290e91181::t_762a07eb8fa5ac 507,510
+  s_a7f45290e91181::t_00cf41271f1b96 363-371
+  s_a7f45290e91181::t_9ffbe4ce675876 457
+tests/run_cases.py
+  s_a7f45290e91181::t_6ea22f517ed987 263-267
+  s_a7f45290e91181::t_8fa6c550e73cec 529-532
+  s_a7f45290e91181::t_367846e8edf32e 252-253
+tests/scenarios/p4_b2b_marketplace.yaml
+  s_a7f45290e91181::t_6c66cb91dfc171 248-256
+tests/scenarios/p5_mvp_marketplace.yaml
+  s_a7f45290e91181::t_9885fb33672bdd 63-94
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "ee4d21b8db3d512e0ac877f68835fb39409714ac",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
