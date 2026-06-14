@@ -99,6 +99,8 @@ PLUGIN_DIR = HERE.parent
 SCENARIOS_DIR = HERE / "scenarios"
 OUT_DIR = HERE / "runs-out"
 sys.path.insert(0, str(HERE))
+from harness import config as _cfg  # noqa: E402
+_cfg.load_test_env()               # seed the config floor before harness reads it
 from harness import auto_implementer  # noqa: E402
 from harness import run_engine as eng  # noqa: E402
 from harness import scenarios as scn  # noqa: E402

@@ -25,6 +25,18 @@ _PKG = "spec_flow_pkg"
 collect_ignore_glob = ["runs-out"]
 
 
+def pytest_configure(config):
+    """Seed the config floor from tests/.test.env BEFORE any harness module is
+    imported during collection, so its (former) import-time defaults resolve
+    from the file instead of hardcoded literals."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    try:
+        from harness import config as _cfg
+        _cfg.load_test_env()
+    except Exception:  # noqa: BLE001 — never block the run on env seeding
+        pass
+
+
 class FakeRegistry:
     """Captures registry.register(**kw) calls keyed by tool name."""
 
