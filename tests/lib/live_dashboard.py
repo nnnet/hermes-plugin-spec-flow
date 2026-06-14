@@ -512,6 +512,100 @@ def _flow_mermaid(events: list[dict], tree: dict | None = None) -> str | None:
     return "```mermaid\n" + "\n".join(lines) + "\n```"
 
 
+def _flow_timeaxis(events: list[dict], tree: dict | None = None) -> str | None:
+    """Same execution-flow FORM as `_flow_mermaid` (one column per L1-branch
+    lane; coloured milestone boxes "phase · node / action" chained per lane),
+    but laid on a VERTICAL TIME AXIS: every box sits at its real timestamp on a
+    shared time ruler. Returns an HTML fragment (absolute-positioned)."""
+    miles = [e for e in events
+             if int(e.get("level") or 2) <= 1
+             and isinstance(e.get("t"), (int, float))]
+    if not miles:
+        return None
+
+    def esc(s: object) -> str:
+        return (str(s).replace("&", "&amp;").replace("<", "&lt;")
+                .replace(">", "&gt;"))[:90]
+
+    lanes_map = _lane_map(tree)
+    root_id = (tree or {}).get("id", "L0")
+    order: list = []
+    lane_of: list = []
+    for e in miles:
+        base = str(e.get("task") or "").split(":")[0]
+        lane = lanes_map.get(base, root_id) if lanes_map else root_id
+        lane_of.append(lane)
+        if lane not in order:
+            order.append(lane)
+    lane_x = {lane: i for i, lane in enumerate(order)}
+
+    t0 = min(float(e["t"]) for e in miles)
+    t_n = max(float(e["t"]) for e in miles)
+    span = max(t_n - t0, 1.0)
+
+    AXIS, LANEW, PADT = 72, 250, 8
+    draw_h = max(420, min(int(span * 10), 6000))
+    width = AXIS + len(order) * LANEW + 16
+    height = PADT + draw_h + 30
+
+    def y_of(t: float) -> float:
+        return PADT + (float(t) - t0) / span * draw_h
+
+    def hms(t: float) -> str:
+        return _time.strftime("%H:%M:%S", _time.localtime(float(t)))
+
+    p = [f'<div style="position:relative;width:{width}px;height:{height}px;'
+         f'font-size:11px;min-width:{width}px">']
+    # vertical time axis + ticks + faint gridlines
+    p.append(f'<div style="position:absolute;left:{AXIS - 1}px;top:{PADT}px;'
+             f'width:1px;height:{draw_h}px;background:#30363d"></div>')
+    for i in range(9):
+        tt = t0 + span * i / 8
+        yy = y_of(tt)
+        p.append(f'<div style="position:absolute;left:0;top:{yy - 7:.0f}px;'
+                 f'width:{AXIS - 6}px;text-align:right;color:#6e7681">{hms(tt)}</div>')
+        p.append(f'<div style="position:absolute;left:{AXIS}px;top:{yy:.0f}px;'
+                 f'width:{width - AXIS}px;height:1px;background:#161b22"></div>')
+    # lane headers
+    for lane in order:
+        lx = AXIS + lane_x[lane] * LANEW
+        p.append(f'<div style="position:absolute;left:{lx}px;top:0;'
+                 f'width:{LANEW - 8}px;color:#79c0ff;font-weight:600;overflow:hidden;'
+                 f'white-space:nowrap;text-overflow:ellipsis">{esc(lane)}</div>')
+    # per-lane connector line through its boxes
+    lane_ys: dict = {}
+    for e, lane in zip(miles, lane_of):
+        lane_ys.setdefault(lane, []).append(y_of(float(e["t"])))
+    for lane, ys in lane_ys.items():
+        if len(ys) >= 2:
+            lx = AXIS + lane_x[lane] * LANEW + 10
+            p.append(f'<div style="position:absolute;left:{lx}px;top:{min(ys):.0f}px;'
+                     f'width:2px;height:{max(ys) - min(ys):.0f}px;background:#30363d"></div>')
+    # milestone boxes positioned by time, coloured like the mermaid flow
+    for e, lane in zip(miles, lane_of):
+        yy = y_of(float(e["t"]))
+        lx = AXIS + lane_x[lane] * LANEW + 6
+        v = str(e.get("verdict") or "")
+        ph = str(e.get("phase") or "")
+        if v in ("REJECT", "FAIL", "ERROR"):
+            border, bg = "#f85149", "#3a1620"
+        elif ph in ("research", "drift", "respec", "hitl") \
+                or e.get("gate") in ("clarify", "drift", "hitl"):
+            border, bg = "#e3b341", "#3a2a12"
+        else:
+            border, bg = "#2f5d40", "#161b22"
+        node = esc(str(e.get("task") or "").split(":")[0] or ph)
+        label = (f'<b style="color:#adbac7">{esc(ph)} · {node}</b>'
+                 f'<br><span style="color:#8b949e">{esc(e.get("action") or "")}</span>'
+                 f'<br><span style="color:#6e7681">{hms(e["t"])}'
+                 + (f' · {esc(v)}' if v else '') + '</span>')
+        p.append(f'<div style="position:absolute;left:{lx}px;top:{yy:.0f}px;'
+                 f'width:{LANEW - 18}px;background:{bg};border:1px solid {border};'
+                 f'border-radius:6px;padding:3px 6px;box-sizing:border-box">{label}</div>')
+    p.append('</div>')
+    return "".join(p)
+
+
 # ── state ────────────────────────────────────────────────────────────────────
 def _pid_alive(run_dir: "pathlib.Path | None") -> bool:
     """True when the run's process (run.pid) is alive. Used to gate the
@@ -724,7 +818,7 @@ def _build_state(run_dir: pathlib.Path) -> dict:
         "timeline": timeline[-250:],
         "reports": {
             "inputs": _md_to_html(_inputs_md(run_dir)),
-            "flow": _md_to_html(_flow_mermaid(events, tree)) if events else None,
+            "flow": _flow_timeaxis(events, tree) if events else None,
             "report": report_html,
             "oracle": read_md("oracle-report.md"),
             "summary": read_md("SUMMARY.md"),
@@ -1724,57 +1818,6 @@ function hitlPost(path,payload,msgEl){
 // node's progress reads down the page. The drawing height scales with the run
 // duration so long runs scroll; the SVG lives in a .keepscroll container so an
 // auto-refresh rebuild does not reset the scroll position.
-function flowTimeHTML(){
- const all=(STATE&&STATE.timeline)||[];
- const ev=all.filter(e=>e&&typeof e.t==='number'&&isFinite(e.t))
-   .slice().sort((a,b)=>a.t-b.t);
- if(!ev.length)return '<p class=dim>событий со временем ещё нет…</p>';
- const t0=ev[0].t, tN=Math.max(ev[ev.length-1].t, Date.now()/1000);
- const span=Math.max(1,tN-t0);
- // distinct phases in first-seen order → stable lanes; unknown → "other"
- const lanes=[];
- ev.forEach(e=>{const p=e.phase||'other';if(lanes.indexOf(p)<0)lanes.push(p);});
- const laneIdx=p=>{const i=lanes.indexOf(p||'other');return i<0?lanes.length:i;};
- const LANEW=140, PADL=78, PADT=10, PADB=20;
- const drawH=Math.max(480,Math.min(6000,Math.round(span*8)));
- const W=PADL+lanes.length*LANEW+20;
- const H=PADT+drawH+PADB;
- const laneX=p=>PADL+laneIdx(p)*LANEW+LANEW/2;
- const y=t=>PADT+((t-t0)/span)*drawH;
- const hms=t=>new Date(t*1000).toTimeString().slice(0,8);
- const vColor=v=>v==='PASS'?'#3fb950':(v==='FAIL'||v==='REJECT'?'#f85149':'#8b949e');
- let s=`<svg width="${W}" height="${H}" style="min-width:${W}px;font-size:10px">`;
- // left time axis line + ~6-10 tick labels
- s+=`<line x1="${PADL-8}" y1="${PADT}" x2="${PADL-8}" y2="${PADT+drawH}" stroke="#30363d"/>`;
- const TICKS=8;
- for(let i=0;i<=TICKS;i++){const tt=t0+span*i/TICKS, yy=y(tt);
-  s+=`<line x1="${PADL-12}" y1="${yy}" x2="${PADL-8}" y2="${yy}" stroke="#30363d"/>`+
-     `<text x="${PADL-14}" y="${yy+3}" text-anchor="end" fill="#6e7681">${hms(tt)}</text>`+
-     `<line x1="${PADL-8}" y1="${yy}" x2="${W}" y2="${yy}" stroke="#161b22"/>`;}
- // node polylines: link consecutive same-node events top→bottom
- const byNode={};
- ev.forEach(e=>{const n=e.node||'';if(!n)return;(byNode[n]=byNode[n]||[]).push(e);});
- Object.keys(byNode).forEach(n=>{const pts=byNode[n];if(pts.length<2)return;
-  const d=pts.map(e=>`${laneX(e.phase).toFixed(1)},${y(e.t).toFixed(1)}`).join(' ');
-  s+=`<polyline points="${d}" fill="none" stroke="#30363d" stroke-width="1" opacity="0.5"/>`;});
- // event dots, colored by verdict, with an HH:MM:SS · phase · node · text tooltip
- ev.forEach(e=>{const cx=laneX(e.phase),cy=y(e.t);
-  const tip=hms(e.t)+' · '+(e.phase||'')+' · '+(e.node||'')+' · '+(e.text||'');
-  s+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="4" fill="${vColor(e.verdict)}" `+
-     `stroke="#0d1117" stroke-width="1"><title>${esc(tip)}</title></circle>`;});
- s+='</svg>';
- // fixed lane-name header row ABOVE the scroll area so it stays visible
- let head='<div style="display:flex;padding-left:'+PADL+'px;border-bottom:1px solid #21262d">';
- lanes.forEach(p=>{head+=`<div style="width:${LANEW}px;text-align:center;color:#79c0ff;`+
-   `font-size:11px;padding:2px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p)}</div>`;});
- head+='</div>';
- return '<p class=muted>ось — время (сверху раньше, снизу позже); колонки — фазы; '+
-   'точка = событие (цвет = вердикт), линия связывает события одного узла. '+
-   'наведите на точку — время/фаза/узел/текст.</p>'+head+
-   '<div id=flowscroll class=keepscroll style="overflow:auto;max-height:70vh;'+
-   'border:1px solid #21262d;border-radius:6px">'+s+'</div>';
-}
-
 function renderGlobal(){
  const R=STATE.reports;
  const tabs=[['inputs','▶ Старт (цель+вход)'],['graph','🕸 Граф спеков'],['flow','🔀 Поток выполнения'],['timeline','⏱ Таймлайн'],['report','Отчёт+аудит'],['agents','🤖 Агенты сейчас'],['hitl','✋ HITL'],['idle','⏱ Простои'],['compare','📊 Сравнение прогонов'],['workflow','Воркфлоу'],['oracle','Оракул'],['commits','Версии/коммиты'],['summary','Итог']];
@@ -1782,7 +1825,7 @@ function renderGlobal(){
  let body;
  if(GTAB==='agents')body='<h3 class=muted>Что делают агенты сейчас <span class=dim>(сверху — последнее)</span></h3><ol class="feed full" reversed>'+(STATE.feed||[]).slice().reverse().map(f=>`<li>${esc(f)}</li>`).join('')+'</ol>';
  else if(GTAB==='hitl')body=hitlHTML();
- else if(GTAB==='flow')body=flowTimeHTML();
+ else if(GTAB==='flow')body='<p class=muted>поток выполнения по вертикальной шкале времени (сверху раньше): колонки — ветки, блоки — вехи (цвет = вердикт), позиция = реальная метка времени</p><div id=flowscroll class=keepscroll style="overflow:auto;max-height:75vh">'+(R.flow||'<p class=dim>потока ещё нет</p>')+'</div>';
  else if(GTAB==='idle')body=idleHTML();
  else if(GTAB==='compare')body=compareHTML();
  else if(GTAB==='timeline')body=timelineHTML();
