@@ -1842,7 +1842,7 @@ function renderGlobal(){
  let body;
  if(GTAB==='agents')body='<h3 class=muted>Что делают агенты сейчас <span class=dim>(сверху — последнее)</span></h3><ol class="feed full" reversed>'+(STATE.feed||[]).slice().reverse().map(f=>`<li>${esc(f)}</li>`).join('')+'</ol>';
  else if(GTAB==='hitl')body=hitlHTML();
- else if(GTAB==='flow')body='<p class=muted>поток выполнения по вертикальной шкале времени (сверху раньше): колонки — ветки, блоки — вехи (цвет = вердикт), позиция = реальная метка времени</p><div id=flowscroll class=keepscroll style="overflow:auto;max-height:75vh">'+(R.flow||'<p class=dim>потока ещё нет</p>')+'</div>';
+ else if(GTAB==='flow')body='<p class=muted>поток выполнения по вертикальной шкале времени (сверху позже): колонки — ветки, блоки — вехи (цвет = вердикт), позиция = реальная метка времени</p><div id=flowscroll class=keepscroll style="overflow:auto;max-height:75vh">'+(R.flow||'<p class=dim>потока ещё нет</p>')+'</div>';
  else if(GTAB==='idle')body=idleHTML();
  else if(GTAB==='compare')body=compareHTML();
  else if(GTAB==='timeline')body=timelineHTML();
