@@ -1,0 +1,21 @@
+tests/harness/hitl.py
+  s_a7f45290e91181::t_3d7f89d759bdfe 166-170
+tests/lib/live_dashboard.py
+  s_a7f45290e91181::t_8d901777a6a1c3 1067-1068
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "a4f497201f08708fffe0b410c3b6f4b85ad5f590",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
