@@ -1,0 +1,35 @@
+tests/harness/test_contract_checks.py
+  s_a7f45290e91181::t_b1ea4c887754bf 1-218
+tests/lib/live_dashboard.py
+  s_a7f45290e91181::t_5fff8e698fd68e 1479-1480,1482
+  s_a7f45290e91181::t_a01ba24ac1c2b5 1663-1664
+  s_a7f45290e91181::t_2e52868bfe0438 1543-1548,1550
+tests/dashboard/test_dashboard_idle.py
+  s_a7f45290e91181::t_3ece50020b8c9c 33,36,38-39,41
+  s_a7f45290e91181::t_e9e2df921d2876 51,55
+  s_a7f45290e91181::t_a0a98345fdb3f2 73,75-76
+spec_flow_runner.py
+  s_a7f45290e91181::t_40d6416c0b9aa6 1359-1360,1369
+  s_a7f45290e91181::t_49d403726cca95 2091-2098
+  s_a7f45290e91181::t_4d8392b6ccc2ac 1346-1358,1361-1368,1370-1375
+tests/harness/pytest_verifier.py
+  s_a7f45290e91181::t_425d74df3063c3 564-601
+tests/harness/contract_checks.py
+  s_a7f45290e91181::t_6cc91fa4e21fbc 1-490
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "cfffc106f3df21575afa664846c1de15775e6cda",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
