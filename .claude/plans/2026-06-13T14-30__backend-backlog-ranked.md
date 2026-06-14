@@ -175,8 +175,30 @@ Checkbox `- [ ]` = to do, `- [x]` = done.
 
 **B. Fewer errors — attack repair (14%) + first-pass rate**
 - [ ] **B1 Pre-integrate contract gate.** Run the deterministic detectors
-  (cross-module import, dup-owner, non-ASCII) BEFORE the expensive integrate,
-  not after a red corpus — fail fast, cheaper repair.
+  BEFORE the expensive integrate, not after a red corpus — fail fast, cheaper
+  repair. Note: today's lint only checks AC↔REQ traceability; I/O contract
+  consistency is NOT checked yet and is the main addition here.
+  **Catalogue of mechanical checks (no LLM call — AST / regex / cheap
+  subprocess):**
+  - [x] imported symbol exists in the target module (cross-module export contract)
+  - [x] duplicate table owners (>1 module defines the same table)
+  - [x] non-ASCII / syntax — `compile()` each .py
+  - [x] AC↔REQ traceability (existing lint)
+  - [ ] **call-arity / signature consistency** — a call `f(a, b)` matches `def f`'s
+        params (arity, required kwargs) across modules
+  - [ ] **route contract** — every endpoint the spec/acceptance requires is
+        registered exactly once (method+path), no duplicate routes
+  - [ ] **DB column consistency** — columns inserted/selected exist in the
+        table's CREATE/define_table (the "no such column" class)
+  - [ ] **response/payload field shape** — handlers build the keys the contract
+        names (e.g. `{items:[{id,text}]}`) — heuristic AST/string scan
+  - [ ] **undefined names / unused imports** — pyflakes-style static pass
+  - [ ] **test collectability** — `pytest --collect-only` (no run) catches import
+        errors in seconds before the full suite
+  - [ ] **env-var contract** — storage reads the documented env var; tests set it
+  Rule of thumb: the LLM is needed only for SEMANTIC judgment (is the spec
+  good/complete/sensible); anything expressible as static analysis or a
+  no-run subprocess is mechanical and must NOT spend a model call.
 - [ ] **B2 Measure the creator-ensemble first-pass lift on p6** (ensemble itself
   shipped).
 - [ ] **B3 Measure topological ordering (#2)** rework reduction on p6.
