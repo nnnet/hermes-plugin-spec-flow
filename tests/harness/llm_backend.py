@@ -152,7 +152,7 @@ _llm_slots_for = 0
 def _concurrency_gate() -> "threading.Semaphore | None":
     global _llm_slots, _llm_slots_for
     want = int(WORKERS_CFG.get("concurrency")
-               or os.environ.get("SPEC_FLOW_LLM_CONCURRENCY", "0"))
+               or config.env("LLM_CONCURRENCY", int))
     if want <= 0:
         return None
     if _llm_slots is None or _llm_slots_for != want:
@@ -164,7 +164,7 @@ def _concurrency_gate() -> "threading.Semaphore | None":
 def _budget() -> int:
     if WORKERS_CFG.get("budget") is not None:
         return int(WORKERS_CFG["budget"])
-    return int(os.environ.get("SPEC_FLOW_LLM_BUDGET", "0"))
+    return config.env("LLM_BUDGET", int)
 
 
 def calls_made() -> int:
