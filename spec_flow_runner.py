@@ -1109,6 +1109,54 @@ class Engine:
                                     "testable_criteria": True}})
         return out
 
+    def _assembly_node(self) -> "Optional[dict]":
+        """B2 mechanism 3: an ENGINE-generated assembly leaf.
+
+        When the constitution declares a product entry (a module-level
+        ``wsgi_app`` in ``src/app.py``) the decomposer routinely builds the
+        feature leaves but never a node that WIRES them into the runnable
+        entry — so the product stays un-assembled and the boot-gate is red
+        forever (observed live: notes_db + notes_http built, no app.py, root
+        RED with nothing to assemble). The engine closes that gap itself by
+        appending ONE leaf whose whole job is to assemble the declared entry
+        from the modules already built under ``src/``.
+
+        This is a TASK an LLM implementer does for real — not seeded code, no
+        mock: the leaf reads the repo map, imports the real modules and routes
+        the contract's endpoints. Constitution-keyed + behind
+        ``SPEC_FLOW_PRE_GATE`` so flag-off runs and p4/p5 are unchanged."""
+        if os.environ.get("SPEC_FLOW_PRE_GATE", "") in (
+                "", "0", "false", "False", "no"):
+            return None
+        try:
+            from tests.harness import contract_checks
+            entry = contract_checks.constitution_declares_entry(
+                self._constitution)
+        except Exception:  # noqa: BLE001 — never break the run
+            entry = None
+        if not entry:
+            return None
+        if (Path(self.workspace.root) / entry).is_file():
+            return None             # a feature leaf already built the entry
+        statement = (
+            "ASSEMBLE THE PRODUCT ENTRY (engine-required, binding).\n\n"
+            f"Create {entry} exposing a module-level `wsgi_app` callable that "
+            "wires the feature modules ALREADY built under src/ into one "
+            "running WSGI app. Import the existing modules (do NOT reimplement "
+            "them, do NOT mock them); dispatch every endpoint the constitution "
+            "API contract declares to the matching handler/storage already "
+            "present. The app must boot in a fresh process and answer "
+            "GET /health -> 200. Standard library only.\n\n"
+            "Constitution API contract:\n"
+            + "\n".join(f"  - {r}" for r in (self._constitution or [])))
+        return {"id": "product_entry",
+                "title": "Assemble product entry " + entry,
+                "requirement": statement, "atomic": True,
+                "metrics": {"modules": 1, "tasks": 2, "interfaces": 1,
+                            "estimated_loc": 60, "open_decisions": 0,
+                            "single_concern": True,
+                            "testable_criteria": True}}
+
     def _node_driver(self, node: dict, kind: str) -> _NodeDriver:
         """Build the lifecycle guard for one node under the active engine."""
         nid = str(node.get("id", "?"))
@@ -1343,19 +1391,16 @@ class Engine:
         # the case carried no `tree`, this is where it becomes inspectable.
         project["tree"] = root
 
-        # B2 mechanism 3 (minimal "emit FAIL" variant): if the constitution
-        # DECLARES a product entry (wsgi_app/app.py) but no module built it,
-        # the engine itself flags an "entry not built" gate FAIL at the root.
-        # The hard RED is already owned by the verifier's boot-gate (which
-        # tries to assemble the real entry in a fresh subprocess); this engine
-        # emit makes the missing assembly explicit at the engine layer. We
-        # chose the minimal emit over synthesizing a standing-requirement node
-        # because the standing-requirement machinery is a project-supplied
-        # callable consumed DURING the visit loop (already finished here), so
-        # injecting an engine-generated requirement post-decomposition would
-        # be invasive and risk perturbing p4/p5; the boot-gate covers the hard
-        # failure regardless. Constitution-keyed + behind SPEC_FLOW_PRE_GATE,
-        # so with the flag OFF / no entry declared, behavior is unchanged.
+        # B2 mechanism 3 — BACKSTOP emit: the engine now synthesizes an
+        # assembly leaf (see _assembly_node, injected at the depth-0 placement
+        # seam) that BUILDS the declared entry from the feature modules. This
+        # post-loop emit is the safety net for the case where that leaf still
+        # failed to produce the entry: the engine flags an explicit "entry not
+        # built" gate FAIL at the root so the run never green-washes a product
+        # that cannot be assembled. The verifier's boot-gate owns the hard RED
+        # (it tries to import+boot the real entry in a fresh subprocess).
+        # Constitution-keyed + behind SPEC_FLOW_PRE_GATE, so with the flag OFF
+        # / no entry declared, behavior is unchanged.
         if os.environ.get("SPEC_FLOW_PRE_GATE", "") not in ("", "0", "false",
                                                             "False", "no"):
             try:
@@ -2052,6 +2097,16 @@ class Engine:
             if depth == 0:
                 placements += [x for x in self._requirement_nodes()
                                if x["id"] not in {p["id"] for p in placements}]
+                # B2 mechanism 3: the engine-synthesized assembly leaf goes
+                # LAST so it runs after every feature leaf AND any late
+                # requirement (e.g. web_ui) — the entry it wires must see all
+                # the modules already present. Returns None unless the
+                # constitution declares an entry that nothing built yet
+                # (and SPEC_FLOW_PRE_GATE is on), so p4/p5 are unaffected.
+                asm = self._assembly_node()
+                if asm and asm["id"] not in {p["id"] for p in placements} \
+                        and asm["id"] not in self.tasks:
+                    placements.append(asm)
             for extra in placements:
                 where = ("inside its scoped branch" if extra.pop("_scoped",
                                                                  False)
