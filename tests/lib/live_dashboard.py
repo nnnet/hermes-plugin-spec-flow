@@ -887,10 +887,26 @@ def _hitl_state(run_dir: "pathlib.Path | None") -> dict:
     hitl = run_dir / "hitl"
     asks, answered = [], []
     qmd = hitl / "questions.md"
+    qmtime = qmd.stat().st_mtime if qmd.exists() else 0.0
+
+    def _ask_epoch(hdr):
+        # the header carries a [HH:MM:SS] stamp; pin it to the file's date
+        if qmtime and "[" in hdr and "]" in hdr:
+            tod = hdr[hdr.find("[") + 1:hdr.find("]")].split(":")
+            if len(tod) == 3 and all(p.isdigit() for p in tod):
+                lt = _time.localtime(qmtime)
+                try:
+                    return _time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday,
+                                         int(tod[0]), int(tod[1]), int(tod[2]),
+                                         0, 0, -1))
+                except (ValueError, OverflowError):
+                    pass
+        return qmtime
+
     if qmd.exists():
         # Block format: a '## [time] role @ node' header, then the question
         # body lines, then optional '**answer ...**' lines. Parse into
-        # structured asks {header, body, answer, answered} so the dashboard
+        # structured asks {header, t, body, answer, answered} so the dashboard
         # shows the actual question text, not just the header.
         cur = None
         for line in qmd.read_text(encoding="utf-8", errors="ignore").splitlines():
@@ -899,7 +915,8 @@ def _hitl_state(run_dir: "pathlib.Path | None") -> dict:
             if st.startswith("##") or "asks:" in st or "[HITL?]" in st:
                 if cur:
                     asks.append(cur)
-                cur = {"header": st.lstrip("# ").strip(),
+                hdr = st.lstrip("# ").strip()
+                cur = {"header": hdr, "t": _ask_epoch(hdr),
                        "body": "", "answer": "", "answered": False}
             elif st.startswith("**answer"):
                 answered.append(st)
@@ -925,7 +942,11 @@ def _hitl_state(run_dir: "pathlib.Path | None") -> dict:
                 rf = d / "REQUIREMENT.md"
                 if rf.exists():
                     body = rf.read_text(encoding="utf-8", errors="ignore")
-                reqs.append({"name": d.name, "body": body})
+                try:
+                    rt = (rf.stat().st_mtime if rf.exists() else d.stat().st_mtime)
+                except OSError:
+                    rt = 0.0
+                reqs.append({"name": d.name, "body": body, "t": rt})
     # human→worker messages sent from the dashboard, with read status. A message
     # is "unread" only while it is still the staged answer.md (not yet consumed
     # by a worker or poll_note); once answer.md no longer holds it, it was read.
@@ -1610,33 +1631,36 @@ function hitlHTML(){
  h+='<style>'+chatCss+'</style>';
  const meta=t=>`<div class=bmeta>${esc(t)}</div>`;
  const bub=(side,m,txt)=>`<div class="bub ${side}">${meta(m)}${esc(txt)}</div>`;
- // build a chronological-ish post list: each ask = incoming question
- // (+ outgoing answer when present); then injected requirements as outgoing
- // human→engine posts.
- let chat='';
+ // unified, TIME-SORTED post list. Each post carries an epoch `t`; the meta
+ // line is prefixed with HH:mm. Posts with no known time sort to the top.
+ const hm=t=>t?new Date(t*1000).toTimeString().slice(0,5):'--:--';
+ const posts=[];
  asks.forEach(a=>{
-   if(typeof a==='string'){chat+=bub('bin','воркер',a);return;}
-   const unans=!a.answered;
-   chat+=`<div class="bub ${unans?'bun':'bin'}">`+
-     meta((unans?'⏳ без ответа · ':'')+'👷 '+(a.header||'воркер'))+
-     esc(a.body||'')+'</div>';
-   if(a.answer)chat+=bub('bout','🧑 человек / авто',a.answer.replace(/^\*\*answer[^:]*:\*\*\s*/i,''));
+   if(typeof a==='string'){posts.push({t:0,html:bub('bin','воркер',a)});return;}
+   const unans=!a.answered, t=a.t||0;
+   posts.push({t,html:`<div class="bub ${unans?'bun':'bin'}">`+
+     meta(hm(t)+' · '+(unans?'⏳ без ответа · ':'')+'👷 '+(a.header||'воркер'))+
+     esc(a.body||'')+'</div>'});
+   if(a.answer)posts.push({t:t+0.001,html:bub('bout',hm(t)+' · 🧑 человек / авто',
+     a.answer.replace(/^\*\*answer[^:]*:\*\*\s*/i,''))});
  });
- reqs.forEach(r=>{chat+=bub('bout','📌 вброшено требование · '+(r.name||''),
-   (r.body||'').slice(0,400));});
+ reqs.forEach(r=>{const t=r.t||0;
+   posts.push({t,html:bub('bout',hm(t)+' · 📌 вброшено требование · '+(r.name||''),
+     (r.body||'').slice(0,400))});});
  // standalone recorded answers not already shown
  (ans||[]).slice(-10).forEach(a=>{
    const txt=String(a).replace(/^\*\*answer[^:]*:\*\*\s*/i,'');
    if(!asks.some(x=>x&&x.answer&&x.answer.indexOf(txt)>=0)
       && !sent.some(s=>String(s.text||'').trim()===txt.trim()))
-     chat+=bub('bout','🧑 ответ (история)',txt);
+     posts.push({t:0,html:bub('bout','🧑 ответ (история)',txt)});
  });
  // direct human→worker messages with delivery status (from sent.jsonl): shown
  // the instant you send (⏳ не прочитано) and flipped to ✓ once a worker consumes it.
- sent.forEach(s=>{
-   chat+=bub('bout',(s.read?'✓ прочитано воркером':'⏳ не прочитано — ждёт воркера')
-             +' · 🧑 человек → worker', s.text||'');
- });
+ sent.forEach(s=>{const t=s.t||0;
+   posts.push({t,html:bub('bout',hm(t)+' · '+(s.read?'✓ прочитано воркером':'⏳ не прочитано — ждёт воркера')
+             +' · 🧑 человек → worker', s.text||'')});});
+ posts.sort((x,y)=>(x.t||0)-(y.t||0));
+ const chat=posts.map(p=>p.html).join('');
  h+='<h4>История переписки ('+(asks.length+reqs.length+sent.length)+')</h4>';
  h+= chat? '<div class=chat id=hitlchat>'+chat+'</div>'
    : '<p class=dim>пока сообщений нет</p>';
