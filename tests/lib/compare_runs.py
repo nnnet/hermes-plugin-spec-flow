@@ -19,6 +19,7 @@ duration is wall-clock of the trace, marked '~' as ongoing/aborted.
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import pathlib
 import sys
@@ -63,6 +64,23 @@ def metrics(run_dir: pathlib.Path) -> dict:
     ts = [e.get("t") for e in trace if isinstance(e.get("t"), (int, float))]
     duration = (max(ts) - min(ts)) if len(ts) >= 2 else 0.0
     finished = (run_dir / "SUMMARY.md").exists()
+
+    # launch time: the dir name is prefixed with the ISO start stamp
+    # (YYYY-MM-DDTHH-MM-SS). started_ts drives the sort, started is shown.
+    started_ts = 0.0
+    started = "—"
+    stamp = run_dir.name.split("__")[0]
+    try:
+        dt = datetime.datetime.strptime(stamp, "%Y-%m-%dT%H-%M-%S")
+        started_ts = dt.timestamp()
+        started = dt.strftime("%m-%d %H:%M")
+    except ValueError:
+        try:
+            started_ts = run_dir.stat().st_mtime
+            started = datetime.datetime.fromtimestamp(
+                started_ts).strftime("%m-%d %H:%M")
+        except OSError:
+            pass
 
     def count_action(needle: str) -> int:
         return sum(1 for e in trace if needle in str(e.get("action", "")))
@@ -139,6 +157,8 @@ def metrics(run_dir: pathlib.Path) -> dict:
         else run_dir.name,
         "dir": run_dir.name,
         "finished": finished,
+        "started": started,
+        "started_ts": started_ts,
         "duration_s": round(duration, 1),
         "duration": _fmt_dur(duration) + ("" if finished else "~"),
         "ticks": max((e.get("tick", 0) for e in trace), default=0),

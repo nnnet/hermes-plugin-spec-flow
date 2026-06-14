@@ -1167,6 +1167,7 @@ body{margin:0;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;background:#0d
 .bar{position:sticky;top:0;z-index:5;background:#161b22;border-bottom:1px solid #30363d;padding:8px 14px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
 .st{font-weight:700}.dim{color:#8b949e}.pill{background:#21262d;border-radius:10px;padding:1px 8px;cursor:pointer}
 .home{cursor:pointer;background:#1f6feb;color:#fff;border-radius:6px;padding:2px 10px;font-weight:700}.home:hover{background:#388bfd}
+.runbar{display:flex;gap:8px;align-items:center;margin-left:auto;padding-left:14px;border-left:1px solid #30363d}
 .runbtn{cursor:pointer;border-radius:6px;padding:2px 10px;font-weight:700;border:1px solid #30363d}
 #runstop{background:#3d1518;color:#f85149}#runstop:hover{background:#5a1d22}
 #runstart{background:#11281a;color:#3fb950}#runstart:hover{background:#163a25}
@@ -1223,10 +1224,12 @@ pre.code{background:#161b22;padding:10px;border-radius:6px;overflow:auto;white-s
  <span class=st id=status></span>
  <span class=dim id=counts></span>
  <span class=pill id=mode title="клик — вкл/выкл авторефреш"></span>
- <span class=runbtn id=runstop title="кооперативная остановка прогона (STOP + SIGTERM)">⏹ стоп</span>
- <span class=runbtn id=runstart title="запустить новый прогон того же кейса">▶ ран</span>
- <span class=runbtn id=runlive title="открепить выбранный прогон — показывать живой/последний" style="display:none">⟲ к живому</span>
- <span class=dim id=runmsg></span>
+ <span class=runbar>
+  <span class=dim id=runmsg></span>
+  <span class=runbtn id=runstop title="кооперативная остановка прогона (STOP + SIGTERM)">⏹ стоп</span>
+  <span class=runbtn id=runstart title="запустить новый прогон того же кейса">▶ ран</span>
+  <span class=runbtn id=runlive title="открепить выбранный прогон — показывать живой/последний" style="display:none">⟲ к живому</span>
+ </span>
 </div>
 <div class=bar2>
  <div id=goal class=goal></div>
@@ -1298,8 +1301,16 @@ function mray(){if(window.mermaid){try{mermaid.run({querySelector:'#detail .merm
 
 async function poll(){
  if(!AUTO)return;
- try{const r=await fetch('/api/state');STATE=await r.json();render();}catch(e){}
+ try{const r=await fetch('/api/state');STATE=await r.json();render(false);}catch(e){}
 }
+// tabs whose content is interactive or lazily loaded (dropdowns, sortable
+// tables, the rendered graph): an auto tick must NOT rebuild them — it would
+// reset a selection, jump the scroll, or reflow the diagram under the cursor.
+const FROZEN_TABS=new Set(['compare','idle','workflow','oracle','commits','summary','graph','report']);
+function focusInside(el){const a=document.activeElement;
+ return a&&el&&el.contains(a)&&/^(SELECT|INPUT|TEXTAREA|OPTION)$/.test(a.tagName);}
+function withScroll(el,fn){if(!el){fn();return;}
+ const top=el.scrollTop,left=el.scrollLeft;fn();el.scrollTop=top;el.scrollLeft=left;}
 const BADGE_ICON={spike:'🔬',clarify:'❓',contract:'📐',drift:'🌀',hitl:'✋',review_fails:'⚖️',error:'❌',pruned:'✂️',reworked:'🔧'};
 const BADGE_TIP={spike:'было исследование (spike) перед решением',clarify:'было уточнение',contract:'есть контракт',drift:'зафиксирован дрейф',hitl:'вмешивался человек',review_fails:'ревью не прошло',error:'НЕзакрытая ошибка — подробности на странице узла',pruned:'дубль отрезан dedup-гейтом',reworked:'был REJECT — доработан, повторное ревью PASS'};
 function badgeStr(eps){return (eps||[]).map(e=>BADGE_ICON[e]||'').join('');}
@@ -1321,7 +1332,8 @@ function treeHTML(n){
  h+='</li>';return h;
 }
 
-function render(){
+function render(user){
+ if(user===undefined)user=true;            // explicit false only from the auto poll
  if(!STATE||STATE.empty){$('#status').textContent='нет прогонов';$('#detail').innerHTML='<p class=dim>runs-out пуст</p>';return;}
  const live=STATE.status!=='done';
  $('#status').innerHTML=live?'<span class=live>🟢 идёт…</span>':'<span class=donec>✅ завершён</span>';
@@ -1342,8 +1354,13 @@ function render(){
  $('#current').innerHTML='сейчас: '+esc(STATE.current||'…')+'<span id=elapsed class=dim></span>';
  // fill the chip IMMEDIATELY — re-rendering recreated it empty and it stayed blank until the next 1s tick (visible blinking)
  updElapsed();
- $('#tree').innerHTML='<ul>'+treeHTML(STATE.tree)+'</ul>';
- if(!SEL) renderGlobal(); else renderNode();
+ // the tree updates live (new nodes appear) but must never yank the scroll
+ withScroll($('#tree'),()=>{$('#tree').innerHTML='<ul>'+treeHTML(STATE.tree)+'</ul>';});
+ // on an auto tick, leave the right pane alone when the user is mid-interaction:
+ // an open/sortable tab or a focused control would be reset by a rebuild.
+ const det=$('#detail');
+ if(!user && (focusInside(det) || (!SEL && FROZEN_TABS.has(GTAB))))return;
+ withScroll(det,()=>{ if(!SEL) renderGlobal(); else renderNode(); });
 }
 
 function timelineHTML(){
@@ -1360,8 +1377,8 @@ function timelineHTML(){
 }
 
 // run comparison (П5): lazy-load /api/compare once, filter+sort client-side
-let CMP=null, CMP_CASE='', CMP_SORT='run', CMP_DESC=false;
-const CMP_COLS=[['run','прогон'],['duration','время'],['ticks','тиков'],
+let CMP=null, CMP_CASE='', CMP_SORT='started', CMP_DESC=true;
+const CMP_COLS=[['started','запуск'],['run','прогон'],['duration','время'],['ticks','тиков'],
  ['tree_nodes','узлов'],['llm_calls','LLM'],['reviews_rejected','реворк'],
  ['demotions','демоц'],['crashes','краш'],['leaf_timeouts','таймаут'],
  ['integrate_pass','интегр✓'],['integrate_red','интегрR'],
@@ -1401,7 +1418,8 @@ const CMP_TIPS={
  first_pass_rate:'Доля интеграций, зелёных с ПЕРВОЙ попытки = интегр✓/(интегр✓+интегрR). Больше = выше качество сборки.',
  quota_per_call:'Давление квоты: ожиданий квоты на один LLM-вызов. Меньше = свободнее пул.',
  tokens_total:'Реальные токены за прогон (prompt+completion из API usage). 0 = провайдер не вернул usage.',
- tokens_per_node:'Удельный расход токенов на узел. Меньше = экономнее. Сравнимо между кейсами.'};
+ tokens_per_node:'Удельный расход токенов на узел. Меньше = экономнее. Сравнимо между кейсами.',
+ started:'Когда прогон был запущен (из имени папки). По умолчанию сортировка — новые сверху.'};
 function loadCompare(){
  fetch('/api/compare').then(r=>r.json()).then(d=>{CMP=d;render();})
   .catch(()=>{CMP=[{error:'не удалось загрузить'}];render();});
@@ -1411,7 +1429,9 @@ function compareHTML(){
  if(CMP.length&&CMP[0].error)return '<p class=dim>ошибка: '+esc(CMP[0].error)+'</p>';
  const cases=[...new Set(CMP.map(r=>(r.dir||'').split('__').pop()))].sort();
  let rows=CMP.filter(r=>!CMP_CASE||(r.dir||'').endsWith(CMP_CASE));
- rows.sort((a,b)=>{let x=a[CMP_SORT],y=b[CMP_SORT];
+ // the «запуск» column shows a human stamp but sorts on the epoch ts
+ const sk=CMP_SORT==='started'?'started_ts':CMP_SORT;
+ rows.sort((a,b)=>{let x=a[sk],y=b[sk];
   if(typeof x==='boolean'){x=x?1:0;y=y?1:0;}
   if(x<y)return CMP_DESC?1:-1;if(x>y)return CMP_DESC?-1:1;return 0;});
  const opts=['<option value="">все кейсы</option>'].concat(
