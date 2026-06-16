@@ -1026,8 +1026,12 @@ def _orchestra_run(ctx: dict, ws_root: str, nid: str, fn: str, *,
         s_system = _step_system({"skill": task.skill, "role": role}, system)
         # the call is logged once by timed_ask; the step/mode travel as call
         # meta so usage is sliceable by orchestra step without a second log.
+        # node+title travel on EVERY step's call meta so each orchestra call
+        # (incl. fixer, which goes through _call_model) is grouped under its real
+        # node in the flow/sequence views — never under «None».
         step_meta = {"step": role, "mode": "orchestra",
-                     "provider": task.provider}
+                     "provider": task.provider,
+                     "node": nid, "title": ctx.get("title", "") or nid}
         try:
             if role == "architect":
                 prompt = _ARCHITECT_TASK.format(

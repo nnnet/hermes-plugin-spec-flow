@@ -851,10 +851,14 @@ def _flow_orchestra_html(llm: list[dict]) -> str | None:
            'циклы (тестер→ремонтник→тестер) повторяются</p>']
     for node in sorted(seqs):
         steps = seqs[node]
+        # a node label must NEVER read «None» — fall back to a step's model or a
+        # neutral word if the id is missing (defensive; the engine now always
+        # stamps the real node on every orchestra step).
+        node_label = node if node and node != "None" else "узел (без id)"
         out.append('<div style="margin:0 0 12px;border:1px solid #21262d;'
                    'border-radius:6px;padding:8px 10px">')
         out.append(f'<div style="color:#adbac7;font-weight:600;margin-bottom:6px">'
-                   f'{esc(node)}</div>')
+                   f'{esc(node_label)}</div>')
         for i, st in enumerate(steps):
             role = esc(st.get("step"))
             ico = glyph.get(str(st.get("step")), "•")
@@ -1028,7 +1032,10 @@ def _build_state(run_dir: pathlib.Path) -> dict:
         if open_calls:
             parts = []
             for e in open_calls.values():
-                node = str(e.get("node"))
+                # never show «None» — fall back to the call's title, then a dash
+                _n = e.get("node")
+                node = (str(_n) if _n not in (None, "None", "")
+                        else (e.get("title") or "—"))
                 lvl = e.get("depth")
                 if not (isinstance(lvl, int) and lvl >= 0):
                     # older harness logs carry no depth — the TREE knows it
@@ -1480,7 +1487,7 @@ def _token_economics(run_dir: "pathlib.Path | None") -> dict:
         who = e.get("step") or e.get("role") or "—"
         key = (who, e.get("model") or "—")
         a = agg.setdefault(key, {"calls": 0, "prompt": 0, "completion": 0,
-                                 "estimated": False})
+                                 "estimated": False, "role_raw": e.get("role")})
         pt = int(e.get("prompt_tokens", 0) or 0)
         ct = int(e.get("completion_tokens", 0) or 0)
         a["calls"] += 1
@@ -1488,8 +1495,13 @@ def _token_economics(run_dir: "pathlib.Path | None") -> dict:
         a["completion"] += ct
         if e.get("estimated"):
             a["estimated"] = True
+        if not a.get("role_raw"):
+            a["role_raw"] = e.get("role")
         grand += pt + ct
-    rows = [{"role": r, "model": m, "calls": v["calls"],
+    # the pipeline STAGE a row belongs to, derived from its role (a specialist
+    # like coder rolls up under its stage, реализация).
+    rows = [{"stage": _STAGE_RU.get(v.get("role_raw"), v.get("role_raw") or "—"),
+             "role": r, "model": m, "calls": v["calls"],
              "prompt": v["prompt"], "completion": v["completion"],
              "total": v["prompt"] + v["completion"],
              "estimated": v["estimated"]}
@@ -2197,9 +2209,9 @@ function idleHTML(){
  const tok=IDLE.tokens||{rows:[],total:0};
  if(tok.rows.length){
   h+='<h4>Токены по роли/специалисту+модели <span class=dim>(≈ = посчитано токенайзером, API не вернул usage)</span></h4><div class=cmpscroll style="max-height:240px">'+
-   '<table class=cmp><thead><tr><th>роль/специалист</th><th>модель</th><th>вызовов</th><th>prompt</th><th>completion</th><th>всего</th><th>доля</th></tr></thead><tbody>';
+   '<table class=cmp><thead><tr><th>стадия</th><th>роль/специалист</th><th>модель</th><th>вызовов</th><th>prompt</th><th>completion</th><th>всего</th><th>доля</th></tr></thead><tbody>';
   tok.rows.forEach(r=>{const sh=tok.total?Math.round(100*r.total/tok.total):0;
-   h+=`<tr><td>${esc(r.role)}${r.estimated?' <span class=dim>≈</span>':''}</td><td>${esc(r.model)}</td><td>${r.calls}</td>`+
+   h+=`<tr><td>${esc(r.stage||'—')}</td><td>${esc(r.role)}${r.estimated?' <span class=dim>≈</span>':''}</td><td>${esc(r.model)}</td><td>${r.calls}</td>`+
     `<td>${r.prompt}</td><td>${r.completion}</td><td><b>${r.total}</b></td>`+
     `<td><span style="display:inline-block;height:8px;background:#58a6ff;width:${sh}px;max-width:120px"></span> ${sh}%</td></tr>`;});
   h+=`</tbody></table></div><p class=dim>всего токенов: <b>${tok.total}</b></p>`;

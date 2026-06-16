@@ -180,43 +180,55 @@ workers:
   # WITHIN the stage, a separate axis. Legacy flat keys (decomposer/…) still
   # work; this `stages:` grouping is the clean, standard-aligned shape.
   #
-  # MODELS — chain ORDER (primary first, fallbacks after):
-  # xiaomimimo/mimo-v2.5 is the PRIMARY everywhere: it is free (its own provider
-  # keys, not the throttled OpenRouter pool), it answers, and it goes THROUGH
-  # Bifrost (:8080 openai backend) — so the run actually exercises Xiaomi and
-  # its traffic is visible in Bifrost. claude/haiku is the FALLBACK (note: the
-  # claude path goes via the CLI/Meridian, NOT Bifrost — so when haiku runs it
-  # does not appear in Bifrost). The OpenRouter ':free' models stay LAST (the
-  # pool currently answers 429); they re-enter only when it recovers.
-  #
-  # PROVIDERS: a specialist need not be a raw LLM. The implement team is a MIX —
-  # architect/coder run as local LLMs on mimo, `tester` runs on a HERMES agent
-  # and `fixer` on a MISSION-CONTROL agent (the provider seam, doc §3/§4). Each
-  # remote specialist carries a `model:` used as a graceful fallback if its
-  # service is unreachable (a provider_fallback event records the gap).
-  defaults:
-    models: ["xiaomimimo/mimo-v2.5", "claude/haiku", "openrouter/qwen/qwen3-coder:free"]
+  # MODELS — deliberately asymmetric by task DIFFICULTY (p6 tests the engine's
+  # MODEL-INDEPENDENCE). Strength ladder (weak→strong):
+  #   claude/haiku  — COMPACT, weak (fast, 200k ctx)
+  #   xiaomimimo/mimo-v2.5     — FLAGSHIP MoE (~1T params / 42B active), STRONG
+  #   xiaomimimo/mimo-v2.5-pro — the STRONGEST
+  #   (openrouter qwen:free is weaker still, but the pool currently 429s).
+  # Placement:
+  #   * HARD generative work (decompose, implement, architect, coder, fixer) →
+  #     lead with the WEAK model (claude/haiku). A weak BUILDER that still yields
+  #     a correct product proves the ENGINE carries quality, not the model.
+  #   * CHECKS / gates (review, verify, tester) → lead with the STRONG model
+  #     (mimo-v2.5; the final verify gate uses the strongest, mimo-v2.5-pro) so the
+  #     judge of the weak builder's output is sharp.
+  # NB claude/haiku runs via the CLI/Meridian (NOT Bifrost); mimo runs via Bifrost
+  # — so the Xiaomi traffic visible in Bifrost is the CHECK calls (review/verify/
+  # tester), by design.
+  # RULE OF THUMB for picking a model per STAGE and per ROLE:
+  #   difficulty of the work  →  model strength
+  #   ───────────────────────────────────────────
+  #   HARD (build/design/repair: decompose, implement, architect, coder, fixer)
+  #        → WEAK model (claude/haiku) leads; stronger model only as fallback.
+  #   CHECK (judge/gate: review, verify, tester)
+  #        → STRONG model (mimo-v2.5) leads; the final verify gate uses the
+  #          STRONGEST (mimo-v2.5-pro). Weak model only as fallback.
+  #   The 3rd entry in each list is the quota fallback (OpenRouter ':free').
+  defaults:                             # shared chain when a stage adds no override
+    models: ["claude/haiku", "xiaomimimo/mimo-v2.5", "openrouter/qwen/qwen3-coder:free"]
   stages:
-    decompose:                          # mimo (via Bifrost) primary; haiku fallback; OR free last
-      models: ["xiaomimimo/mimo-v2.5", "claude/haiku", "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"]
-    implement:
-      models: ["xiaomimimo/mimo-v2.5", "claude/haiku", "openrouter/qwen/qwen3-coder:free"]
-      # MIXED team: local LLMs (on mimo, so they flow through Bifrost) + a Hermes
-      # agent + a Mission-Control agent. Secrets (token/api_key) are NEVER in
-      # this file — the adapter reads them from the environment; without them the
-      # remote call degrades to the local model.
+    decompose:                          # HARD (build the tree) → weak (haiku) leads; mimo fallback
+      models: ["claude/haiku", "xiaomimimo/mimo-v2.5", "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"]
+    implement:                          # HARD (write the leaf) → weak (haiku) leads; mimo fallback
+      models: ["claude/haiku", "xiaomimimo/mimo-v2.5", "openrouter/qwen/qwen3-coder:free"]
+      # MIXED team, difficulty-based: architect/coder/fixer (build/repair = HARD)
+      # lead WEAK (haiku); tester (a CHECK) leads STRONG (mimo-v2.5). tester runs
+      # on a HERMES agent, fixer on a MISSION-CONTROL agent (provider seam, §3/§4);
+      # secrets are NEVER in this file — an unreachable service degrades to the
+      # listed `model:`.
       team:
         specialists:
-          - {role: architect, model: "xiaomimimo/mimo-v2.5", params: {temperature: 0.2}}
-          - {role: coder,     model: "xiaomimimo/mimo-v2.5", params: {temperature: 0.4, max_tokens: 4000}}
+          - {role: architect, model: "claude/haiku", params: {temperature: 0.2}}        # hard → weak
+          - {role: coder,     model: "claude/haiku", params: {temperature: 0.4, max_tokens: 4000}}  # hard → weak
           - {role: tester,    provider: hermes,          agent: "tester",
-             gateway: "http://127.0.0.1:8642", model: "xiaomimimo/mimo-v2.5"}
+             gateway: "http://127.0.0.1:8642", model: "xiaomimimo/mimo-v2.5"}            # check → strong
           - {role: fixer,     provider: mission-control, agent_template: "fixer",
-             api: "http://127.0.0.1:3000", model: "xiaomimimo/mimo-v2.5"}
-    review:                             # mimo (via Bifrost) primary; haiku fallback; OR free last
+             api: "http://127.0.0.1:3000", model: "claude/haiku"}                         # hard → weak
+    review:                             # CHECK → strong (mimo-v2.5) leads; haiku fallback
       models: ["xiaomimimo/mimo-v2.5", "claude/haiku", "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"]
-    verify:                             # mimo (via Bifrost) primary; haiku fallback; OR free last
-      models: ["xiaomimimo/mimo-v2.5", "claude/haiku", "openrouter/qwen/qwen3-coder:free"]
+    verify:                             # CHECK / final gate → strongest (mimo-pro) leads
+      models: ["xiaomimimo/mimo-v2.5-pro", "xiaomimimo/mimo-v2.5", "claude/haiku"]
   #
   # SONNET-PRIMARY (diagnostic — commented): sonnet via claude-cli subscription.
   # defaults: {models: ["claude/sonnet", "openrouter/qwen/qwen3-coder:free", "claude/haiku"]}
