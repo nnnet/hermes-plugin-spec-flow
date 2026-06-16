@@ -1603,6 +1603,12 @@ class Engine:
         return {"id": "product_entry",
                 "title": "Assemble product entry (" + entry + ")",
                 "spec_markdown": spec_md, "atomic": True,
+                # The assembly leaf has a FIXED, engine-declared target (src/app.py);
+                # it must never be amend-routed into a feature module. Without this
+                # the late-injection router once mis-folded it into src/database_layer
+                # (harmless only because the spec still forces app.py) — an entry
+                # written into a storage module is a real corruption risk.
+                "_no_amend": True,
                 "metrics": {"modules": 1, "tasks": 2, "interfaces": 1,
                             "estimated_loc": 60, "open_decisions": 0,
                             "single_concern": True,
@@ -2604,7 +2610,9 @@ class Engine:
                 # B3: deterministically route a same-surface requirement to
                 # EDIT the existing owner module (code_target). The node keeps
                 # its own spec; only its code output goes into the owner file.
-                amend = self._amend_target(extra)
+                # Nodes with a fixed engine target (the assembly entry) are
+                # exempt — they own a declared path and must not be re-routed.
+                amend = None if extra.get("_no_amend") else self._amend_target(extra)
                 if amend:
                     extra["code_target"] = amend
                     try:

@@ -120,3 +120,51 @@ def test_assembly_skipped_when_entry_already_built(tmp_path, monkeypatch):
                           workspace=str(tmp_path / "wk"), depth="execute",
                           agents={"implementer": implementer})
     assert "product_entry" not in _children_ids(res.project["tree"], "L0")
+
+
+def test_assembly_node_carries_no_amend_marker():
+    # The assembly leaf owns a FIXED engine target (src/app.py); it must be
+    # flagged exempt so late-injection routing never re-points it.
+    import os as _os
+    _os.environ["SPEC_FLOW_PRE_GATE"] = "1"
+    try:
+        e = eng.Engine.__new__(eng.Engine)
+        e._constitution = _CONSTITUTION
+        e.workspace = type("W", (), {"root": "/tmp"})()
+        node = e._assembly_node()
+        assert node and node.get("_no_amend") is True
+    finally:
+        _os.environ.pop("SPEC_FLOW_PRE_GATE", None)
+
+
+def test_assembly_entry_is_never_amend_routed(tmp_path, monkeypatch):
+    # Even with the late-injection matcher armed and FORCED to return a target
+    # for any node, the assembly entry must NOT be re-routed — its code stays
+    # src/app.py. Guards the live v020 miss (product_entry mis-AMENDed into
+    # src/database_layer.py; harmless only because the spec still forced app.py).
+    monkeypatch.setenv("SPEC_FLOW_PRE_GATE", "1")
+    monkeypatch.setenv("SPEC_FLOW_REQ_AMEND", "1")
+    # any node reaching the matcher would be routed into src/db.py
+    monkeypatch.setattr(eng.Engine, "_amend_target",
+                        lambda self, node: "src/db.py")
+    built = {}
+
+    def implementer(ctx):
+        root = pathlib.Path(ctx["workspace"].root)
+        (root / "src").mkdir(parents=True, exist_ok=True)
+        nid = ctx["node"]
+        mod = ctx.get("module") or nid
+        built[nid] = {"module": mod, "code_target": ctx.get("code_target")}
+        (root / "src" / f"{mod}.py").write_text("# stub\n", encoding="utf-8")
+        return {"files": [f"src/{mod}.py"]}
+
+    res = eng.run_project(_project(_CONSTITUTION),
+                          workspace=str(tmp_path / "wk"), depth="execute",
+                          agents={"implementer": implementer})
+    # the assembly leaf ran but was never handed a foreign code_target
+    assert "product_entry" in built
+    assert built["product_entry"]["code_target"] in (None, "", "src/app.py")
+    # and no AMEND milestone was emitted for it
+    assert not [e for e in res.events
+                if e.gate == "requirement" and e.verdict == "AMEND"
+                and e.task == "product_entry"]
