@@ -2,16 +2,16 @@
 the provider adapter (fake transport) instead of the local LLM, and the
 orchestra still completes.
 
-Hermetic: NO network, NO live LLM, NO pytest subprocess. The ONLY remote contact
-is a fake transport injected via ``rw.PROVIDER_TRANSPORT``; the orchestra's
-file/git/verify building blocks are stubbed exactly as in test_orchestra.
+The ONLY remote contact is a fake transport injected via ``rw.PROVIDER_TRANSPORT``.
+Everything else runs for REAL: a real git workspace, real file writes and a real
+pytest leaf bar — the adapter (or, on fallback, the local server) returns a
+RUNNABLE green leaf, so the verdict is a genuine pytest run, never a stub.
 
-This drives the REAL ``_call_model`` dispatch (not stubbed) so the provider seam
-is exercised end to end: a ``provider: hermes`` coder's reply comes from the
-adapter, the orchestra writes its files and finishes green — _orchestra_run is
-NOT edited.
+This drives the REAL ``_call_model`` dispatch so the provider seam is exercised
+end to end: a ``provider: hermes`` coder's reply comes from the adapter, the
+orchestra writes its files and verifies the leaf green — _orchestra_run is NOT
+edited.
 """
-import contextlib
 import json
 import pathlib
 import sys
@@ -19,20 +19,55 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from harness import role_worker as rw   # noqa: E402
 from harness import llm_backend as lb   # noqa: E402
+from harness import ws_tx               # noqa: E402
 from harness_fakeapi import ok          # noqa: E402
 
 
-@contextlib.contextmanager
-def _noop_tx(*a, **k):
-    yield object()
+# A real green leaf the orchestra can write and pass under a genuine pytest run.
+_SRC = "def leaf1():\n    return {n}\n"
+_TEST = ("import sys, pathlib\n"
+         "sys.path.insert(0, str(pathlib.Path(__file__).resolve()"
+         ".parents[1] / 'src'))\n"
+         "import leaf1\n"
+         "def test_leaf1():\n    assert leaf1.leaf1() == {n}\n")
+
+
+def _green(n):
+    return {"src/leaf1.py": _SRC.format(n=n),
+            "tests/test_leaf1.py": _TEST.format(n=n)}
+
+
+class _RealWS:
+    """A real workspace: writes land on disk so the orchestra's transaction,
+    pytest run and leaf bar all execute against real files."""
+    enabled = True
+
+    def __init__(self, root):
+        self.root = str(root)
+
+    def _write(self, rel, body, kind):
+        f = pathlib.Path(self.root) / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(body, encoding="utf-8")
+        return rel
 
 
 def _ctx(tmp_path):
-    ws = type("WS", (), {"root": str(tmp_path),
-                         "_write": lambda self, *a, **k: None})()
+    spec = pathlib.Path(tmp_path) / "specs" / "leaf1.md"
+    spec.parent.mkdir(parents=True, exist_ok=True)
+    spec.write_text("# Leaf One\nReturn a constant.\n", encoding="utf-8")
     return {"node": "leaf1", "title": "Leaf One", "depth": 2,
-            "workspace": ws, "spec": "specs/leaf1.md", "module": "leaf1",
-            "specialty": ""}
+            "workspace": _RealWS(tmp_path), "spec": "specs/leaf1.md",
+            "module": "leaf1", "specialty": ""}
+
+
+def _common(monkeypatch, tmp_path):
+    """Pin only the config seams; leave git/pytest/file writes REAL."""
+    ws_tx.ensure_repo(str(tmp_path))
+    monkeypatch.setattr(lb, "model_for", lambda *a, **k: "m")
+    monkeypatch.setattr(rw, "_model_for", lambda *a, **k: "m")
+    monkeypatch.setattr(rw, "load_skill_md", lambda s: "SYS")
+    monkeypatch.setattr(rw, "_ensemble_size", lambda: 1)
 
 
 def test_remote_coder_step_routes_through_adapter(monkeypatch, tmp_path,
@@ -41,25 +76,7 @@ def test_remote_coder_step_routes_through_adapter(monkeypatch, tmp_path,
     team = [{"role": "coder", "provider": "hermes",
              "gateway": "https://hx.example", "agent": "senior-dev"}]
     lb.configure_workers({"implementer": {"team": {"specialists": team}}})
-    monkeypatch.setattr(lb, "model_for", lambda *a, **k: "m")
-    monkeypatch.setattr(rw, "_model_for", lambda *a, **k: "m")
-    monkeypatch.setattr(rw, "load_skill_md", lambda s: "SYS")
-    monkeypatch.setattr(rw, "_inline_file", lambda root, rel: "SPEC BODY")
-    monkeypatch.setattr(rw, "_ensemble_size", lambda: 1)
-    # the orchestra building blocks (same stubs as test_orchestra)
-    import harness.ws_tx as wstx
-    monkeypatch.setattr(wstx, "transaction", _noop_tx)
-    import harness.pytest_verifier as pvmod
-    monkeypatch.setattr(pvmod, "run_suite", lambda *a, **k: (True, ""))
-    monkeypatch.setattr(pvmod, "_badness", lambda *a, **k: 0)
-    monkeypatch.setattr(rw, "_leaf_bar", lambda *a, **k: (True, "green"))
-
-    captured = {}
-
-    def _write(ws, files, fn):
-        captured["files"] = files
-        return bool(files)
-    monkeypatch.setattr(rw, "_write_reply_files", _write)
+    _common(monkeypatch, tmp_path)
 
     # point the real LLM door at a REAL local server: for a remote specialist
     # the local LLM must NEVER be called, so this server must receive zero hits.
@@ -70,7 +87,7 @@ def test_remote_coder_step_routes_through_adapter(monkeypatch, tmp_path,
     def transport(url, *, method="GET", headers=None, body=None, timeout=30.0):
         sent.append({"url": url, "method": method,
                      "body": json.loads(body) if body else None})
-        return 200, json.dumps({"files": {"src/leaf1.py": "def leaf1():\n    return 1\n"}})
+        return 200, json.dumps({"files": _green(1)})
     monkeypatch.setattr(rw, "PROVIDER_TRANSPORT", transport)
 
     rw._orchestra_run(_ctx(tmp_path), str(tmp_path), "leaf1", "leaf1",
@@ -82,8 +99,9 @@ def test_remote_coder_step_routes_through_adapter(monkeypatch, tmp_path,
     assert sent and sent[0]["method"] == "POST"
     assert sent[0]["url"] == "https://hx.example/v1/agents/senior-dev/messages"
     assert sent[0]["body"]["role"] == "coder"
-    # ... and the adapter's files were written by the orchestra
-    assert captured["files"] == {"src/leaf1.py": "def leaf1():\n    return 1\n"}
+    # ... and the adapter's files were written for real by the orchestra ...
+    body = (tmp_path / "src" / "leaf1.py").read_text(encoding="utf-8")
+    assert "def leaf1():\n    return 1\n" in body
     # ... and the local LLM door was genuinely never touched
     assert srv.call_count == 0, "local LLM was hit for a remote specialist"
 
@@ -91,40 +109,31 @@ def test_remote_coder_step_routes_through_adapter(monkeypatch, tmp_path,
 def test_remote_specialist_falls_back_to_local_when_unreachable(monkeypatch, tmp_path,
                                                                 fake_openai):
     # A remote specialist whose service is DOWN must DEGRADE to its local model,
-    # not fail the leaf — and the degradation is recorded as provider_fallback.
+    # not fail the leaf — and the degradation is recorded as an llm_fallback hop.
     team = [{"role": "coder", "provider": "hermes",
              "gateway": "https://hx.example", "agent": "senior-dev",
              "model": "openrouter/qwen/qwen3-coder:free"}]
     lb.configure_workers({"implementer": {"team": {"specialists": team}}})
-    monkeypatch.setattr(lb, "model_for", lambda *a, **k: "m")
-    monkeypatch.setattr(rw, "_model_for", lambda *a, **k: "m")
-    monkeypatch.setattr(rw, "load_skill_md", lambda s: "SYS")
-    monkeypatch.setattr(rw, "_inline_file", lambda root, rel: "SPEC BODY")
-    monkeypatch.setattr(rw, "_ensemble_size", lambda: 1)
+    _common(monkeypatch, tmp_path)
     # the local fallback path is the chat backend (NOT the claude CLI subprocess)
     monkeypatch.setattr(rw, "_chat_only", lambda: True)
-    import harness.ws_tx as wstx
-    monkeypatch.setattr(wstx, "transaction", _noop_tx)
-    import harness.pytest_verifier as pvmod
-    monkeypatch.setattr(pvmod, "run_suite", lambda *a, **k: (True, ""))
-    monkeypatch.setattr(pvmod, "_badness", lambda *a, **k: 0)
-    monkeypatch.setattr(rw, "_leaf_bar", lambda *a, **k: (True, "green"))
-
-    captured = {}
-    monkeypatch.setattr(rw, "_write_reply_files",
-                        lambda ws, files, fn: captured.update(files=files) or bool(files))
+    monkeypatch.setattr(
+        rw.llm_backend, "chain_for",
+        lambda role, specialty="": ["openrouter/qwen/qwen3-coder:free"])
 
     # local LLM IS the fallback target — the REAL door hits a real local server
-    # (the specialist's model is a free id, so the free-only gate lets it run).
-    srv = fake_openai([(200, ok(json.dumps(
-        {"files": {"src/leaf1.py": "def leaf1():\n    return 2\n"}})))])
+    # (the specialist's model is a free id, so the free-only gate lets it run),
+    # returning a runnable green leaf that passes a genuine pytest run.
+    srv = fake_openai([(200, ok(json.dumps({"files": _green(2)})))])
 
     # the remote transport is DOWN (HTTP 500) → adapter raises → fallback fires
     monkeypatch.setattr(rw, "PROVIDER_TRANSPORT",
                         lambda url, **k: (500, '{"error": "upstream down"}'))
 
     events = []
-    monkeypatch.setattr(rw.llm_log, "log", lambda e: events.append(e))
+    _orig_log = rw.llm_log.log
+    monkeypatch.setattr(rw.llm_log, "log",
+                        lambda e: events.append(e) or _orig_log(e))
 
     rw._orchestra_run(_ctx(tmp_path), str(tmp_path), "leaf1", "leaf1",
                       system="SYS", allowed=[], disallowed=[],
@@ -132,7 +141,8 @@ def test_remote_specialist_falls_back_to_local_when_unreachable(monkeypatch, tmp
     lb.configure_workers(None)
 
     assert srv.call_count >= 1, "remote down must fall back to the local model"
-    assert captured.get("files") == {"src/leaf1.py": "def leaf1():\n    return 2\n"}
+    body = (tmp_path / "src" / "leaf1.py").read_text(encoding="utf-8")
+    assert "def leaf1():\n    return 2\n" in body
     # Phase 2: the provider is the chain's first link inside the single door, so
     # the degradation is one of ask()'s normal llm_fallback hops (carrying the
     # provider name), not a private provider_fallback bypass event.
