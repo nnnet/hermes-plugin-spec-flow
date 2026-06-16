@@ -1,0 +1,22 @@
+tests/coverage/test_assembly_node.py
+  s_a7f45290e91181::t_b6d57b5730c15b 140-169
+spec_flow_runner.py
+  s_a7f45290e91181::t_e199af9bbab023 30
+  s_a7f45290e91181::t_cff216bb01c0e2 1769-1775,1788-1789,1794-1798,1805-1838
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.7",
+  "base_commit_sha": "9915e8544a7cce51dd236a730656db15f97a15e3",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
