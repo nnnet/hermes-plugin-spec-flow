@@ -273,7 +273,8 @@ class QuotaExhausted(RuntimeError):
 
 def _ask_one(prompt: str, model: str, system: str | None,
              fallback: bool, timeout: int | None = None,
-             params: dict | None = None) -> str:
+             params: dict | None = None, tools: dict | None = None,
+             cwd: str | None = None) -> str:
     """Route ONE model of a chain to its provider; QuotaExhausted bubbles
     up so the caller can walk the rest of the chain.
 
@@ -300,14 +301,30 @@ def _ask_one(prompt: str, model: str, system: str | None,
                                base_url=gw["base_url"],
                                api_key=gw.get("api_key"))
         # default: the subscription CLI. 'direct' bypasses the gateway override
-        # so a broken proxy can't take the fallback down.
+        # so a broken proxy can't take the fallback down. tools/cwd carry the
+        # agentic worker policy through to the CLI session.
         last_call.update(backend="claude", model=cli_model,
                          fallback=fallback)
         return _ask_claude(prompt, cli_model, system=system, direct=True,
-                           timeout=timeout)
+                           timeout=timeout, allowed=(tools or {}).get("allowed"),
+                           disallowed=(tools or {}).get("disallowed"), cwd=cwd)
     if BACKEND != "openai":
+        # the agentic claude backend (non-chat workers run the CLI with tools).
+        # When a gateway is configured it joins the SAME real HTTP path — so an
+        # agentic decomposer's assembled system+prompt are exercisable over a
+        # real socket without spawning a CLI; otherwise the subscription CLI runs
+        # the tool-enabled session.
+        gw = _claude_gateway()
+        if gw:
+            mapped = (gw.get("model_map") or {}).get(model, model)
+            last_call.update(backend="claude-http", model=mapped,
+                             fallback=fallback)
+            return _ask_openai(prompt, mapped, system=system, params=params,
+                               base_url=gw["base_url"], api_key=gw.get("api_key"))
         last_call.update(backend="claude", model=model, fallback=fallback)
-        return _ask_claude(prompt, model, system=system)
+        return _ask_claude(prompt, model, system=system, timeout=timeout,
+                           allowed=(tools or {}).get("allowed"),
+                           disallowed=(tools or {}).get("disallowed"), cwd=cwd)
     if not _is_free_model(model) and not ALLOW_PAID:
         raise ValueError(
             f"paid model '{model}' is forbidden for test runs — only free"
@@ -392,7 +409,8 @@ def _log_token_usage(model: str, usage: dict,
 def ask(prompt: str, *, model: str, role: str, step: str,
         system: str | None = None, fallbacks: tuple | list = (),
         params: dict | None = None, meta: dict | None = None,
-        provider: str = "", provider_call=None) -> str:
+        provider: str = "", provider_call=None,
+        tools: dict | None = None, cwd: str | None = None) -> str:
     """Send one prompt, return the reply text.
 
     ``role`` (the pipeline STAGE: decomposer/implementer/reviewer/verifier) and
@@ -494,6 +512,10 @@ def ask(prompt: str, *, model: str, role: str, step: str,
     # as before. Hoisted here so both the chain loop and the terminal-fallback
     # rotation below see it.
     extra = {"params": params} if params else {}
+    if tools:   # agentic claude worker tool policy → threaded to _ask_one
+        extra["tools"] = tools
+    if cwd:
+        extra["cwd"] = cwd
     # PROVIDER folded INTO the single door (Phase 2): when a remote specialist
     # supplies an adapter call, it is the FIRST link of the chain — tried before
     # any local model. If the remote is unreachable or its contract differs, the
@@ -645,13 +667,25 @@ def _claude_gateway() -> dict | None:
 
 # ── claude CLI (fallback; gateway via ANTHROPIC_BASE_URL env) ────────────────
 def _ask_claude(prompt: str, model: str, system: str | None = None,
-                direct: bool = False, timeout: int | None = None) -> str:
-    """``direct=True`` strips the gateway override (ANTHROPIC_BASE_URL):
-    the exhaustion fallback is the SUBSCRIPTION — a broken/limited gateway
-    must not take the fallback down with it (a 403 via Bifrost once killed
-    a whole run while `claude` direct worked fine)."""
+                direct: bool = False, timeout: int | None = None,
+                allowed: list[str] | None = None,
+                disallowed: list[str] | None = None,
+                cwd: str | None = None) -> str:
+    """The claude CLI backend. ``direct=True`` strips the gateway override
+    (ANTHROPIC_BASE_URL): the exhaustion fallback is the SUBSCRIPTION — a
+    broken/limited gateway must not take the fallback down with it (a 403 via
+    Bifrost once killed a whole run while `claude` direct worked fine).
+
+    ``allowed``/``disallowed``/``cwd`` turn this into the AGENTIC worker session
+    (Phase 4): the tool policy becomes --allowedTools/--disallowedTools and the
+    session runs in the worker's workspace, so the non-chat path is ONE backend
+    under the single door (formerly role_worker._run_claude)."""
     last = ""
     extra = ["--append-system-prompt", system] if system else []
+    if allowed:
+        extra += ["--allowedTools", ",".join(allowed)]
+    if disallowed:
+        extra += ["--disallowedTools", ",".join(disallowed)]
     env = None
     if direct:
         env = {k: v for k, v in os.environ.items()
@@ -675,7 +709,7 @@ def _ask_claude(prompt: str, model: str, system: str | None = None,
                 [*claude_cli.claude_cmd(), "-p", "--model", model,
                  *extra, *claude_cli.mcp_args_no_serena()],
                 input=prompt, capture_output=True, text=True,
-                timeout=timeout, cwd=claude_cli.agent_cwd(), env=env)
+                timeout=timeout, cwd=cwd or claude_cli.agent_cwd(), env=env)
         except subprocess.TimeoutExpired:
             # a HUNG claude CLI (huge MCP system prompt load) must be a
             # retriable provider failure, NOT a fatal escape — v19 died

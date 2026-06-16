@@ -284,18 +284,20 @@ def _call_model(prompt: str, *, system: str, allowed: list[str],
                                    step=step, params=params, meta=ask_meta,
                                    provider=provider if remote else "",
                                    provider_call=_provider_call if remote else None)
-        # non-chat (claude agentic CLI) path: the provider still degrades to the
-        # local CLI here until Phase 4 moves _run_claude into the door too.
-        if remote:
-            try:
-                return _provider_call(p)
-            except Exception as exc:  # noqa: BLE001 — remote down → local CLI
-                llm_log.log({"event": "provider_fallback", "provider": provider,
-                             "role": role or "",
-                             "step": (meta or {}).get("step", ""),
-                             "model": model, "error": str(exc)[:200]})
-        return _run_claude(p, system=system, allowed=allowed,
-                           disallowed=disallowed, cwd=cwd, model=model)
+        # non-chat (claude agentic CLI) path — now ALSO through the SINGLE door
+        # (Phase 4): the tool policy + workspace ride into ask() as tools/cwd, so
+        # the agentic session is one claude backend under the door with the same
+        # call_start/ok logging, and the provider is the chain's first link just
+        # like the chat path (no private provider_fallback bypass left).
+        step = (meta or {}).get("step", "")
+        ask_meta = {"node": (meta or {}).get("node", ""), "specialty": specialty}
+        return llm_backend.ask(p, model=model, system=system,
+                               role=role or "decomposer", step=step,
+                               params=params, meta=ask_meta,
+                               tools={"allowed": allowed,
+                                      "disallowed": disallowed}, cwd=cwd,
+                               provider=provider if remote else "",
+                               provider_call=_provider_call if remote else None)
 
     # The SINGLE door (llm_backend.ask) logs call_start/ok/error itself, so the
     # chat path needs no wrapper. The claude-CLI branch is consolidated into the
@@ -316,24 +318,9 @@ def _inline_file(root: Optional[str], rel: str) -> str:
 
 
 
-def _run_claude(prompt: str, *, system: str, allowed: list[str],
-                disallowed: list[str], cwd: Optional[str], model: str) -> str:
-    """One real worker session. Separated for offline test stubbing."""
-    cmd = [*claude_cli.claude_cmd(), "-p", "--model", model,
-           "--append-system-prompt", system,
-           *claude_cli.mcp_args_no_serena()]
-    if allowed:
-        cmd += ["--allowedTools", ",".join(allowed)]
-    if disallowed:
-        cmd += ["--disallowedTools", ",".join(disallowed)]
-    last = ""
-    for _ in range(RETRIES):
-        proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
-                              timeout=TIMEOUT, cwd=cwd or claude_cli.agent_cwd())
-        if proc.returncode == 0 and proc.stdout.strip():
-            return claude_cli.strip_headroom_banner(proc.stdout)
-        last = (proc.stderr or proc.stdout)[-300:]
-    raise RuntimeError(f"worker session failed after {RETRIES} tries: {last}")
+# NOTE: the agentic worker session (formerly _run_claude) now lives in
+# llm_backend._ask_claude as the claude backend — the non-chat path routes
+# through the SINGLE door llm_backend.ask(..., tools=, cwd=) (Phase 4).
 
 
 def _extract_json(text: str) -> dict:

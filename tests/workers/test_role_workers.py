@@ -44,6 +44,22 @@ def _gw(srv, **extra):
     return cfg
 
 
+def _agw(srv):
+    """Agentic-worker config: BACKEND=claude (non-chat path) routed through the
+    gateway, with NO openrouter pool (the claude model is not pool-validated)."""
+    return {"claude_gateway": {"base_url": srv.base_url}, "backend": "claude"}
+
+
+def _wire(srv, i=0):
+    """The (system, user-prompt) the harness actually put on the wire for the
+    i-th request — used to assert an agentic worker's assembled prompt without
+    stubbing the door (the agentic claude path runs through the gateway here)."""
+    msgs = srv.requests[i]["messages"]
+    system = next((m["content"] for m in msgs if m["role"] == "system"), "")
+    prompt = next((m["content"] for m in msgs if m["role"] == "user"), "")
+    return system, prompt
+
+
 @pytest.fixture(autouse=True)
 def _reset_backend_state():
     # a migrated test may configure a claude_gateway or trip a real 429 cooldown
@@ -114,38 +130,40 @@ def test_disabled_wins_over_enabled_overlap():
 # ── worker assembly uses the real skill text ────────────────────────────
 
 
-def test_worker_session_gets_real_skill_md(monkeypatch):
-    captured = {}
-
-    def fake_run(prompt, *, system, allowed, disallowed, cwd, model):
-        captured.update(system=system, allowed=allowed, prompt=prompt)
-        return '{"atomic": true, "metrics": {"modules": 1, "tasks": 2, ' \
-               '"interfaces": 1, "estimated_loc": 50, "open_decisions": 0, ' \
-               '"single_concern": true, "testable_criteria": true}}'
-
-    monkeypatch.setattr(rw, "_run_claude", fake_run)
+def test_worker_session_gets_real_skill_md(fake_openai):
+    # the AGENTIC decomposer (non-chat, BACKEND=claude) now runs through the
+    # single door; routed via the gateway its assembled system+prompt land on a
+    # real socket, so we read them off the wire instead of stubbing the runner.
+    from harness import llm_backend as lb
+    srv = fake_openai([(200, ok(
+        '{"atomic": true, "metrics": {"modules": 1, "tasks": 2, '
+        '"interfaces": 1, "estimated_loc": 50, "open_decisions": 0, '
+        '"single_concern": true, "testable_criteria": true}}'))])
+    lb.configure_workers(_agw(srv))
     dec = rw.make_decomposer()
     out = dec({"project": {"goal": "g", "target": "t", "constitution": []},
                "node": {"id": "n1", "title": "Node"}, "parent": None,
                "depth": 1, "ancestors": ["Root"],
                "existing_nodes": [{"id": "a", "title": "A"}]})
     assert out["atomic"] is True
+    system, prompt = _wire(srv)
     # system prompt is the SKILL.md verbatim (not a paraphrase), with the
     # configured-language directive appended
     real_md = rw.load_skill_md("spec-flow-decompose")
-    assert captured["system"].startswith(real_md)
-    assert "Working language" in captured["system"]
+    assert system.startswith(real_md)
+    assert "Working language" in system
     # tree context made it into the task prompt
-    assert "a (A)" in captured["prompt"] and "Root" in captured["prompt"]
+    assert "a (A)" in prompt and "Root" in prompt
 
 
-def test_leaf_depth_clamp_drops_children(monkeypatch):
-    def fake_run(prompt, **kw):
-        return '{"atomic": false, "metrics": {"modules": 2, "tasks": 9, ' \
-               '"interfaces": 2, "estimated_loc": 400, "open_decisions": 0, ' \
-               '"single_concern": false, "testable_criteria": true}, ' \
-               '"children": [{"id": "x", "title": "X"}]}'
-    monkeypatch.setattr(rw, "_run_claude", fake_run)
+def test_leaf_depth_clamp_drops_children(fake_openai):
+    from harness import llm_backend as lb
+    srv = fake_openai([(200, ok(
+        '{"atomic": false, "metrics": {"modules": 2, "tasks": 9, '
+        '"interfaces": 2, "estimated_loc": 400, "open_decisions": 0, '
+        '"single_concern": false, "testable_criteria": true}, '
+        '"children": [{"id": "x", "title": "X"}]}'))])
+    lb.configure_workers(_agw(srv))
     dec = rw.make_decomposer()
     out = dec({"project": {"goal": "g", "target": "", "constitution": []},
                "node": {"id": "deep", "title": "Deep"}, "parent": "p",
@@ -237,19 +255,15 @@ class _FakeChannel:
         self.replies.append((role, node, position, response, note))
 
 
-def test_worker_question_gets_human_answer(monkeypatch):
-    calls = []
-
-    def fake_run(prompt, **kw):
-        calls.append(prompt)
-        if len(calls) == 1:
-            return '{"question": "Which currency for payouts?"}'
-        assert "HUMAN ANSWER: EUR only" in prompt
-        return '{"atomic": true, "metrics": {"modules": 1, "tasks": 2, ' \
-               '"interfaces": 1, "estimated_loc": 40, "open_decisions": 0, ' \
-               '"single_concern": true, "testable_criteria": true}}'
-
-    monkeypatch.setattr(rw, "_run_claude", fake_run)
+def test_worker_question_gets_human_answer(fake_openai):
+    from harness import llm_backend as lb
+    _atomic = ('{"atomic": true, "metrics": {"modules": 1, "tasks": 2, '
+               '"interfaces": 1, "estimated_loc": 40, "open_decisions": 0, '
+               '"single_concern": true, "testable_criteria": true}}')
+    # 1st reply asks a question, the re-run (with the human answer) is atomic.
+    srv = fake_openai([(200, ok('{"question": "Which currency for payouts?"}')),
+                       (200, ok(_atomic))])
+    lb.configure_workers(_agw(srv))
     chan = _FakeChannel(answer="EUR only")
     dec = rw.make_decomposer(channel=chan)
     out = dec({"project": {"goal": "g", "target": "", "constitution": []},
@@ -257,38 +271,34 @@ def test_worker_question_gets_human_answer(monkeypatch):
                "depth": 1})
     assert out["atomic"] is True
     assert chan.asked == [("decomposer", "pay", "Which currency for payouts?")]
-    assert len(calls) == 2
+    assert srv.call_count == 2
+    assert "HUMAN ANSWER: EUR only" in _wire(srv, 1)[1]
 
 
-def test_worker_question_without_answer_proceeds(monkeypatch):
-    calls = []
-
-    def fake_run(prompt, **kw):
-        calls.append(prompt)
-        if len(calls) == 1:
-            return '{"question": "Stripe or Adyen?"}'
-        assert "Proceed on your own best" in prompt
-        return '{"atomic": true, "metrics": {"modules": 1, "tasks": 1, ' \
-               '"interfaces": 0, "estimated_loc": 20, "open_decisions": 0, ' \
-               '"single_concern": true, "testable_criteria": true}}'
-
-    monkeypatch.setattr(rw, "_run_claude", fake_run)
+def test_worker_question_without_answer_proceeds(fake_openai):
+    from harness import llm_backend as lb
+    _atomic = ('{"atomic": true, "metrics": {"modules": 1, "tasks": 1, '
+               '"interfaces": 0, "estimated_loc": 20, "open_decisions": 0, '
+               '"single_concern": true, "testable_criteria": true}}')
+    srv = fake_openai([(200, ok('{"question": "Stripe or Adyen?"}')),
+                       (200, ok(_atomic))])
+    lb.configure_workers(_agw(srv))
     dec = rw.make_decomposer(channel=_FakeChannel(answer=None))
     out = dec({"project": {"goal": "g", "target": "", "constitution": []},
                "node": {"id": "n", "title": "N"}, "parent": None, "depth": 1})
-    assert out["atomic"] is True and len(calls) == 2
+    assert out["atomic"] is True and srv.call_count == 2
+    assert "Proceed on your own best" in _wire(srv, 1)[1]
 
 
-def test_operator_note_comply_recorded(monkeypatch):
-    def fake_run(prompt, **kw):
-        assert "OPERATOR NOTE" in prompt and "no crypto payouts" in prompt
-        return '{"atomic": true, "metrics": {"modules": 1, "tasks": 1, ' \
-               '"interfaces": 0, "estimated_loc": 20, "open_decisions": 0, ' \
-               '"single_concern": true, "testable_criteria": true}, ' \
-               '"operator_reply": {"position": "comply", ' \
-               '"response": "dropping crypto rail from scope"}}'
-
-    monkeypatch.setattr(rw, "_run_claude", fake_run)
+def test_operator_note_comply_recorded(fake_openai):
+    from harness import llm_backend as lb
+    srv = fake_openai([(200, ok(
+        '{"atomic": true, "metrics": {"modules": 1, "tasks": 1, '
+        '"interfaces": 0, "estimated_loc": 20, "open_decisions": 0, '
+        '"single_concern": true, "testable_criteria": true}, '
+        '"operator_reply": {"position": "comply", '
+        '"response": "dropping crypto rail from scope"}}'))])
+    lb.configure_workers(_agw(srv))
     chan = _FakeChannel()
     chan.note = "no crypto payouts"
     dec = rw.make_decomposer(channel=chan)
@@ -298,6 +308,8 @@ def test_operator_note_comply_recorded(monkeypatch):
     assert chan.replies == [("decomposer", "n", "comply",
                              "dropping crypto rail from scope",
                              "no crypto payouts")]
+    # the operator note was injected into the worker's prompt on the wire
+    assert "OPERATOR NOTE" in _wire(srv)[1] and "no crypto payouts" in _wire(srv)[1]
 
 
 def test_human_channel_files(tmp_path):
@@ -594,7 +606,8 @@ def test_fallback_goes_direct_past_the_gateway(monkeypatch):
                             lb.QuotaExhausted("dry")))
     seen = {}
 
-    def fake_claude(prompt, model, system=None, direct=False, timeout=None):
+    def fake_claude(prompt, model, system=None, direct=False, timeout=None,
+                    allowed=None, disallowed=None, cwd=None):
         seen["direct"] = direct
         return "ok"
 
