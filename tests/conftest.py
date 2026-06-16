@@ -121,3 +121,42 @@ def fake_openai():
         setattr(lb, k, v)
     for srv in started:
         srv.__exit__(None, None, None)
+
+
+@pytest.fixture
+def real_bifrost():
+    """Point the backend at the REAL running bifrost gateway with a small XIAOMI
+    model (no fake at all). Skips if the gateway is unreachable. Returns the
+    model id to pass to ask(). For genuine end-to-end smoke of the live path."""
+    import urllib.request
+
+    from harness import llm_backend as lb
+
+    base = "http://127.0.0.1:8080/v1"
+    model = "openrouter/xiaomi/mimo-v2-flash"
+    try:
+        urllib.request.urlopen(base + "/models", timeout=5).read()
+    except Exception:  # noqa: BLE001
+        pytest.skip("bifrost gateway not reachable on 127.0.0.1:8080")
+    keys = ("BASE_URL", "BACKEND", "RETRIES", "ALLOW_PAID")
+    saved = {k: getattr(lb, k) for k in keys}
+    lb.BASE_URL, lb.BACKEND, lb.RETRIES, lb.ALLOW_PAID = base, "openai", 2, True
+    yield model
+    for k, v in saved.items():
+        setattr(lb, k, v)
+
+
+@pytest.fixture
+def dead_endpoint():
+    """Point the backend at an UNREACHABLE address so a real call fails fast
+    with a real connection error (option 'a' — genuine network failure, no
+    fake). Use to verify error/fallback handling that only needs *a* failure."""
+    from harness import llm_backend as lb
+
+    keys = ("BASE_URL", "BACKEND", "RETRIES", "BACKOFF", "TIMEOUT")
+    saved = {k: getattr(lb, k) for k in keys}
+    lb.BASE_URL, lb.BACKEND = "http://127.0.0.1:9/v1", "openai"
+    lb.RETRIES, lb.BACKOFF, lb.TIMEOUT = 1, 0.01, 1
+    yield
+    for k, v in saved.items():
+        setattr(lb, k, v)
