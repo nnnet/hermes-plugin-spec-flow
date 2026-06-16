@@ -294,3 +294,30 @@ OS-сем `subprocess.run` в тесте зависшего CLI (инъекци�
 3. Фаза 3 (#77): `llm_attempt` на claude/provider + лог ответов (claude-http уже
    логирует llm_attempt через `_ask_openai`; CLI-путь — нет).
 4. Фаза 5 (#79): дашборд на унифицированные события + значок `⚙️` техн-инъекций.
+
+## PROGRESS 2026-06-16 (role_workers закрыт, #80 почти весь снят)
+
+### role_workers.py — 13 из 20 снесено (45ed51b)
+Все chat-тесты (implementer/reviewer/decomposer, prompt-capture, repair с
+реальным pytest) + quota→haiku фоллбек с кулдауном — на `fake_openai`/`_gw`/
+model-aware роутер + `_free_model` (резолвер роли на free id). Autouse-сброс
+`claude_gateway`+`_free_down_until`. ОСТАЛОСЬ 7: 5× агентский `_run_claude` +
+1 CLI-direct-bypass тест (`_ask_openai`/`_ask_claude`, проверяет direct=True
+обход шлюза) — все блокированы Фазой 4 ЧАСТЬ 2 (агентский claude в дверь).
+
+### Итог #80
+Снято полностью: test_llm_backend, test_cycle_fallbacks, test_specialist_config,
+test_spec_lint, test_memory_learning, test_parallel_children, test_pytest_verifier,
+test_memory_modes, test_orchestra_remote, **test_worker_config (21/21)**.
+Снято частично: **test_role_workers (13/20)** — 7 хвостов на Фазе 4 ч.2.
+Остатки-исключения (НЕ LLM-reply фейки): OS-сем `subprocess.run` (зависший CLI),
+CLI-direct-флаг. Полный набор зелёный: 886 (без live).
+
+### Осталось всего
+1. Фаза 4 ЧАСТЬ 2: агентский `_run_claude` (CLI+tools) в дверь как claude-бэкенд
+   → разблокирует 6 хвостов role_workers (5 _run_claude + CLI-direct). Рисковый
+   prod-путь non-chat режима — нужен живой headroom-haiku для верификации.
+2. Фаза 3 (#77): `llm_attempt` на claude-CLI пути + лог ответов (claude-http уже
+   логирует через `_ask_openai`).
+3. Фаза 5 (#79): дашборд на унифицированные события + значок `⚙️` техн-инъекций.
+4. #81: снос НЕ-ЛЛМ заглушек оркестра (реальный pytest/git) — отдельный пласт.
