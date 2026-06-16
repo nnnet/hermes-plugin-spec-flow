@@ -54,7 +54,8 @@ def _is_run_dir(p: pathlib.Path) -> bool:
 def _latest_run() -> pathlib.Path | None:
     """The run the dashboard auto-follows when nothing is pinned.
 
-    A LIVE run (its ``run.pid`` is alive) always wins over any finished run —
+    A LIVE run (no SUMMARY.md yet + a freshly-touched trace, see _run_active)
+    always wins over any finished run —
     even one with a newer directory mtime. Without this, a dead older run whose
     workspace was touched after a newer run started (observed: a stale
     ``v018`` mtime-bumped at 16:38 outranked the actually-running ``v020`` from
@@ -65,7 +66,7 @@ def _latest_run() -> pathlib.Path | None:
     dirs = [p for p in OUT_DIR.iterdir() if _is_run_dir(p)] if OUT_DIR.exists() else []
     if not dirs:
         return None
-    alive = [p for p in dirs if _pid_alive(p)]
+    alive = [p for p in dirs if _run_active(p)]
     return max(alive or dirs, key=lambda p: p.stat().st_mtime)
 
 
@@ -914,8 +915,13 @@ def _flow_html(events: list[dict], tree: dict | None,
 
 # ── state ────────────────────────────────────────────────────────────────────
 def _pid_alive(run_dir: "pathlib.Path | None") -> bool:
-    """True when the run's process (run.pid) is alive. Used to gate the
-    stop/run buttons: a run is 'active' only while its pid exists."""
+    """True when the run's process (run.pid) is alive. Used only for the
+    stop-signal mechanics, never for the liveness badge — see _run_active.
+
+    NOTE: run.pid stores os.getpid() as seen INSIDE the run's PID namespace
+    (a small number like 22 under a sandbox), so os.kill() from a dashboard in
+    another namespace tests an unrelated host PID and reports a dead run as
+    alive. Liveness for display/selection must therefore not rely on this."""
     if run_dir is None:
         return False
     pidf = run_dir / "run.pid"
@@ -926,6 +932,29 @@ def _pid_alive(run_dir: "pathlib.Path | None") -> bool:
         return True
     except (OSError, ValueError):
         return False
+
+
+# A run is live while it has not written its final SUMMARY.md and is still
+# emitting trace lines. The window must exceed the worst silent gap — a full
+# provider+model fallback chain on the slow free pool (~3 x 80s) — so an
+# actively-stalling run is not declared dead mid-call.
+_RUN_FRESH_S = 300.0
+
+
+def _run_active(run_dir: "pathlib.Path | None") -> bool:
+    """Namespace-proof liveness: no SUMMARY.md yet AND trace.jsonl was touched
+    within _RUN_FRESH_S. Unlike _pid_alive this never cross-checks a PID, so a
+    sandboxed run's namespace-local run.pid cannot masquerade as a live host
+    process (the false-'alive' a finished v022 showed)."""
+    if run_dir is None:
+        return False
+    if (run_dir / "SUMMARY.md").exists():
+        return False
+    try:
+        age = _time.time() - (run_dir / "trace.jsonl").stat().st_mtime
+    except OSError:
+        return False
+    return age < _RUN_FRESH_S
 
 
 def _build_state(run_dir: pathlib.Path) -> dict:
@@ -1107,7 +1136,7 @@ def _build_state(run_dir: pathlib.Path) -> dict:
         # actual process liveness (run.pid), not just trace state — gates the
         # dashboard's stop/run buttons. A killed/crashed run is NOT active even
         # if its last trace line never said 'done'.
-        "run_active": _pid_alive(run_dir),
+        "run_active": _run_active(run_dir),
         "goal": inputs_goal,
         "current": current,
         "active": active,

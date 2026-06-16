@@ -8,6 +8,7 @@ import json
 import os
 import pathlib
 import sys
+import time as _time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import live_dashboard as dash  # noqa: E402
@@ -51,18 +52,37 @@ def _isolate(tmp_path, monkeypatch):
 
 def test_latest_run_prefers_alive_over_newer_dead(tmp_path, monkeypatch):
     # The bug: a dead older run whose dir was mtime-bumped after a newer run
-    # started (stale v018 touched at 16:38 vs the running v020 from 16:22) was
-    # shown as 'live' because selection was pure newest-mtime. _latest_run must
-    # prefer the run whose run.pid is ALIVE, even with an older mtime — and be
-    # robust to duplicate vNNN labels across cases.
+    # started was shown as 'live' because selection was pure newest-mtime.
+    # Liveness is now namespace-proof (_run_active: no SUMMARY.md + fresh trace),
+    # NOT a run.pid os.kill — a finished run stays dead even if a leftover small
+    # run.pid happens to match a live host PID (the v022 false-'alive').
     out = _isolate(tmp_path, monkeypatch)
-    live = _mkrun(out, "2026-06-16T16-22-52__v020__p6-micro-notes")
-    (live / "run.pid").write_text(str(os.getpid()), encoding="utf-8")   # alive
+    live = _mkrun(out, "2026-06-16T16-22-52__v020__p6-micro-notes")     # no SUMMARY
     dead = _mkrun(out, "2026-06-16T13-13-55__v018__p6-micro-notes")
-    (dead / "run.pid").write_text("999999", encoding="utf-8")           # not alive
-    # make the DEAD run newer by mtime — it must still lose to the live one
-    os.utime(dead, None)
+    (dead / "SUMMARY.md").write_text("done\n", encoding="utf-8")        # finished
+    (dead / "run.pid").write_text("1", encoding="utf-8")               # tiny PID: a
+    #                                  live host process — must NOT read as alive
+    os.utime(dead, None)               # and make the DEAD run newer by mtime
     assert dash._latest_run() == live
+
+
+def test_run_active_is_namespace_proof(tmp_path, monkeypatch):
+    # A run with a finished SUMMARY is never active; a fresh trace with no
+    # SUMMARY is active; a stale trace (past the freshness window) is not —
+    # regardless of any run.pid value.
+    out = _isolate(tmp_path, monkeypatch)
+    fresh = _mkrun(out, "2026-06-16T16-00-00__v001__p6-micro-notes")
+    (fresh / "run.pid").write_text("22", encoding="utf-8")     # bogus tiny PID
+    assert dash._run_active(fresh) is True
+
+    done = _mkrun(out, "2026-06-16T16-00-00__v002__p6-micro-notes")
+    (done / "SUMMARY.md").write_text("done\n", encoding="utf-8")
+    assert dash._run_active(done) is False
+
+    stale = _mkrun(out, "2026-06-16T16-00-00__v003__p6-micro-notes")
+    old = _time.time() - dash._RUN_FRESH_S - 10
+    os.utime(stale / "trace.jsonl", (old, old))
+    assert dash._run_active(stale) is False
 
 
 def test_latest_run_newest_when_none_alive(tmp_path, monkeypatch):
