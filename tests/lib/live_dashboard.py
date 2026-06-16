@@ -255,7 +255,10 @@ def _tree_view(node: dict, meta: dict) -> dict:
     }
     if node.get("attached"):
         view["attached"] = True       # late-injected requirement node
-    if node.get("technical"):
+    # engine machinery (checkpoint/gate/assembly/...) gets the ⚙️ badge whether
+    # it was attached as an orphan OR appears as a real tree node — the name is
+    # authoritative, so a checkpoint never renders as a 📌 human injection.
+    if node.get("technical") or nid in _TECHNICAL_TASKS:
         view["technical"] = True      # engine machinery (⚙️, not a 📌 injection)
     if node.get("pending"):
         view["pending"] = True        # injected but not yet materialized

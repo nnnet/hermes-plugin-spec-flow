@@ -51,3 +51,17 @@ def test_agents_delegate_to_backend():
         src = pathlib.Path(mod.__file__).read_text(encoding="utf-8")
         assert "llm_backend" in src
         assert '"claude", "-p"' not in src and "claude_cmd" not in src
+
+
+def test_failure_reason_classifies_http_codes():
+    """The failure report must read a remote-agent error legibly: a 404 (no such
+    hermes/MC agent) surfaces its code instead of a generic 'error', while 5xx
+    keeps its bucket and quota/timeout/empty are unchanged."""
+    from harness import llm_backend as lb
+    assert lb._failure_reason(
+        RuntimeError("hermes agent tester returned HTTP 404: Not Found")) \
+        == "http 404"
+    assert lb._failure_reason("a2a tasks/send HTTP 502: bad gateway") == "5xx"
+    assert lb._failure_reason("rate limited 429 quota") == "429"
+    assert lb._failure_reason("connection timed out") == "timeout"
+    assert lb._failure_reason("some opaque failure") == "error"

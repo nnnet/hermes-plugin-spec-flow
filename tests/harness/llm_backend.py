@@ -784,9 +784,13 @@ def _failure_reason(exc: "Exception | str") -> str:
         return "timeout"
     if "empty" in s or "malformed" in s or "bad response" in s:
         return "empty"
-    mm = re.search(r"http (5\d\d)", s)
+    # any HTTP status (a remote provider/gateway error): keep the 5xx bucket but
+    # surface a specific 4xx code (e.g. a 404 'no such agent') instead of hiding
+    # it as a generic 'error' — an unreachable hermes/MC agent must be legible.
+    mm = re.search(r"http (\d\d\d)", s)
     if mm:
-        return "5xx"
+        code = mm.group(1)
+        return "5xx" if code[0] == "5" else f"http {code}"
     return "error"
 
 

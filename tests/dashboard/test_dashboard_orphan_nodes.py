@@ -77,3 +77,16 @@ def test_engine_machinery_marked_technical_not_a_human_injection():
     vk = {c["id"]: c for c in view["children"]}
     assert vk["checkpoint"].get("technical") is True
     assert vk["web_ui"].get("attached") is True and "technical" not in vk["web_ui"]
+
+
+def test_machinery_node_in_the_real_tree_is_also_technical():
+    # a checkpoint that appears as a REAL tree node (not an attached orphan)
+    # must still badge ⚙️ — the name is authoritative, so it never renders 📌.
+    tree = {"id": "L0", "children": [{"id": "checkpoint", "children": []},
+                                     {"id": "notes_db", "children": []}]}
+    meta = {}
+    dash._flatten(tree, 0, meta, None)
+    view = dash._tree_view(tree, meta)
+    vk = {c["id"]: c for c in view["children"]}
+    assert vk["checkpoint"].get("technical") is True
+    assert "technical" not in vk["notes_db"]    # a real feature leaf stays plain
