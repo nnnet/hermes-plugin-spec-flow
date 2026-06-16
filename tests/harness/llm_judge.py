@@ -40,7 +40,7 @@ MODEL = config.env("JUDGE_MODEL", default="") or config.env("LLM_MODEL")
 def _ask(prompt: str) -> str:
     """Delegate to the unified backend (provider/model = config)."""
     from . import llm_backend
-    return llm_backend.ask(prompt, model=MODEL)
+    return llm_backend.ask(prompt, model=MODEL, role="judge", step="")
 
 
 def _parse(text: str) -> dict:

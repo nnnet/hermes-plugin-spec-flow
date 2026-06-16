@@ -204,7 +204,7 @@ def test_llm_concurrency_gate(monkeypatch):
     monkeypatch.setattr(lb, "_ask_openai", slow)
     try:
         threads = [_th.Thread(target=lambda: lb.ask(
-            "q", model="openrouter/a:free")) for _ in range(6)]
+            "q", model="openrouter/a:free", role="decomposer", step="")) for _ in range(6)]
         for th in threads:
             th.start()
         for th in threads:

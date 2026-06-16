@@ -307,7 +307,7 @@ def test_ask_threads_params_into_openai_payload(monkeypatch):
 
     monkeypatch.setattr(lb, "_http_post", fake_post)
     out = lb.ask("q", model="openrouter/a:free",
-                 params={"temperature": 0.7, "max_tokens": 50})
+                 params={"temperature": 0.7, "max_tokens": 50}, role="decomposer", step="")
     assert out == "ok"
     assert seen["payload"]["temperature"] == 0.7
     assert seen["payload"]["max_tokens"] == 50
@@ -327,5 +327,5 @@ def test_ask_without_params_keeps_legacy_payload(monkeypatch):
             {"choices": [{"message": {"content": "ok"}}]})
 
     monkeypatch.setattr(lb, "_http_post", fake_post)
-    lb.ask("q", model="openrouter/a:free")
+    lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
     assert set(seen["payload"]) == {"model", "messages"}

@@ -66,7 +66,7 @@ def _snake(s: str) -> str:
 
 def _ask(prompt: str) -> str:
     """Delegate to the unified backend (provider/model = config)."""
-    return llm_backend.ask(prompt, model=MODEL)
+    return llm_backend.ask(prompt, model=MODEL, role="implementer", step="")
 
 
 def _parse(text: str) -> dict:

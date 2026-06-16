@@ -89,7 +89,7 @@ def test_ask_walks_chain_on_quota_exhaustion(monkeypatch):
     monkeypatch.setattr(lb, "_ask_openai", fake_openai)
     monkeypatch.setattr(lb, "_ask_claude", fake_claude)
     out = lb.ask("q", model="openrouter/a:free",
-                 fallbacks=["claude/haiku"])
+                 fallbacks=["claude/haiku"], role="decomposer", step="")
     monkeypatch.setattr(lb, "_free_down_until", 0.0)
     assert out == "chain answer"
     assert calls == [("openai", "openrouter/a:free"),
@@ -105,13 +105,13 @@ def test_explicit_claude_model_bypasses_free_gate(monkeypatch):
         return f"{model} direct={direct}"
 
     monkeypatch.setattr(lb, "_ask_claude", fake_claude)
-    assert lb.ask("q", model="claude/haiku") == "haiku direct=True"
+    assert lb.ask("q", model="claude/haiku", role="decomposer", step="") == "haiku direct=True"
 
 
 def test_paid_model_still_forbidden(monkeypatch):
     monkeypatch.setattr(lb, "BACKEND", "openai")
     with pytest.raises(ValueError, match="forbidden"):
-        lb.ask("q", model="openrouter/gpt-4o")
+        lb.ask("q", model="openrouter/gpt-4o", role="decomposer", step="")
 
 
 # ─── run-wide LLM-call budget (quota limiter, off by default) ─────────
@@ -126,25 +126,25 @@ def _stub_ok(monkeypatch):
 def test_budget_off_by_default(monkeypatch):
     _stub_ok(monkeypatch)
     for _ in range(5):
-        assert lb.ask("q", model="openrouter/a:free") == "ok"
+        assert lb.ask("q", model="openrouter/a:free", role="decomposer", step="") == "ok"
     assert lb.calls_made() == 5
 
 
 def test_budget_from_workers_block(monkeypatch):
     _stub_ok(monkeypatch)
     lb.configure_workers({"budget": 2})
-    lb.ask("q", model="openrouter/a:free")
-    lb.ask("q", model="openrouter/a:free")
+    lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
+    lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
     with pytest.raises(lb.BudgetExhausted):
-        lb.ask("q", model="openrouter/a:free")
+        lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
 
 
 def test_budget_from_env_without_block(monkeypatch):
     _stub_ok(monkeypatch)
     monkeypatch.setenv("SPEC_FLOW_LLM_BUDGET", "1")
-    lb.ask("q", model="openrouter/a:free")
+    lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
     with pytest.raises(lb.BudgetExhausted):
-        lb.ask("q", model="openrouter/a:free")
+        lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
 
 
 def test_chain_attempts_each_spend_budget(monkeypatch):
@@ -159,7 +159,7 @@ def test_chain_attempts_each_spend_budget(monkeypatch):
         lb, "_ask_claude",
         lambda prompt, model, system=None, direct=False, timeout=None: "ok")
     lb.configure_workers({"budget": 10})
-    lb.ask("q", model="openrouter/a:free", fallbacks=["claude/haiku"])
+    lb.ask("q", model="openrouter/a:free", fallbacks=["claude/haiku"], role="decomposer", step="")
     monkeypatch.setattr(lb, "_free_down_until", 0.0)
     assert lb.calls_made() == 2          # one free attempt + one fallback
 
@@ -167,7 +167,7 @@ def test_chain_attempts_each_spend_budget(monkeypatch):
 def test_configure_resets_budget_counter(monkeypatch):
     _stub_ok(monkeypatch)
     lb.configure_workers({"budget": 3})
-    lb.ask("q", model="openrouter/a:free")
+    lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
     assert lb.calls_made() == 1
     lb.configure_workers({"budget": 3})
     assert lb.calls_made() == 0
@@ -199,7 +199,7 @@ def test_chain_absorbs_plain_provider_failure(monkeypatch):
     monkeypatch.setattr(
         lb, "_ask_claude",
         lambda prompt, model, system=None, direct=False, timeout=None: "fallback answer")
-    out = lb.ask("q", model="openrouter/a:free", fallbacks=["claude/haiku"])
+    out = lb.ask("q", model="openrouter/a:free", fallbacks=["claude/haiku"], role="decomposer", step="")
     assert out == "fallback answer"
 
 
@@ -207,7 +207,7 @@ def test_paid_gate_error_still_aborts_the_chain(monkeypatch):
     monkeypatch.setattr(lb, "BACKEND", "openai")
     monkeypatch.setattr(lb, "_free_down_until", 0.0)
     with pytest.raises(ValueError, match="forbidden"):
-        lb.ask("q", model="openrouter/gpt-4o", fallbacks=["claude/haiku"])
+        lb.ask("q", model="openrouter/gpt-4o", fallbacks=["claude/haiku"], role="decomposer", step="")
 
 
 def test_exhausted_chain_waits_then_recovers(monkeypatch):
@@ -230,7 +230,7 @@ def test_exhausted_chain_waits_then_recovers(monkeypatch):
     monkeypatch.setattr(lb, "_ask_one", flaky)
     try:
         assert lb.ask("q", model="openrouter/a:free",
-                      fallbacks=["openrouter/b:free"]) == "recovered"
+                      fallbacks=["openrouter/b:free"], role="decomposer", step="") == "recovered"
         assert calls["n"] == 3, "two failures absorbed by one wait round"
     finally:
         lb.configure_workers(None)
@@ -251,7 +251,7 @@ def test_exhausted_chain_raises_without_optin(monkeypatch):
     try:
         import pytest as _pt
         with _pt.raises(lb.QuotaExhausted):
-            lb.ask("q", model="openrouter/a:free")
+            lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
     finally:
         lb.configure_workers(None)
 
@@ -296,7 +296,7 @@ def test_terminal_fallback_only_on_last_round(monkeypatch):
     try:
         import pytest as _pt
         with _pt.raises((lb.QuotaExhausted, RuntimeError)):
-            lb.ask("q", model="openrouter/a:free")
+            lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
         # 3 rounds (1 + 2 retries), the fallback rotation runs on the
         # LAST round only — sparing the capped provider on earlier rounds
         assert fb_calls["n"] == 1, \
@@ -326,7 +326,7 @@ def test_fallback_rotation_cycles_across_providers(monkeypatch):
 
     monkeypatch.setattr(lb, "_ask_one", router)
     try:
-        out = lb.ask("q", model="openrouter/a:free")
+        out = lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
         assert out == "answered by the second provider"
         # first provider tried and capped, rolled to the second
         assert tried == ["claude/haiku", "openrouter_custom/sonnet"]
@@ -354,7 +354,7 @@ def test_fallback_rotation_start_advances_each_round(monkeypatch):
     try:
         import pytest as _pt
         with _pt.raises((lb.QuotaExhausted, RuntimeError)):
-            lb.ask("q", model="openrouter/a:free")
+            lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
         # rounds=2 -> last round attempt=1, start = 1 % 2 = 1: the lead
         # ADVANCES to the second provider rather than always retrying the
         # capped first one; then it wraps to cover both
@@ -397,7 +397,7 @@ def test_rotation_kicks_in_after_fallback_after_rounds(monkeypatch):
 
     monkeypatch.setattr(lb, "_ask_one", router)
     try:
-        out = lb.ask("q", model="openrouter/a:free")
+        out = lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
         assert out == "haiku saved it"
         # rotation fired on round 1 (the second round), not waiting for 3
         assert fb_rounds and fb_rounds[0] == 1
@@ -462,7 +462,7 @@ def test_ask_logs_token_usage_at_exit(monkeypatch, tmp_path):
     try:
         lb.configure_workers({"backend": "openai", "base_url": "x"})
         monkeypatch.setattr(lb, "_ask_one", fake_real)
-        lb.ask("hello", model="openrouter/m:free", role="decomposer")
+        lb.ask("hello", model="openrouter/m:free", role="decomposer", step="")
         monkeypatch.setattr(lb, "_ask_one", fake_none)
         lb.ask("count me", model="openrouter/m:free", role="coder", step="coder")
     finally:
@@ -495,5 +495,21 @@ def test_paid_guard_allows_free_provider_model(monkeypatch):
         assert lb._is_free_model("openrouter/qwen/qwen3-coder:free") is True
         # a model that matches no free provider and lacks ':free' is not free
         assert lb._is_free_model("openrouter/qwen/qwen3-coder") is False
+    finally:
+        lb.configure_workers(None)
+
+
+def test_ask_requires_role_and_step():
+    # role + step are MANDATORY — a call without them must crash (so a missing
+    # attribution can never silently produce an empty-stage token row).
+    import pytest as _pytest
+    try:
+        lb.configure_workers({"backend": "openai", "base_url": "x"})
+        with _pytest.raises(TypeError):
+            lb.ask("q", model="claude/haiku", step="")        # role missing
+        with _pytest.raises(TypeError):
+            lb.ask("q", model="claude/haiku", role="reviewer")  # step missing
+        with _pytest.raises(ValueError):
+            lb.ask("q", model="claude/haiku", role="", step="")  # empty role
     finally:
         lb.configure_workers(None)

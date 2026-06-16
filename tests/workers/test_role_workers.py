@@ -394,7 +394,7 @@ def test_paid_model_is_forbidden_on_openai_backend(monkeypatch):
     monkeypatch.setattr(lb, "BACKEND", "openai")
     monkeypatch.setattr(lb, "ALLOW_PAID", False)
     with pytest.raises(ValueError, match="forbidden"):
-        lb.ask("hi", model="openrouter/qwen/qwen3-coder")  # no :free
+        lb.ask("hi", model="openrouter/qwen/qwen3-coder", role="decomposer", step="")  # no :free
 
 
 def test_quota_exhaustion_falls_back_to_haiku(monkeypatch):
@@ -413,13 +413,13 @@ def test_quota_exhaustion_falls_back_to_haiku(monkeypatch):
 
     monkeypatch.setattr(lb, "_ask_openai", boom)
     monkeypatch.setattr(lb, "_ask_claude", claude)
-    out = lb.ask("hi", model="openrouter/qwen/qwen3-coder:free")
+    out = lb.ask("hi", model="openrouter/qwen/qwen3-coder:free", role="decomposer", step="")
     assert out == "fallback reply" and calls == ["haiku"]
     assert lb.last_call["fallback"] is True
     # the pool is now in cooldown: the next call skips straight to haiku
     monkeypatch.setattr(lb, "_ask_openai",
                         lambda *a, **k: pytest.fail("free pool must be skipped"))
-    assert lb.ask("hi", model="openrouter/x:free") == "fallback reply"
+    assert lb.ask("hi", model="openrouter/x:free", role="decomposer", step="") == "fallback reply"
     monkeypatch.setattr(lb, "_free_down_until", 0.0)
 
 
@@ -570,7 +570,7 @@ def test_fallback_goes_direct_past_the_gateway(monkeypatch):
         return "ok"
 
     monkeypatch.setattr(lb, "_ask_claude", fake_claude)
-    assert lb.ask("hi", model="openrouter/x:free") == "ok"
+    assert lb.ask("hi", model="openrouter/x:free", role="decomposer", step="") == "ok"
     assert seen["direct"] is True, "the exhaustion fallback must bypass the gateway"
     monkeypatch.setattr(lb, "_free_down_until", 0.0)
 

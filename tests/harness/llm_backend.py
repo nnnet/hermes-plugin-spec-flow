@@ -375,10 +375,17 @@ def _log_token_usage(model: str, usage: dict,
         pass
 
 
-def ask(prompt: str, *, model: str, system: str | None = None,
-        fallbacks: tuple | list = (), role: str = "", step: str = "",
+def ask(prompt: str, *, model: str, role: str, step: str,
+        system: str | None = None, fallbacks: tuple | list = (),
         params: dict | None = None) -> str:
     """Send one prompt, return the reply text.
+
+    ``role`` (the pipeline STAGE: decomposer/implementer/reviewer/verifier) and
+    ``step`` (the orchestra SPECIALIST, or "" when the call is not a team step)
+    are MANDATORY keyword arguments — a call that omits them is a bug and raises,
+    so every LLM call is attributable to a stage+specialist (no empty rows in the
+    token/idle accounting). Pass ``step=""`` explicitly for a solo (non-team)
+    call to acknowledge there is no specialist.
 
     ``model`` + ``fallbacks`` form an ordered chain (the case YAML
     `workers:` block supplies it via chain_for); on QuotaExhausted the
@@ -392,6 +399,11 @@ def ask(prompt: str, *, model: str, system: str | None = None,
 
     Test: assert a fake `_ask_one`/`_ask_openai` receives the exact params dict
     passed here (see tests/workers/test_specialist_config.py)."""
+    if not role:
+        raise ValueError(
+            "ask() requires a non-empty `role` (the pipeline stage: decomposer/"
+            "implementer/reviewer/verifier). Every LLM call must be attributable "
+            "to a stage — a missing/empty role hides token and idle accounting.")
     cfg = WORKERS_CFG or {}
     _call_ctx.role = role          # #6: tag token usage with the calling role
     _call_ctx.step = step          # specialist (orchestra step) for per-member split

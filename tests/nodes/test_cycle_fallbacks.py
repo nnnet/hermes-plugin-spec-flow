@@ -78,7 +78,7 @@ def test_non_quota_error_does_not_spin_all_rounds(monkeypatch):
     monkeypatch.setattr(lb, "_concurrency_gate", lambda: None)
     monkeypatch.setattr(lb.time, "sleep", lambda s: None)
     try:
-        lb.ask("p", model="m", fallbacks=[])
+        lb.ask("p", model="m", fallbacks=[], role="decomposer", step="")
         assert False, "must surrender, not loop forever"
     except RuntimeError as e:
         assert "malformed" in str(e)
@@ -103,7 +103,7 @@ def test_quota_error_still_waits_and_retries(monkeypatch):
     monkeypatch.setattr(lb, "_ask_one", flaky)
     monkeypatch.setattr(lb, "_concurrency_gate", lambda: None)
     monkeypatch.setattr(lb.time, "sleep", lambda s: None)
-    assert lb.ask("p", model="m", fallbacks=[]) == "ok"
+    assert lb.ask("p", model="m", fallbacks=[], role="decomposer", step="") == "ok"
     assert calls["n"] == 3
 
 

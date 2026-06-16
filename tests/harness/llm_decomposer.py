@@ -105,7 +105,7 @@ def _max_children() -> int:
 
 def _ask(prompt: str) -> str:
     """Delegate to the unified backend (provider/model = config)."""
-    return llm_backend.ask(prompt, model=MODEL)
+    return llm_backend.ask(prompt, model=MODEL, role="decomposer", step="")
 
 
 def _extract_json(text: str) -> dict:
