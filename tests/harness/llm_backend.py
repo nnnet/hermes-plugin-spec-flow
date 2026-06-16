@@ -495,6 +495,13 @@ def ask(prompt: str, *, model: str, role: str, step: str,
                 # config errors (ValueError: paid gate, unknown
                 # provider) abort the call
                 last_exc = exc
+                # record the fallback hop so the dashboard shows which model
+                # failed (and why) and what was tried next
+                _nxt = chain[i + 1] if i + 1 < len(chain) else (
+                    rotation[0] if rotation else None)
+                _log_event({"event": "llm_fallback", "from_model": m,
+                            "to_model": _nxt, "reason": _failure_reason(exc),
+                            "terminal": False})
         # terminal-fallback ROTATION: subscription/extra providers are a
         # last resort (free-models policy), so the first few wait-rounds
         # prefer to re-try the healthy free chain. But waiting ALL rounds
@@ -508,7 +515,7 @@ def ask(prompt: str, *, model: str, role: str, step: str,
             start = attempt % len(rotation)
             order = rotation[start:] + rotation[:start]
             leash = int(cfg.get("fallback_timeout_s", 90))
-            for fb in order:
+            for j, fb in enumerate(order):
                 _spend_call()
                 try:
                     # short leash: a hung CLI fallback must not burn the
@@ -518,6 +525,17 @@ def ask(prompt: str, *, model: str, role: str, step: str,
                 except (QuotaExhausted, RuntimeError,
                         subprocess.SubprocessError) as exc:
                     last_exc = exc
+                    _nxt = order[j + 1] if j + 1 < len(order) else None
+                    _log_event({"event": "llm_fallback", "from_model": fb,
+                                "to_model": _nxt,
+                                "reason": _failure_reason(exc),
+                                "terminal": False})
+    # the whole chain + rotation gave up — a terminal failure for the call
+    _log_event({"event": "llm_fallback",
+                "from_model": (chain[-1] if chain else model),
+                "to_model": None,
+                "reason": _failure_reason(last_exc) if last_exc else "error",
+                "terminal": True})
     raise last_exc or QuotaExhausted("no model in the chain answered")
 
 
@@ -620,6 +638,40 @@ def _openai_params(params: dict | None) -> dict:
             if k in _OPENAI_PARAM_KEYS and v is not None}
 
 
+def _provider_of(model: str) -> str:
+    """The provider key a model routes through — the prefix before '/'
+    (openrouter / xiaomimimo / claude), else the default openai backend. Used to
+    group response/failure stats by provider on the dashboard."""
+    return model.split("/", 1)[0] if "/" in model else "openai"
+
+
+def _failure_reason(exc: "Exception | str") -> str:
+    """Classify why a model did not answer normally, for the failure report:
+    429 / 5xx / timeout / empty / error. Universal — string-based, no provider
+    special-casing."""
+    s = str(exc).lower()
+    if "throttl" in s or "429" in s or "quota" in s:
+        return "429"
+    if "timeout" in s or "timed out" in s:
+        return "timeout"
+    if "empty" in s or "malformed" in s or "bad response" in s:
+        return "empty"
+    mm = re.search(r"http (5\d\d)", s)
+    if mm:
+        return "5xx"
+    return "error"
+
+
+def _log_event(event: dict) -> None:
+    """Best-effort llm-log write — logging the timeline of a call must never
+    raise into the hot retry path."""
+    try:
+        from . import llm_log
+        llm_log.log(event)
+    except Exception:              # noqa: BLE001
+        pass
+
+
 def _ask_openai(prompt: str, model: str, system: str | None = None,
                 params: dict | None = None) -> str:
     url = BASE_URL.rstrip("/") + "/chat/completions"
@@ -627,10 +679,14 @@ def _ask_openai(prompt: str, model: str, system: str | None = None,
     messages = ([{"role": "system", "content": system}] if system else []) \
         + [{"role": "user", "content": prompt}]
     payload = {"model": model, "messages": messages, **_openai_params(params)}
+    provider = _provider_of(model)
     last = ""
     throttled = 0
     for attempt in range(1, RETRIES + 1):
+        t0 = time.monotonic()
         status, body = _http_post(url, payload, headers)
+        latency = round(time.monotonic() - t0, 2)
+        err = ""
         if status == 200:
             try:
                 out = json.loads(body)
@@ -643,20 +699,35 @@ def _ask_openai(prompt: str, model: str, system: str | None = None,
                     # (or falls back to tiktoken). Token accounting is universal
                     # in ask(), not per-backend here.
                     _call_ctx.last_usage = out.get("usage") or {}
+                    _log_event({"event": "llm_attempt", "backend": "openai",
+                                "provider": provider, "model": model,
+                                "attempt": attempt, "status": 200,
+                                "latency_s": latency, "abnormal": False})
                     return text
                 last = "empty completion"
+                err = "empty"
             except (KeyError, IndexError, json.JSONDecodeError) as exc:
                 last = f"bad response shape: {exc}: {body[-200:]}"
+                err = "empty"
         else:
             last = f"HTTP {status}: {body[-200:]}"
+            err = f"http_{status}"
         # free-pool throttling (429): honour the server-suggested pause when
         # present (OpenRouter sends retry_after_seconds), else back off harder
         if status == 429:
             throttled += 1
             m = re.search(r'"retry_after_seconds"\s*:\s*([0-9.]+)', body)
-            time.sleep(min(90.0, float(m.group(1)) + 2) if m else BACKOFF * attempt)
+            slept = min(90.0, float(m.group(1)) + 2) if m else BACKOFF * attempt
         else:
-            time.sleep(BACKOFF)
+            slept = float(BACKOFF)
+        # log EVERY abnormal attempt so the dashboard can show all delay causes:
+        # status, latency, the backoff/429 sleep, and what went wrong
+        _log_event({"event": "llm_attempt", "backend": "openai",
+                    "provider": provider, "model": model, "attempt": attempt,
+                    "status": status, "latency_s": latency,
+                    "slept_s": round(slept, 2), "abnormal": True,
+                    "error": err})
+        time.sleep(slept)
     if throttled:
         # ANY 429 among the attempts is a quota signal (the per-minute
         # ceiling of the free pool killed a whole run once: the final 429

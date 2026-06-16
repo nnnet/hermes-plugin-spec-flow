@@ -513,3 +513,86 @@ def test_ask_requires_role_and_step():
             lb.ask("q", model="claude/haiku", role="", step="")  # empty role
     finally:
         lb.configure_workers(None)
+
+
+# ─── full LLM-call outcome logging (Part 1) ──────────────────────────────
+
+def test_ask_openai_logs_every_attempt(monkeypatch):
+    # every HTTP attempt is logged so the dashboard can show ALL delay causes:
+    # a 429 (abnormal, with the backoff it slept) and the final 200.
+    from harness import llm_log
+    events = []
+    monkeypatch.setattr(llm_log, "log", lambda e: events.append(e))
+    monkeypatch.setattr(lb, "BACKOFF", 0.01)
+    monkeypatch.setattr(lb, "RETRIES", 3)
+    seq = [(429, '{"error":"rate limited"}'),
+           (200, '{"choices":[{"message":{"content":"hi"}}]}')]
+    monkeypatch.setattr(lb, "_http_post", lambda url, p, h: seq.pop(0))
+    out = lb._ask_openai("q", "openrouter/a:free")
+    assert out == "hi"
+    att = [e for e in events if e.get("event") == "llm_attempt"]
+    assert any(e["status"] == 429 and e["abnormal"] and "slept_s" in e for e in att)
+    assert any(e["status"] == 200 and not e["abnormal"] for e in att)
+    assert all(e["provider"] == "openrouter" for e in att)
+
+
+def test_ask_openai_logs_empty_reply_as_abnormal(monkeypatch):
+    from harness import llm_log
+    events = []
+    monkeypatch.setattr(llm_log, "log", lambda e: events.append(e))
+    monkeypatch.setattr(lb, "BACKOFF", 0.0)
+    monkeypatch.setattr(lb, "RETRIES", 1)
+    # HTTP 200 but no usable content/reasoning → abnormal, error=empty
+    monkeypatch.setattr(lb, "_http_post",
+                        lambda url, p, h: (200, '{"choices":[{"message":{"content":""}}]}'))
+    with pytest.raises((lb.QuotaExhausted, RuntimeError)):
+        lb._ask_openai("q", "openrouter/a:free")
+    att = [e for e in events if e.get("event") == "llm_attempt"]
+    assert any(e["status"] == 200 and e["abnormal"] and e["error"] == "empty" for e in att)
+
+
+def test_ask_logs_fallback_transition_and_terminal(monkeypatch):
+    from harness import llm_log
+    events = []
+    monkeypatch.setattr(llm_log, "log", lambda e: events.append(e))
+    monkeypatch.setattr(lb, "BACKEND", "openai")
+    monkeypatch.setattr(lb, "_free_down_until", 0.0)
+
+    def fake_openai(prompt, model, system=None):
+        raise lb.QuotaExhausted("429")
+
+    def fake_claude(prompt, model, system=None, direct=False, timeout=None):
+        return "chain answer"
+
+    monkeypatch.setattr(lb, "_ask_openai", fake_openai)
+    monkeypatch.setattr(lb, "_ask_claude", fake_claude)
+    out = lb.ask("q", model="openrouter/a:free", fallbacks=["claude/haiku"],
+                 role="decomposer", step="")
+    assert out == "chain answer"
+    fb = [e for e in events if e.get("event") == "llm_fallback"]
+    assert any(e["from_model"] == "openrouter/a:free"
+               and e["to_model"] == "claude/haiku"
+               and e["reason"] == "429" and not e["terminal"] for e in fb)
+
+
+def test_ask_logs_terminal_when_all_models_fail(monkeypatch):
+    from harness import llm_log
+    events = []
+    monkeypatch.setattr(llm_log, "log", lambda e: events.append(e))
+    monkeypatch.setattr(lb, "BACKEND", "openai")
+    monkeypatch.setattr(lb, "_free_down_until", 0.0)
+    monkeypatch.setattr(lb, "_jittered", lambda w, c: 0.0)
+
+    def boom_openai(prompt, model, system=None):
+        raise lb.QuotaExhausted("429")
+
+    def boom_claude(prompt, model, system=None, direct=False, timeout=None):
+        raise lb.QuotaExhausted("429")
+
+    monkeypatch.setattr(lb, "_ask_openai", boom_openai)
+    monkeypatch.setattr(lb, "_ask_claude", boom_claude)
+    with pytest.raises(lb.QuotaExhausted):
+        lb.ask("q", model="openrouter/a:free", fallbacks=["claude/haiku"],
+               role="decomposer", step="")
+    fb = [e for e in events if e.get("event") == "llm_fallback"]
+    assert any(e["terminal"] and e["to_model"] is None for e in fb)
