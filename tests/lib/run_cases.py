@@ -517,6 +517,19 @@ def _summary_md(name: str, goal: str, depth: str, full: dict | None,
 
 
 def main() -> int:
+    # Verb sugar over the flags (ACTION style, like the project Makefiles), kept
+    # back-compatible: a leading non-dash token is a verb; `run` falls through to
+    # the flag parser, the control verbs map to their one-shot flags. An unknown
+    # leading token is left as-is so argparse errors helpfully.
+    _argv = sys.argv[1:]
+    if _argv and not _argv[0].startswith("-"):
+        _verb, _rest = _argv[0], _argv[1:]
+        _ctl = {"stop": "--stop", "checkpoint": "--checkpoint",
+                "checkpoints": "--list-checkpoints"}
+        if _verb in _ctl and _rest:
+            sys.argv = [sys.argv[0], _ctl[_verb], _rest[0]] + _rest[1:]
+        elif _verb == "run":
+            sys.argv = [sys.argv[0]] + _rest
     ap = argparse.ArgumentParser(description="Run scenario cases as real plugin runs")
     ap.add_argument("--depth", default="spec", choices=sorted(eng.DEPTHS, key=eng.DEPTHS.get))
     ap.add_argument("--case", default="", help="substring filter on the case file name")
@@ -566,10 +579,38 @@ def main() -> int:
     ap.add_argument("--stop", default="", metavar="RUN_DIR",
                     help="ask a live run rooted at RUN_DIR to stop at the next "
                          "node boundary (drops a STOP sentinel + signals its pid)")
+    ap.add_argument("--checkpoint", default="", metavar="RUN_DIR",
+                    help="ask a live run to SNAPSHOT itself at the next node "
+                         "boundary and keep running (replayable point)")
+    ap.add_argument("--list-checkpoints", default="", metavar="RUN_DIR",
+                    help="list the checkpoints saved under RUN_DIR/checkpoints/")
+    ap.add_argument("--from", dest="from_ckpt", default="",
+                    metavar="CHECKPOINT_DIR",
+                    help="replay FROM a checkpoint: restore its workspace into a "
+                         "fresh run dir and resume (cache-hits skip done nodes)")
+    ap.add_argument("--checkpoint-every", type=int, default=0, metavar="N",
+                    help="engine auto-checkpoint cadence: the plugin snapshots "
+                         "itself every N node boundaries (0=off). A run/engine "
+                         "parameter, like --decomposer; a case may also set "
+                         "`checkpoint: {every: N}`")
     args = ap.parse_args()
-    # --stop is a one-shot control command: signal, then exit
+    # one-shot control commands: act, then exit
     if args.stop:
         _stop_run(Path(args.stop))
+        return
+    if args.checkpoint:
+        sentinel = eng.request_checkpoint(str(Path(args.checkpoint) / "workspace"))
+        print(f"checkpoint requested → {sentinel}")
+        print("the live run snapshots itself at its next node boundary")
+        return
+    if args.list_checkpoints:
+        cks = eng.list_checkpoints(args.list_checkpoints)
+        if not cks:
+            print("no checkpoints"); return
+        for m in cks:
+            print(f"  {m.get('seq'):>3}  {m.get('roothash','')}  "
+                  f"node={m.get('node','') or '-'}  specs={m.get('specs', 0)}  "
+                  f"{m['path']}")
         return
     if args.gateway == "bifrost":
         os.environ["ANTHROPIC_BASE_URL"] = _cfg.env("BIFROST_URL")
@@ -601,11 +642,26 @@ def main() -> int:
         case = yaml.safe_load(path.read_text(encoding="utf-8"))
         name = case.get("name", path.stem)
         # --resume continues an existing run dir in place; a normal run mints
-        # a fresh, numbered one. The pidfile lets --stop signal this process.
-        resuming = bool(args.resume)
-        case_dir = (Path(args.resume) if resuming
+        # a fresh, numbered one. --from replays a CHECKPOINT into a fresh dir.
+        # The pidfile lets --stop signal this process.
+        resuming = bool(args.resume) or bool(args.from_ckpt)
+        case_dir = (Path(args.resume) if args.resume
                     else OUT_DIR / f"{stamp}__v{_next_run_no(name):03d}__{name}")
         case_dir.mkdir(parents=True, exist_ok=True)
+        # --from: restore the checkpoint's workspace into this run dir so the
+        # engine (resume mode) re-enters from exactly that point — its journal +
+        # specs drive the cache-hits, so saved nodes are skipped, not rebuilt.
+        if args.from_ckpt:
+            eng.restore_checkpoint(args.from_ckpt, str(case_dir / "workspace"))
+            print(f"replaying from checkpoint {args.from_ckpt} → {case_dir}")
+        # auto-checkpoint cadence: engine parameter, surfaced as a flag or a
+        # case `checkpoint: {every: N}` block; the engine reads the env
+        _ck_every = args.checkpoint_every or int(
+            (case.get("checkpoint") or {}).get("every", 0) or 0)
+        if _ck_every > 0:
+            os.environ["SPEC_FLOW_CHECKPOINT_EVERY"] = str(_ck_every)
+        else:
+            os.environ.pop("SPEC_FLOW_CHECKPOINT_EVERY", None)
         (case_dir / "run.pid").write_text(str(os.getpid()) + "\n",
                                           encoding="utf-8")
         # persist the readable STARTING inputs (goal + givens) so the dashboard /

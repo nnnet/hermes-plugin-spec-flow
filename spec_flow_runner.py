@@ -208,6 +208,94 @@ def clear_stop(workspace_root: str) -> None:
         pass
 
 
+# ── checkpoints: snapshot WHERE a run is so it can be REPLAYED from there ─────
+# A checkpoint is a full copy of the workspace (specs/src/tests + journal +
+# claims.db) taken at a node boundary, keyed by a digest of all live specs (a
+# stable "where the tree is" id). restore_checkpoint + a --resume re-enter from
+# exactly that point — replay from ANY saved checkpoint, not just the latest.
+_CHECKPOINT_REL = ".spec-flow/CHECKPOINT"
+
+
+def request_checkpoint(workspace_root: str) -> str:
+    """Ask a live run to SNAPSHOT itself at the next node boundary and KEEP
+    running (unlike STOP). Drops a CHECKPOINT sentinel; returns its path."""
+    p = Path(workspace_root) / _CHECKPOINT_REL
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("checkpoint\n", encoding="utf-8")
+    return str(p)
+
+
+def _root_spec_hash(workspace_root: str) -> str:
+    """Stable digest of WHERE the tree is — sorted (stem, bytes) of every live
+    spec under specs/ (archived specs/<id>.vN.md skipped). Wall-clock-free, so
+    two runs at the same point share it."""
+    specs = Path(workspace_root) / "specs"
+    h = hashlib.sha256()
+    if specs.is_dir():
+        for p in sorted(specs.glob("*.md")):
+            if "." in p.stem:
+                continue
+            try:
+                h.update(p.stem.encode() + b"\0" + p.read_bytes())
+            except OSError:
+                continue
+    return h.hexdigest()[:12]
+
+
+def snapshot_checkpoint(run_dir: str, workspace_root: str,
+                        node: str = "") -> str:
+    """Copy the live workspace into ``run_dir/checkpoints/<seq>__<roothash>/`` so
+    the run can be replayed from this exact point. Volatile sentinels are not
+    copied. Returns the snapshot dir path. Take it on a node boundary so the
+    workspace is quiescent and the snapshot is consistent."""
+    cks = Path(run_dir) / "checkpoints"
+    cks.mkdir(parents=True, exist_ok=True)
+    seq = 1 + sum(1 for _ in cks.glob("[0-9]*__*"))
+    rh = _root_spec_hash(workspace_root)
+    dest = cks / f"{seq:03d}__{rh}"
+    if dest.exists():
+        shutil.rmtree(dest, ignore_errors=True)
+    shutil.copytree(workspace_root, dest / "workspace",
+                    ignore=shutil.ignore_patterns("CHECKPOINT", "STOP"))
+    specs = Path(workspace_root) / "specs"
+    nodes = (sum(1 for p in specs.glob("*.md") if "." not in p.stem)
+             if specs.is_dir() else 0)
+    (dest / "checkpoint.json").write_text(
+        json.dumps({"seq": seq, "roothash": rh, "node": node, "specs": nodes},
+                   ensure_ascii=False) + "\n", encoding="utf-8")
+    return str(dest)
+
+
+def restore_checkpoint(checkpoint_dir: str, dest_workspace_root: str) -> None:
+    """Restore a checkpoint's workspace into ``dest_workspace_root`` so a
+    --resume re-enters from exactly that point (its journal + specs + code drive
+    the cache-hits). Overwrites the destination workspace."""
+    src = Path(checkpoint_dir) / "workspace"
+    if not src.is_dir():
+        raise FileNotFoundError(f"no workspace in checkpoint: {checkpoint_dir}")
+    dest = Path(dest_workspace_root)
+    if dest.exists():
+        shutil.rmtree(dest, ignore_errors=True)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, dest)
+
+
+def list_checkpoints(run_dir: str) -> list:
+    """Checkpoints of a run, oldest-first: [{seq, roothash, node, specs, path}]."""
+    cks = Path(run_dir) / "checkpoints"
+    out = []
+    if cks.is_dir():
+        for d in sorted(cks.glob("[0-9]*__*")):
+            meta = {}
+            try:
+                meta = json.loads((d / "checkpoint.json").read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                pass
+            meta["path"] = str(d)
+            out.append(meta)
+    return sorted(out, key=lambda m: m.get("seq", 0))
+
+
 class IntegrateFailHalt(RuntimeError):
     """on_integrate_fail='halt': a FAILed integrate stops the run."""
 
@@ -1345,6 +1433,10 @@ class Engine:
         self._auto_specialty = False
         # П1: set True when a run ends via a cooperative STOP (partial result)
         self._stopped = False
+        self._checkpoint_lock = threading.Lock()
+        # auto-checkpoint cadence: the engine snapshots ITSELF every N node
+        # boundaries when set (a run/engine parameter, like the decomposer type)
+        self._nodes_since_ckpt = 0
         self.agents = {**DEFAULT_AGENTS, **(agents or {})}
         self.contracts_dir = Path(contracts_dir) if contracts_dir else None
         self.events: list[Event] = []
@@ -1823,6 +1915,9 @@ class Engine:
             try:
                 return self._run(project)
             except RunStopped as stop:
+                # a cooperative stop leaves a REPLAYABLE checkpoint of where the
+                # run got to (consistent — we are at a node boundary here)
+                self._make_checkpoint(str(stop))
                 self.emit("integrate", "verifier", "spec-flow", "L0:stop",
                           "run STOPPED cooperatively — partial result kept",
                           str(stop), verdict="STOPPED", level=L_MILESTONE)
@@ -1843,6 +1938,63 @@ class Engine:
         if not root:
             return False
         return (Path(root) / _STOP_REL).exists()
+
+    def _checkpoint_requested(self) -> bool:
+        """True when a CHECKPOINT sentinel sits in the workspace — the run
+        snapshots itself at the next node boundary and KEEPS running."""
+        root = getattr(self.workspace, "root", None)
+        return bool(root) and (Path(root) / _CHECKPOINT_REL).exists()
+
+    def _checkpoint_every(self) -> int:
+        """How often the engine auto-snapshots itself, in node boundaries — a
+        run/engine parameter (like the decomposer type), read from
+        SPEC_FLOW_CHECKPOINT_EVERY. 0 (default) = off. The plugin writes the
+        checkpoints itself; no external `checkpoint` command needed."""
+        try:
+            return int(os.environ.get("SPEC_FLOW_CHECKPOINT_EVERY", "0") or 0)
+        except ValueError:
+            return 0
+
+    def _maybe_auto_checkpoint(self, node: str = "") -> None:
+        """At a node boundary, snapshot the run every `checkpoint_every` nodes."""
+        every = self._checkpoint_every()
+        if every <= 0:
+            return
+        with self._checkpoint_lock:
+            self._nodes_since_ckpt += 1
+            due = self._nodes_since_ckpt >= every
+            if due:
+                self._nodes_since_ckpt = 0
+        if due:
+            self._make_checkpoint(node)
+
+    def _make_checkpoint(self, node: str = "") -> "Optional[str]":
+        """Snapshot the workspace into the run's checkpoints/ and clear the
+        sentinel. Best-effort — a snapshot failure must never crash the run.
+        Guarded by a lock so concurrent leaf threads snapshot at most once."""
+        root = getattr(self.workspace, "root", None)
+        if not (root and getattr(self.workspace, "enabled", False)):
+            return None
+        with self._checkpoint_lock:
+            sentinel = Path(root) / _CHECKPOINT_REL
+            requested = sentinel.exists()
+            try:
+                path = snapshot_checkpoint(str(Path(root).parent), str(root),
+                                           node=node)
+            except Exception as exc:  # noqa: BLE001
+                self.emit("integrate", "verifier", "spec-flow", "checkpoint",
+                          "checkpoint snapshot failed", str(exc)[:160],
+                          verdict="", level=L_STEP)
+                return None
+            if requested:
+                try:
+                    sentinel.unlink()
+                except FileNotFoundError:
+                    pass
+            self.emit("integrate", "verifier", "spec-flow", "checkpoint",
+                      "checkpoint saved", Path(path).name,
+                      verdict="CHECKPOINT", level=L_MILESTONE)
+            return path
 
     def _module_for(self, nid: str) -> str:
         """Variant A: a deterministic, COLLISION-FREE module name per node.
@@ -2501,6 +2653,12 @@ class Engine:
         # node has not started; a --resume re-enters here and continues.
         if self._stop_requested():
             raise RunStopped(nid)
+        # checkpoint-on-request: snapshot WHERE we are (workspace quiescent at a
+        # node boundary) and keep running, so any saved point can be replayed
+        if self._checkpoint_requested():
+            self._make_checkpoint(nid)
+        # auto-checkpoint cadence: the engine snapshots itself every N nodes
+        self._maybe_auto_checkpoint(nid)
         title = node.get("title", nid)
         self._node_registry[nid] = title
         self._dedup_children(node, nid, title, ancestors)
