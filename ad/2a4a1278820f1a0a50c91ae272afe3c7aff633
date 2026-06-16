@@ -1,0 +1,19 @@
+tests/scenarios/p6_micro_notes.yaml
+  s_a7f45290e91181::t_d6f7493c461ff6 180-186,194,196-197,199-201,206-207,209,212-215
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "ad2a4a1278820f1a0a50c91ae272afe3c7aff633",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
