@@ -325,6 +325,140 @@ DEFAULT_AGENTS = {"implementer": _default_implementer,
                   "decomposer": _default_decomposer,
                   "approver": _default_approver}
 
+# ── external opaque team (architecture doc §3/§4 CASE 4) ──────────────────
+# A role can resolve to a team defined ENTIRELY in an external service: the
+# engine sends ONE RoleTask for the whole role and consumes the RoleResult,
+# blind to the team's specialists and workflow. Config (in the case `workers:`
+# block, read here from llm_backend.WORKERS_CFG):
+#     workers.<role>.team: {external: true, provider: a2a|hermes|mission-control,
+#                           endpoint|gateway|api: ..., agent: ...}
+# When a role declares no team / a team without `external`, its agent is left
+# exactly as today (default or injected). The provider adapters live in the
+# harness ``providers`` package; they are imported with the SAME guarded
+# fallback the runner already uses for other harness modules, so plugin runtime
+# carries no hard dependency on the test layer.
+
+
+def _load_provider_adapter(provider: str, transport=None):
+    """Return a provider adapter instance, or None if the providers package is
+    not importable (plugin running without the harness).
+
+    Why: external-team delegation needs the adapter, but the runner must not
+    hard-depend on the test layer — mirror the existing guarded-import pattern.
+    What: tries the harness ``providers.get_provider`` under each import root.
+    Test: covered indirectly — the external-team test injects a transport and
+    asserts the role delegates one RoleTask through the adapter."""
+    get_provider = None
+    # 'harness.*' first: the test suite imports the harness under that root, so
+    # this is the canonical module — 'tests.harness.*' can resolve to a SECOND
+    # instance with stale globals (a known duplicate-module pytest hazard).
+    for root in ("harness.providers", "tests.harness.providers", "providers"):
+        try:
+            mod = __import__(root, fromlist=["get_provider"])
+            get_provider = mod.get_provider
+            break
+        except Exception:               # noqa: BLE001 — optional layer
+            continue
+    if get_provider is None:
+        return None
+    return get_provider(provider, transport=transport)
+
+
+def _external_team_config(role: str) -> Optional[dict]:
+    """The external-team config for ``role`` from the worker config, or None.
+
+    Returns the team dict only when it sets ``external: true``; an inline team
+    (specialists/workflow) or no team yields None (today's path)."""
+    cfg = None
+    # 'harness.*' first (canonical under the test suite); fall back across roots
+    # and keep scanning while a candidate's WORKERS_CFG is empty, so a stale
+    # duplicate module never masks the populated one.
+    for root in ("harness.llm_backend", "tests.harness.llm_backend", "llm_backend"):
+        try:
+            candidate = __import__(root, fromlist=["WORKERS_CFG"]).WORKERS_CFG
+        except Exception:               # noqa: BLE001
+            continue
+        if candidate:
+            cfg = candidate
+            break
+        if cfg is None:
+            cfg = candidate
+    team = ((cfg or {}).get(role) or {}).get("team") if isinstance(cfg, dict) else None
+    if isinstance(team, dict) and team.get("external"):
+        return team
+    return None
+
+
+def _make_external_agent(role: str, team: dict, transport=None):
+    """Build a role agent that delegates the WHOLE role to an external team.
+
+    Why: CASE 4 — the engine is blind to the remote team; it ships one RoleTask
+    and writes the returned artifacts back into the workspace (the workspace
+    stays the source of truth, doc §3).
+    What: on each leaf ctx it builds a RoleTask from {node, title, spec, goal},
+    runs ``adapter.execute(task)`` and writes every returned artifact via the
+    workspace, then records an honest single 'external:<provider>' step.
+    Test: a decomposer/implementer role with team.external delegates one task
+    (fake transport) and the returned files land in the workspace."""
+    provider = str(team.get("provider") or "")
+    base_cfg = {k: team[k] for k in
+                ("endpoint", "gateway", "api", "api_key", "token", "agent",
+                 "agent_template", "agent_card", "poll_attempts")
+                if k in team}
+
+    def agent(ctx: dict) -> None:
+        adapter = _load_provider_adapter(provider, transport=transport)
+        if adapter is None:
+            raise RuntimeError(
+                f"external team for role '{role}' needs provider '{provider}' "
+                "but the providers package is not importable")
+        task = _ROLE_TASK(role=role, node=str(ctx.get("node") or ""),
+                          title=str(ctx.get("title") or ""),
+                          spec=str(ctx.get("spec") or ""),
+                          workspace=getattr(ctx.get("workspace"), "root", None),
+                          provider=provider,
+                          context={"goal": str(ctx.get("goal") or ""), **base_cfg})
+        result = adapter.execute(task)
+        ws = ctx.get("workspace")
+        wrote = 0
+        for rel, content in (getattr(result, "artifacts", None) or {}).items():
+            if ws is not None and hasattr(ws, "_write"):
+                ws._write(str(rel), str(content), "external")
+                wrote += 1
+        return None
+
+    return agent
+
+
+def _ROLE_TASK(**kw):
+    """A transport-agnostic RoleTask for the external delegation, built without a
+    hard import of role_worker (plugin layering). Falls back to a tiny local
+    shim carrying the same fields the adapters read."""
+    for root in ("harness.role_worker", "tests.harness.role_worker", "role_worker"):
+        try:
+            return __import__(root, fromlist=["RoleTask"]).RoleTask(**kw)
+        except Exception:               # noqa: BLE001
+            continue
+    from types import SimpleNamespace
+    kw.setdefault("specialty", ""); kw.setdefault("model", "")
+    kw.setdefault("params", None); kw.setdefault("constraints", {})
+    return SimpleNamespace(**kw)
+
+
+def _wrap_external_teams(agents: Optional[dict], transport=None) -> Optional[dict]:
+    """Replace any role whose worker config declares an EXTERNAL team with an
+    external-delegation agent; every other role is untouched (default path).
+
+    Test: with workers.<role>.team.external set, the returned agents[role] is
+    the delegation wrapper; with no external team the dict is returned as-is."""
+    wrapped = dict(agents or {})
+    for role in ("decomposer", "implementer", "reviewer", "verifier"):
+        team = _external_team_config(role)
+        if team is not None:
+            wrapped[role] = _make_external_agent(role, team, transport=transport)
+    return wrapped or None
+
+
 # What to do when the spec reviewer REJECTS a node's spec:
 #   rework    — re-invoke the decomposer with the reviewer's reasons, rewrite
 #               the spec, re-review (bounded by max_rework); still rejected
@@ -3019,6 +3153,7 @@ def run_project(project: dict, *, workspace, depth: Any = DEPTH_SPEC,
                 review_policy: Optional[dict] = None,
                 seed_files: Optional[dict] = None,
                 standing_requirements: Optional[Any] = None,
+                provider_transport: Optional[Any] = None,
                 human_ask: Optional[Any] = None) -> RunResult:
     """Public entry: run a project to completion. ``workspace`` is mandatory.
 
@@ -3027,9 +3162,15 @@ def run_project(project: dict, *, workspace, depth: Any = DEPTH_SPEC,
     both default to the bundled autonomous implementations so the run works
     without Hermes. At depth ``product`` the integrated project is built+run and
     checked against ``project['acceptance']`` (see ``Engine._product_check``).
+
+    A role whose worker config declares an EXTERNAL team
+    (``workers.<role>.team.external``) is delegated whole to a provider adapter
+    (doc §3/§4 CASE 4); ``provider_transport`` injects a fake transport so this
+    is exercised offline. Roles with no external team keep today's executor.
     """
     if not workspace:
         raise ValueError("Workspace is mandatory")
+    agents = _wrap_external_teams(agents, transport=provider_transport)
     return Engine(tools=tools, workspace=workspace, depth=depth, agents=agents,
                   contracts_dir=contracts_dir, sink=sink, verbosity=verbosity,
                   max_decompose_calls=max_decompose_calls,
