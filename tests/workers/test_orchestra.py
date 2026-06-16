@@ -136,7 +136,7 @@ def test_four_step_team_runs_in_order_with_handoff(monkeypatch, tmp_path):
         return "PLAN: def make_note(text): ..."
 
     def fake_ensemble(prompt, *, node, system, allowed, disallowed, cwd, model,
-                      channel, specialty):
+                      channel, specialty, **kw):
         # coder then tester both go through the ensemble path
         tag = "tester" if "TESTER PASS" in prompt else "coder"
         order.append(tag)
@@ -144,7 +144,7 @@ def test_four_step_team_runs_in_order_with_handoff(monkeypatch, tmp_path):
         return json.dumps({"files": {f"src/{node}.py": "x = 1\n"}})
 
     def fake_call(prompt, *, system, allowed, disallowed, cwd, model, role,
-                  specialty=""):
+                  specialty="", **kw):
         order.append("fixer")                # fixer uses _call_model
         seen_prompts["fixer"] = prompt
         return "FILE: src/leaf1.py\n<<<<<<< SEARCH\nx = 1\n=======\nx = 2\n>>>>>>> REPLACE"

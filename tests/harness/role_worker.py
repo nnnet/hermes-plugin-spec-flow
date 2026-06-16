@@ -157,21 +157,34 @@ def _granular_commit(ws_root: str, fn: str, stage: str) -> None:
 
 def _call_model(prompt: str, *, system: str, allowed: list[str],
                 disallowed: list[str], cwd: Optional[str], model: str,
-                role: Optional[str] = None, specialty: str = "") -> str:
+                role: Optional[str] = None, specialty: str = "",
+                meta: Optional[dict] = None) -> str:
     """ONE door to the model for every role worker (free-pool rule lives in
     llm_backend). ``role`` resolves the case-configured model CHAIN — the
     tail entries answer when the primary's quota is exhausted. #10: a node's
     ``specialty`` routes the role to a specialty-specific chain. The
-    claude-CLI path keeps the real tool-policy flags."""
-    if _chat_only():
-        fallbacks = llm_backend.chain_for(role, specialty)[1:] if role else ()
-        if fallbacks:
-            return llm_backend.ask(prompt, model=model, system=system,
-                                   fallbacks=fallbacks, role=role or "")
-        return llm_backend.ask(prompt, model=model, system=system,
-                               role=role or "")
-    return _run_claude(prompt, system=system, allowed=allowed,
-                       disallowed=disallowed, cwd=cwd, model=model)
+    claude-CLI path keeps the real tool-policy flags.
+
+    Every call is logged universally through llm_log.timed_ask with an
+    open-schema ``meta`` (role, model, specialty + whatever the caller adds:
+    step/mode/attempt/...), so request + outcome are recorded the same way for
+    EVERY worker — solo or orchestra — and the usage analysis is multi-axis by
+    construction. No caller needs its own call_start."""
+    def _do(p: str) -> str:
+        if _chat_only():
+            fallbacks = llm_backend.chain_for(role, specialty)[1:] if role else ()
+            if fallbacks:
+                return llm_backend.ask(p, model=model, system=system,
+                                       fallbacks=fallbacks, role=role or "")
+            return llm_backend.ask(p, model=model, system=system,
+                                   role=role or "")
+        return _run_claude(p, system=system, allowed=allowed,
+                           disallowed=disallowed, cwd=cwd, model=model)
+
+    call_meta = {"role": role or "", "model": model, "specialty": specialty}
+    if meta:
+        call_meta.update(meta)
+    return llm_log.timed_ask(_do, prompt=prompt, meta=call_meta)
 
 
 def _inline_file(root: Optional[str], rel: str) -> str:
@@ -185,12 +198,6 @@ def _inline_file(root: Optional[str], rel: str) -> str:
     return text
 
 
-def _log_call_start(role: str, node: str, depth: int, model: str) -> None:
-    """The live dashboard derives 'what is being worked on RIGHT NOW' from
-    an open call_start (one without a following outcome) — same contract
-    as the sim harness's timed_ask."""
-    llm_log.log({"event": "call_start", "role": role, "worker": True,
-                 "node": node, "depth": depth, "model": model})
 
 
 def _run_claude(prompt: str, *, system: str, allowed: list[str],
@@ -251,17 +258,19 @@ output as specified above."""
 def _dialog_round(prompt: str, *, role: str, node: str, system: str,
                   allowed: list[str], disallowed: list[str],
                   cwd: Optional[str], model: str, channel: Any,
-                  specialty: str = "") -> str:
+                  specialty: str = "", meta: Optional[dict] = None) -> str:
     """One worker session + at most one human Q&A round.
 
     A reply consisting of {"question": ...} pauses the work, asks the human
     through the channel and re-runs the session with the answer appended.
     No channel / no answer → the worker is told to proceed on its own
     judgement and state its assumption. #10: ``specialty`` routes the call's
-    fallback chain to a specialty-specific one."""
+    fallback chain to a specialty-specific one. ``meta`` carries extra call
+    descriptors (step, mode, attempt) for the universal call log."""
+    _m = dict(meta or {}); _m.setdefault("node", node)
     raw = _call_model(prompt, system=system, allowed=allowed,
                       disallowed=disallowed, cwd=cwd, model=model, role=role,
-                      specialty=specialty)
+                      specialty=specialty, meta=_m)
     try:
         probe = _extract_json(raw)
     except ValueError:
@@ -285,7 +294,7 @@ def _dialog_round(prompt: str, *, role: str, node: str, system: str,
                     "the normal output now (no more questions).")
     return _call_model(followup, role=role, system=system, allowed=allowed,
                        disallowed=disallowed, cwd=cwd, model=model,
-                       specialty=specialty)
+                       specialty=specialty, meta={**_m, "followup": True})
 
 
 def _handle_operator_reply(out: dict, *, role: str, node: str,
@@ -486,7 +495,6 @@ def make_decomposer(workspace_dir: Optional[str] = None,
             if channel is not None else None
         if note:
             prompt += _NOTE_RULE.format(note=note)
-        _log_call_start("decomposer", nid, ctx["depth"], model)
         raw = _dialog_round(prompt, role="decomposer", node=nid, system=system,
                             allowed=allowed, disallowed=disallowed,
                             cwd=workspace_dir, model=model, channel=channel)
@@ -564,17 +572,18 @@ def _candidate_compiles(raw: str) -> "tuple[bool, int, str]":
 
 def _ensemble_generate(prompt: str, *, node: str, system: str, allowed: list,
                        disallowed: list, cwd: str, model: str, channel: Any,
-                       specialty: str) -> str:
+                       specialty: str, meta: Optional[dict] = None) -> str:
     """Generate up to N candidate implementations from different free models
     and return the reply of the first that compiles clean (else the best by
     (compiles, n_files)). Stops early on the first clean candidate to spare
-    the free-pool quota. N==1 is exactly the legacy single call."""
+    the free-pool quota. N==1 is exactly the legacy single call. ``meta`` is
+    forwarded to the universal call log (step/mode/...)."""
     n = _ensemble_size()
     if n <= 1:
         return _dialog_round(prompt, role="implementer", node=node,
                              system=system, allowed=allowed,
                              disallowed=disallowed, cwd=cwd, model=model,
-                             channel=channel, specialty=specialty)
+                             channel=channel, specialty=specialty, meta=meta)
     chain = llm_backend.chain_for("implementer", specialty) or [model]
     best = None     # (score_tuple, raw)
     for i in range(n):
@@ -582,9 +591,13 @@ def _ensemble_generate(prompt: str, *, node: str, system: str, allowed: list,
         raw = _dialog_round(prompt, role="implementer", node=node,
                             system=system, allowed=allowed,
                             disallowed=disallowed, cwd=cwd, model=m,
-                            channel=channel, specialty=specialty)
+                            channel=channel, specialty=specialty,
+                            meta={**(meta or {}), "candidate": i})
         clean, nfiles, why = _candidate_compiles(raw)
-        llm_log.log({"event": "creator_candidate", "node": node, "model": m,
+        # candidate EVALUATION marker (engine decision), not a call log — the
+        # call itself was logged once by timed_ask. No `model` here so it is
+        # never miscounted as a request.
+        llm_log.log({"event": "creator_candidate", "node": node,
                      "idx": i, "clean": clean, "files": nfiles,
                      "reason": why[:80]})
         score = (1 if clean else 0, nfiles)
@@ -716,8 +729,9 @@ def _orchestra_run(ctx: dict, ws_root: str, nid: str, fn: str, *,
         role = step["role"]
         s_model = _step_model(step, specialty)
         s_system = _step_system(step, system)
-        llm_log.log({"event": "orchestra_step", "node": nid, "role": role,
-                     "model": s_model})
+        # the call is logged once by timed_ask; the step/mode travel as call
+        # meta so usage is sliceable by orchestra step without a second log.
+        step_meta = {"step": role, "mode": "orchestra"}
         try:
             if role == "architect":
                 prompt = _ARCHITECT_TASK.format(
@@ -726,7 +740,8 @@ def _orchestra_run(ctx: dict, ws_root: str, nid: str, fn: str, *,
                 handoff["architect_plan"] = _dialog_round(
                     prompt, role="implementer", node=nid, system=s_system,
                     allowed=allowed, disallowed=disallowed, cwd=ws_root,
-                    model=s_model, channel=channel, specialty=specialty)
+                    model=s_model, channel=channel, specialty=specialty,
+                    meta=step_meta)
 
             elif role in ("coder", "tester"):
                 prompt = base_prompt
@@ -739,7 +754,7 @@ def _orchestra_run(ctx: dict, ws_root: str, nid: str, fn: str, *,
                 raw = _ensemble_generate(
                     prompt, node=nid, system=s_system, allowed=allowed,
                     disallowed=disallowed, cwd=ws_root, model=s_model,
-                    channel=channel, specialty=specialty)
+                    channel=channel, specialty=specialty, meta=step_meta)
                 try:
                     out = _extract_json(raw)
                 except ValueError:
@@ -765,7 +780,7 @@ def _orchestra_run(ctx: dict, ws_root: str, nid: str, fn: str, *,
                 raw2 = _call_model(
                     repair, system=s_system, allowed=allowed,
                     disallowed=disallowed, cwd=ws_root, model=s_model,
-                    role="implementer", specialty=specialty)
+                    role="implementer", specialty=specialty, meta=step_meta)
                 with ws_tx.transaction(ws_root, f"leaf:{nid}",
                                        "orchestra repair"):
                     if _apply_diff_repair(ws, ws_root, fn, raw2):
@@ -1069,7 +1084,6 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         note = channel.poll_note() if channel is not None else None
         if note:
             prompt += _NOTE_RULE.format(note=note)
-        _log_call_start("implementer", nid, int(ctx.get("depth", -1)), model)
         raw = _dialog_round(prompt, role="implementer", node=nid, system=system,
                             allowed=allowed, disallowed=disallowed,
                             cwd=ws_root, model=model, channel=channel,
@@ -1139,7 +1153,6 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
                     f" {round(_time.time() - leaf_t0)}s elapsed)")
 
         _round_gate(1, "first implement round")
-        _log_call_start("implementer", nid, int(ctx.get("depth", -1)), model)
         # creator ensemble: with SPEC_FLOW_CREATOR_ENSEMBLE>=2 this generates
         # several candidates from different free models and returns the first
         # that compiles clean — the broken-syntax candidate never lands. N==1
@@ -1337,7 +1350,6 @@ def make_reviewer() -> Callable[[dict], dict]:
             constitution="; ".join(ctx.get("constitution") or []),
             repo_map=_review_repo_map(ctx.get("workspace_root")),
             refusals=_review_refusals(ctx.get("node")))
-        _log_call_start("reviewer", str(ctx.get("node", "?")), int(ctx.get("depth", -1)), model)
         raw = _call_model(prompt, system=system, allowed=allowed,
                           disallowed=disallowed, cwd=ctx.get("workspace_root"),
                           model=model, role="reviewer")
@@ -1384,7 +1396,6 @@ def make_researcher() -> Callable[[dict], dict]:
         prompt = _RESEARCH_TASK.format(goal=ctx.get("goal", ""),
                                        node=ctx.get("node", "?"),
                                        question=ctx["question"])
-        _log_call_start("researcher", str(ctx.get("node", "?")), int(ctx.get("depth", -1)), model)
         raw = _call_model(prompt, system=system, allowed=allowed,
                           disallowed=disallowed, cwd=ctx.get("workspace_root"),
                           model=model, role="researcher")

@@ -86,8 +86,14 @@ def test_llm_calls_counted_universally_by_model_field(tmp_path):
            {"event": "outcome", "t": 210.0, "model": "m"},     # result — excluded
            {"event": "commit_queue", "t": 220.0}]              # no model — ignored
     a = dash._idle_analysis(_run(tmp_path, rows, llm))
-    assert a["top"][0]["llm"] == 5
-    # multi-parameter usage is discovered from whatever was logged
+    # реализация is keyed authoritatively by role/event: architect + coder +
+    # creator_candidate = 3 implement-stage calls. The 2 role-less, non-orchestra
+    # calls (future_orchestra_step, bare call_start) stay un-attributable and are
+    # counted via the gap window instead — never double-counted.
+    impl = _cause_row(a, "реализация (LLM)")
+    assert impl is not None and impl["llm"] == 3
+    assert a["top"][0]["llm"] == 2          # the 2 ambiguous calls in the gap
+    # multi-parameter usage still sees ALL 5 model-bearing calls (5 requests)
     u = a["llm_usage"]
     assert u["total"] == 5
     assert "role" in u["dims"]
@@ -124,3 +130,120 @@ def test_zero_and_negative_gaps_skipped(tmp_path):
     a = dash._idle_analysis(_run(tmp_path, rows))
     # the 0-gap pair is dropped; only the 5s gap counts
     assert a["events"] == 1 and a["total_s"] == 5.0
+
+
+def _cause_row(a, cause):
+    return next((r for r in a["by_cause"] if r["cause"] == cause), None)
+
+
+def test_implement_llm_requests_survive_burst_collapsed_trace(tmp_path):
+    # REGRESSION: the implement stage writes its milestones in a BURST after the
+    # orchestra returns, so its trace rows share ~one timestamp; their gaps are
+    # <=0 and get dropped. Counting "calls inside the surviving gap" then read 0
+    # requests for реализация though the orchestra made many real calls. The fix
+    # attributes LLM requests by node/role from the llm-log, not by trace gaps.
+    epoch0 = 1_781_000_000.0
+    rows = [
+        _ev(epoch0, task="L0", phase="decompose"),
+        # the engine spends 600s implementing, then bursts 3 milestones at once
+        _ev(epoch0 + 600, tick=10, task="db:impl", phase="implement"),
+        _ev(epoch0 + 600, tick=11, task="db:impl", phase="implement"),
+        _ev(epoch0 + 600, tick=12, task="db:impl", phase="implement"),
+    ]
+    # 4 real implement-stage model calls logged run-relative, all BEFORE the
+    # burst timestamp (their wall-window does not overlap any surviving gap).
+    llm = [
+        {"event": "orchestra_step", "t": 100.0, "node": "db",
+         "role": "architect", "model": "m", "latency_s": 120.0, "wall": epoch0 + 100},
+        {"event": "orchestra_step", "t": 230.0, "node": "db",
+         "role": "coder", "model": "m", "latency_s": 130.0, "wall": epoch0 + 230},
+        {"event": "orchestra_step", "t": 370.0, "node": "db",
+         "role": "tester", "model": "m", "latency_s": 90.0, "wall": epoch0 + 370},
+        {"event": "creator_candidate", "t": 470.0, "node": "db",
+         "model": "m", "latency_s": 110.0, "wall": epoch0 + 470},
+    ]
+    a = dash._idle_analysis(_run(tmp_path, rows, llm))
+    impl = _cause_row(a, "реализация (LLM)")
+    assert impl is not None
+    # all 4 implement-stage calls counted from the llm-log, NOT 0
+    assert impl["llm"] == 4
+    # one logical op per node (db) — not an artifact of surviving gaps
+    assert impl["count"] == 1
+    # time = summed real call durations (120+130+90+110 = 450s), since the
+    # harness logged latency_s — not the trace-gap wall time
+    assert impl["total"] == 450.0
+
+
+def test_implement_time_falls_back_to_trace_gap_without_latency(tmp_path):
+    # an OLD run with no latency_s/wall on its call records: the request COUNT is
+    # still authoritative from the llm-log, but the displayed TIME falls back to
+    # the trace-gap wall time (we don't know per-call durations).
+    epoch0 = 1_781_000_000.0
+    rows = [_ev(epoch0, task="L0", phase="decompose"),
+            _ev(epoch0 + 300, task="impl", phase="implement")]
+    llm = [{"event": "orchestra_step", "t": 50.0, "node": "n", "role": "coder",
+            "model": "m"},
+           {"event": "orchestra_step", "t": 90.0, "node": "n", "role": "tester",
+            "model": "m"}]
+    a = dash._idle_analysis(_run(tmp_path, rows, llm))
+    impl = _cause_row(a, "реализация (LLM)")
+    assert impl["llm"] == 2            # real count from llm-log
+    assert impl["total"] == 300.0     # trace-gap wall time kept (no latency)
+
+
+def test_integration_keeps_pytest_time_only_count_from_llm(tmp_path):
+    # интеграция = mostly pytest; even when the verifier makes an LLM judgment
+    # call with a real latency, the cause TIME must stay trace-gap-sourced (the
+    # pytest wall time), only the request COUNT is taken from the llm-log.
+    epoch0 = 1_781_000_000.0
+    rows = [_ev(epoch0, task="x", phase="review"),
+            _ev(epoch0 + 200, task="x", phase="integrate",
+                action="end-to-end acceptance")]
+    llm = [{"event": "call_start", "t": 10.0, "node": "x", "role": "verifier",
+            "model": "m", "latency_s": 5.0, "wall": epoch0 + 10}]
+    a = dash._idle_analysis(_run(tmp_path, rows, llm))
+    integ = _cause_row(a, "интеграция (тесты)")
+    assert integ["llm"] == 1          # verifier call counted
+    assert integ["total"] == 200.0    # full pytest gap, NOT the 5s LLM latency
+
+
+def test_latency_is_spliced_from_call_ok_onto_call_start(tmp_path):
+    # timed_ask logs the real duration on call_ok (which has NO model, so it is
+    # not a request). The analysis must splice that latency onto the matching
+    # call_start request so реализация time reflects real model spend.
+    epoch0 = 1_781_000_000.0
+    rows = [_ev(epoch0, task="L0", phase="decompose"),
+            _ev(epoch0 + 999, task="impl", phase="implement")]
+    llm = [
+        {"event": "call_start", "t": 10.0, "node": "n", "role": "implementer",
+         "model": "m"},
+        {"event": "call_ok", "t": 70.0, "node": "n", "role": "implementer",
+         "latency_s": 60.0, "wall": epoch0 + 70},
+        {"event": "call_start", "t": 100.0, "node": "n", "role": "implementer",
+         "model": "m"},
+        {"event": "call_ok", "t": 140.0, "node": "n", "role": "implementer",
+         "latency_s": 40.0, "wall": epoch0 + 140},
+    ]
+    a = dash._idle_analysis(_run(tmp_path, rows, llm))
+    impl = _cause_row(a, "реализация (LLM)")
+    assert impl["llm"] == 2            # two implementer requests
+    # time = spliced latencies (60+40), NOT the 999s trace gap
+    assert impl["total"] == 100.0
+
+
+def test_call_cause_keys_by_role_not_window(tmp_path):
+    # a decomposer call logged with a timestamp that lands inside an implement
+    # gap must still be attributed to декомпозиция by its ROLE, not to the gap's
+    # реализация cause. This is the node/role-keyed attribution the fix adds.
+    epoch0 = 1_781_000_000.0
+    rows = [_ev(epoch0, task="L0", phase="implement"),
+            _ev(epoch0 + 300, task="impl", phase="implement")]
+    llm = [{"event": "call_start", "t": 150.0, "node": "L0",
+            "role": "decomposer", "model": "m"}]
+    a = dash._idle_analysis(_run(tmp_path, rows, llm))
+    dec = _cause_row(a, "декомпозиция (LLM)")
+    impl = _cause_row(a, "реализация (LLM)")
+    assert dec is not None and dec["llm"] == 1   # keyed by role -> decompose
+    # the implement gap's own per-gap LLM count is not inflated by the
+    # decomposer call (реализация has no llm-log calls -> stays 0)
+    assert (impl is None) or (impl["llm"] == 0)

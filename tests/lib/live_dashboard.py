@@ -855,7 +855,9 @@ _LLM_RESULT_EVENTS = {"outcome"}
 # list of dimensions is discovered from the data, never hard-coded, so a new
 # logged parameter (solo/orchestra, retry number, ...) becomes a slice on its
 # own with no change here.
-_LLM_NON_DIMS = {"t", "reason", "detail", "text", "error", "files", "idx"}
+_LLM_NON_DIMS = {"t", "reason", "detail", "text", "error", "files", "idx",
+                 "_ev", "latency_s", "wall", "wall_end", "reply_chars",
+                 "prompt_chars"}
 
 
 def _llm_usage(calls: list, dims=None) -> dict:
@@ -929,6 +931,16 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
 
     waits = []
     calls = []
+    # completion records (call_ok / call_error) carry the real `latency_s` (how
+    # long the model actually worked) but NOT `model`, so they are not request
+    # records themselves. We queue them per identity and later splice their
+    # latency onto the matching call_start, giving each request a true duration.
+    _COMPLETION_EVENTS = {"call_ok", "call_error"}
+
+    def _ident_key(e: dict) -> tuple:
+        return tuple(e.get(k) for k in ("role", "node", "depth", "purpose", "mode"))
+
+    completions: dict = {}
     lf = run_dir / "llm-log.jsonl"
     if lf.exists():
         for line in lf.read_text(encoding="utf-8", errors="ignore").splitlines():
@@ -942,6 +954,12 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
                 if t is not None:
                     waits.append((_epoch(float(t)),
                                   float(e.get("wait_s", 0) or 0)))
+            elif ev_ in _COMPLETION_EVENTS:
+                lat = e.get("latency_s")
+                if lat is not None:
+                    completions.setdefault(_ident_key(e), []).append(
+                        {"latency_s": float(lat),
+                         "wall": e.get("wall")})
             elif "model" in e and ev_ not in _LLM_RESULT_EVENTS:
                 # UNIVERSAL, role-independent LLM-request signal: every model
                 # invocation names its `model`, whatever the worker calls the
@@ -962,9 +980,34 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
                 t = e.get("t")
                 if t is not None:
                     rec = dict(e)
-                    rec.pop("event", None)
+                    # keep the event kind under a reserved key so the call-cause
+                    # classifier can tell an orchestra_step / creator_candidate
+                    # (implement stage) apart from a plain call_start, without
+                    # re-reading the log. `event` itself is dropped so it does
+                    # not become a usage dimension.
+                    rec["_ev"] = rec.pop("event", None)
                     rec["t"] = _epoch(float(t))
                     calls.append(rec)
+
+    # splice each completion's real latency onto its matching call_start request
+    # (same identity, FIFO order). timed_ask logs latency on call_ok, which has
+    # no `model` and is therefore not a request itself — without this join the
+    # request records would have no duration and the LLM-time column would stay
+    # gap-sourced even on a harness that DOES record real call durations.
+    _comp_idx: dict = {}
+    for c in calls:
+        if c.get("latency_s") is not None:
+            continue
+        k = tuple(c.get(kk) for kk in ("role", "node", "depth", "purpose", "mode"))
+        q = completions.get(k)
+        if not q:
+            continue
+        i = _comp_idx.get(k, 0)
+        if i < len(q):
+            c["latency_s"] = q[i]["latency_s"]
+            if q[i].get("wall") is not None:
+                c["wall_end"] = q[i]["wall"]
+            _comp_idx[k] = i + 1
 
     def _cause(ev: dict, gap: float, t0: float, t1: float) -> str:
         for wt, _ws in waits:
@@ -987,6 +1030,65 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
             return "ответ человека"
         return ph or "прочее"
 
+    # ---- authoritative LLM attribution, keyed by node+role (not trace gaps) --
+    # The trace milestones for the implement stage are written in a BURST after
+    # the orchestra returns, so they share ~one timestamp; the gap between them
+    # is <=0 and the row is dropped below. Counting "calls inside this gap" then
+    # loses every orchestra request. So we attribute LLM requests (and, when the
+    # harness logged real durations, LLM time) to a cause DIRECTLY from the
+    # llm-log call records via their role/event — independent of trace gaps.
+    _IMPL_ROLES = {"implementer", "architect", "coder", "tester", "fixer"}
+    _IMPL_EVENTS = {"orchestra_step", "orchestra_start",
+                    "creator_candidate", "creator_ensemble"}
+
+    def _call_cause(rec: dict):
+        """Map a single llm-log call record to its idle cause via role/event.
+        Returns None when the call is ambiguous (no role, no orchestra marker)
+        — those keep the timestamp-window attribution instead, so a role-less
+        call is never force-folded into реализация."""
+        role = str(rec.get("role", "")).lower()
+        kind = str(rec.get("_ev", "")).lower()
+        if role == "decomposer":
+            return "декомпозиция (LLM)"
+        if role == "reviewer":
+            return "ревью спеки"
+        if role == "verifier":
+            return "интеграция (тесты)"
+        if (role in _IMPL_ROLES or kind in _IMPL_EVENTS
+                or rec.get("orchestra")):
+            return "реализация (LLM)"
+        return None
+
+    # cause -> {req, time, nodes}: real request count, real model time (summed
+    # call durations when the harness logged them, else 0 = unknown), and the
+    # set of distinct nodes that issued calls (one logical op per node).
+    llm_by_cause: dict = {}
+    for c in calls:
+        cc = _call_cause(c)
+        if cc is None:
+            continue
+        a = llm_by_cause.setdefault(
+            cc, {"req": 0, "time": 0.0, "nodes": set(), "timed": False})
+        a["req"] += 1
+        # prefer an explicit latency; fall back to wall_end-wall_start if both
+        # endpoints were logged. Old runs have neither → time stays 0 (unknown)
+        # and the trace-gap time is kept for that cause.
+        lat = c.get("latency_s")
+        if lat is None and c.get("wall") is not None and c.get("wall_end") is not None:
+            lat = float(c["wall_end"]) - float(c["wall"])
+        if lat is not None:
+            a["time"] += float(lat)
+            a["timed"] = True
+        nd = c.get("node")
+        if nd:
+            a["nodes"].add(nd)
+
+    # calls we could NOT attribute by role/event (no role, no orchestra marker).
+    # Only THESE keep the old timestamp-window attribution; calls with a known
+    # cause are counted authoritatively above and must not also leak into a gap
+    # they happen to fall inside (that was the orchestra-into-wrong-cause bug).
+    _ambig_t = [c["t"] for c in calls if _call_cause(c) is None]
+
     rows = []
     for i in range(len(trace) - 1):
         ev, nxt = trace[i], trace[i + 1]
@@ -996,9 +1098,10 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
         gap = float(t1) - float(t0)
         if gap <= 0:
             continue
-        # how many LLM calls were started inside this gap [t0, t1) — lets the
-        # idle table show whether a cause's time was spent making requests
-        llm = sum(1 for c in calls if float(t0) <= c["t"] < float(t1))
+        # how many UN-attributable LLM calls were started inside this gap — lets
+        # the idle table still show request activity for causes the llm-log
+        # cannot key by role, without double-counting role-keyed calls.
+        llm = sum(1 for t in _ambig_t if float(t0) <= t < float(t1))
         # A gap is the time the engine spent PRODUCING the next event, so it is
         # attributed to that NEXT event's work — not the previous one. (Otherwise
         # the idle after an auto-approved HITL checkpoint is mislabelled "ответ
@@ -1026,6 +1129,43 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
                for k, v in agg.items()]
         return sorted(out, key=lambda x: x["total"], reverse=True)
 
+    def _cause_rollup() -> list:
+        """by_cause with AUTHORITATIVE LLM attribution from the llm-log.
+
+        Time comes from trace gaps (the wall-clock the engine spent), but for
+        LLM-bearing causes the request count, op count and — when the harness
+        logged real call durations — the time are taken from the llm-log call
+        records keyed by node/role, NOT from how many trace gaps happened to
+        survive the burst-collapse. This is what fixes 'реализация (LLM): 0
+        запросов LLM' even though the orchestra made ~23 real calls."""
+        # интеграция = mostly pytest over the built tree; its wall time must
+        # stay trace-gap-sourced even though the verifier also makes one LLM
+        # judgment call per node. For it we override only the request count, not
+        # the time/op-count. The pure-LLM causes below own their whole window.
+        _PURE_LLM = {"декомпозиция (LLM)", "ревью спеки", "реализация (LLM)"}
+        base = {r["cause"]: r for r in _rollup("cause")}
+        # fold every cause seen in the llm-log in, even if its trace rows were
+        # all dropped (e.g. orchestra milestones that collapsed to one tick).
+        for cc, lc in llm_by_cause.items():
+            r = base.get(cc)
+            if r is None:
+                r = {"cause": cc, "total": 0.0, "count": 0, "llm": 0}
+                base[cc] = r
+            # request count: real number of model calls for this cause —
+            # always authoritative from the llm-log.
+            r["llm"] = lc["req"]
+            if cc in _PURE_LLM:
+                # op count: one logical op per node that issued calls (an
+                # implement node is ONE op, not an artifact of surviving gaps).
+                if lc["nodes"]:
+                    r["count"] = len(lc["nodes"])
+                # time: prefer summed real call durations when the harness
+                # logged them; otherwise keep the trace-gap wall time.
+                if lc["timed"] and lc["time"] > 0:
+                    r["total"] = round(lc["time"], 1)
+        out = list(base.values())
+        return sorted(out, key=lambda x: x["total"], reverse=True)
+
     total = round(sum(r["dur"] for r in rows), 1)
     top_rows = sorted(rows, key=lambda r: r["dur"], reverse=True)[:top]
     return {
@@ -1034,7 +1174,7 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
         "top": top_rows,
         "by_node": _rollup("node")[:25],
         "by_phase": _rollup("phase"),
-        "by_cause": _rollup("cause"),
+        "by_cause": _cause_rollup(),
         "tokens": _token_economics(run_dir),
         # multi-parameter LLM-usage breakdown (by role / specialty / model /
         # node) — the data side of the multi-axis analysis; the UI can slice it

@@ -26,12 +26,21 @@ def log_path() -> Optional[Path]:
 
 
 def log(event: dict) -> None:
-    """Append one structured event to the LLM debug log (no-op when unset)."""
+    """Append one structured event to the LLM debug log (no-op when unset).
+
+    Each record carries TWO clocks: ``t`` is run-relative monotonic seconds
+    (resume-safe, used for ordering/latency), ``wall`` is the real wall-clock
+    EPOCH second. The trace stamps its rows in epoch too, so ``wall`` lets a
+    consumer correlate an LLM call to the run timeline WITHOUT heuristics — the
+    implement-stage milestones are written to the trace in a burst (one shared
+    millisecond) after the call returns, so the trace gaps do not reflect when
+    the model was actually working; ``wall`` on the call records does."""
     p = log_path()
     if p is None:
         return
     p.parent.mkdir(parents=True, exist_ok=True)
-    rec = {"t": round(time.monotonic() - _T0, 3), **event}
+    rec = {"t": round(time.monotonic() - _T0, 3),
+           "wall": round(time.time(), 3), **event}
     with p.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
@@ -67,23 +76,45 @@ def read_events(kinds: Any = None, *, node: Any = None) -> list:
     return out
 
 
-def timed_ask(ask: Callable[[str], str], *, role: str, node: str, depth: Any,
-              model: str, prompt: str) -> str:
-    """Run ``ask(prompt)``, timing it and logging the call (and any failure).
+#: keys whose value is large/free-text and must NOT bloat every call record
+_BIG_META = {"prompt", "system", "text", "reply"}
 
-    Logs BEFORE returning so a hang/slow call is visible the moment it ends;
-    on exception logs the error and re-raises."""
+
+def timed_ask(ask: Callable[[str], str], *, prompt: str, meta: Optional[dict] = None,
+              **legacy: Any) -> str:
+    """THE one door for logging an LLM call — universal, role-independent.
+
+    Wrap any model invocation: it times the call and writes a ``call_start``
+    (the request, with its full descriptive context) and a ``call_ok`` /
+    ``call_error`` (the outcome). The descriptive context is OPEN SCHEMA — pass
+    a ``meta`` dict with whatever characterises the call: who/role, why/purpose,
+    node, specialty, mode (solo vs orchestra), attempt, model, … New keys need
+    no change here or downstream; the analysis discovers them from the data.
+
+    ``meta`` SHOULD carry at least ``role`` and ``model`` (the request marker
+    every consumer keys on). Legacy callers may still pass role=/node=/depth=/
+    model= as keywords; they are merged into meta for backward compatibility."""
+    ctx = {k: v for k, v in (meta or {}).items() if k not in _BIG_META}
+    for k, v in legacy.items():
+        ctx.setdefault(k, v)
+    ctx["prompt_chars"] = len(prompt)
     t0 = time.monotonic()
-    log({"event": "call_start", "role": role, "node": node, "depth": depth,
-         "model": model, "prompt_chars": len(prompt)})
+    log({"event": "call_start", **ctx})
+    # the outcome echoes the identity keys (role/node) but NOT `model`, so the
+    # call counts exactly once (the request, via call_start) — the outcome is a
+    # completion record, excluded from request counts.
+    ident = {k: ctx[k] for k in ("role", "node", "depth", "purpose", "mode")
+             if k in ctx}
     try:
         reply = ask(prompt)
     except Exception as exc:  # noqa: BLE001
-        log({"event": "call_error", "role": role, "node": node, "depth": depth,
-             "latency_s": round(time.monotonic() - t0, 2), "error": repr(exc)[:300]})
+        log({"event": "call_error", **ident,
+             "latency_s": round(time.monotonic() - t0, 2),
+             "error": repr(exc)[:300]})
         raise
-    log({"event": "call_ok", "role": role, "node": node, "depth": depth,
-         "latency_s": round(time.monotonic() - t0, 2), "reply_chars": len(reply)})
+    log({"event": "call_ok", **ident,
+         "latency_s": round(time.monotonic() - t0, 2),
+         "reply_chars": len(reply)})
     return reply
 
 
