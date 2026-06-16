@@ -379,6 +379,18 @@ def ask(prompt: str, *, model: str, system: str | None = None,
     cfg = WORKERS_CFG or {}
     _call_ctx.role = role          # #6: tag token usage with the calling role
     _call_ctx.step = step          # specialist (orchestra step) for per-member split
+    _call_ctx.last_usage = None    # cleared each call; _ask_openai stashes real usage here
+
+    def _ret(reply: str, used_model: str) -> str:
+        # UNIVERSAL token accounting at ask()'s SINGLE exit point: use the
+        # model's real usage when a backend captured one (stashed in
+        # _call_ctx.last_usage), else count prompt+reply with tiktoken; then log
+        # the token_usage event and return. Every successful ask() — openai,
+        # claude, any backend — therefore produces exactly one token_usage row.
+        usage = getattr(_call_ctx, "last_usage", None) or {}
+        _call_ctx.last_usage = None
+        _log_token_usage(used_model, usage, prompt=prompt, reply=reply)
+        return reply
     # cyclic primary rotation (#40): spread successive calls across the free
     # chain so one capped model isn't every call's first hit. No-op unless
     # the case sets workers.cycle_models; the model SET is unchanged.
@@ -445,9 +457,9 @@ def ask(prompt: str, *, model: str, system: str | None = None,
             try:
                 if gate is not None:
                     with gate:
-                        return _ask_one(prompt, m, system, fallback=i > 0,
-                                        **extra)
-                return _ask_one(prompt, m, system, fallback=i > 0, **extra)
+                        return _ret(_ask_one(prompt, m, system, fallback=i > 0,
+                                             **extra), m)
+                return _ret(_ask_one(prompt, m, system, fallback=i > 0, **extra), m)
             except (QuotaExhausted, RuntimeError,
                     subprocess.SubprocessError) as exc:
                 # the chain exists to absorb PROVIDER failure of any
@@ -473,8 +485,8 @@ def ask(prompt: str, *, model: str, system: str | None = None,
                 try:
                     # short leash: a hung CLI fallback must not burn the
                     # full 300s before the rotation rolls to the next one
-                    return _ask_one(prompt, fb, system, fallback=True,
-                                    timeout=leash, **extra)
+                    return _ret(_ask_one(prompt, fb, system, fallback=True,
+                                         timeout=leash, **extra), fb)
                 except (QuotaExhausted, RuntimeError,
                         subprocess.SubprocessError) as exc:
                     last_exc = exc
@@ -594,10 +606,15 @@ def _ask_openai(prompt: str, model: str, system: str | None = None,
         if status == 200:
             try:
                 out = json.loads(body)
-                text = out["choices"][0]["message"]["content"]
+                msg = out["choices"][0]["message"]
+                # weak reasoning models (qwen3-next, …) sometimes return the
+                # answer in `reasoning` with an empty `content` — accept it.
+                text = msg.get("content") or msg.get("reasoning") or ""
                 if text and text.strip():
-                    _log_token_usage(model, out.get("usage") or {},
-                                     prompt=prompt, reply=text)
+                    # stash the REAL usage so ask()'s single exit point logs it
+                    # (or falls back to tiktoken). Token accounting is universal
+                    # in ask(), not per-backend here.
+                    _call_ctx.last_usage = out.get("usage") or {}
                     return text
                 last = "empty completion"
             except (KeyError, IndexError, json.JSONDecodeError) as exc:

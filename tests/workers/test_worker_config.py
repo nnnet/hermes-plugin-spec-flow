@@ -441,3 +441,37 @@ def test_flat_key_wins_over_stage_of_same_meaning():
         assert lb.model_for("decomposer") == "flat/wins"
     finally:
         lb.configure_workers(None)
+
+
+def test_ask_logs_token_usage_at_exit(monkeypatch, tmp_path):
+    # Token accounting is universal at ask()'s exit: real usage when a backend
+    # stashed one, tiktoken estimate otherwise — every successful ask logs one
+    # token_usage row (regression: the old per-backend log never fired live).
+    import json as _json
+    from harness import llm_log
+    logf = tmp_path / "ll.jsonl"
+    monkeypatch.setattr(llm_log, "LOG_PATH", str(logf), raising=False)
+    monkeypatch.setenv("SPEC_FLOW_LLM_LOG", str(logf))
+
+    def fake_real(prompt, model, system, params=None, **k):
+        lb._call_ctx.last_usage = {"prompt_tokens": 11, "completion_tokens": 7}
+        return "real"
+    def fake_none(prompt, model, system, params=None, **k):
+        lb._call_ctx.last_usage = None
+        return "estimated body"
+    try:
+        lb.configure_workers({"backend": "openai", "base_url": "x"})
+        monkeypatch.setattr(lb, "_ask_one", fake_real)
+        lb.ask("hello", model="openrouter/m:free", role="decomposer")
+        monkeypatch.setattr(lb, "_ask_one", fake_none)
+        lb.ask("count me", model="openrouter/m:free", role="coder", step="coder")
+    finally:
+        lb.configure_workers(None)
+
+    rows = [_json.loads(l) for l in logf.read_text().splitlines()
+            if '"token_usage"' in l]
+    assert len(rows) == 2, rows
+    real, est = rows[0], rows[1]
+    assert real["estimated"] is False and real["prompt_tokens"] == 11
+    assert est["estimated"] is True and est["completion_tokens"] > 0
+    assert est["step"] == "coder"

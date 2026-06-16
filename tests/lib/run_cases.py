@@ -612,6 +612,10 @@ def main() -> int:
             "workspace": "workspace", "run_dir": str(case_dir),
             # who answered for whom — verifies the author-vs-judge split
             "worker_models": _worker_models(),
+            # the full workers block (stages + team specialists w/ provider,
+            # model, params) so the dashboard team card reads the REAL config
+            # instead of reconstructing a partial roster from the llm-log.
+            "workers": case.get("workers"),
         }, ensure_ascii=False, indent=2), encoding="utf-8")
         # fresh state per case so gate cooldowns never leak between cases
         os.environ["HERMES_HOME"] = tempfile.mkdtemp(prefix=f"specflow-{name}-")
