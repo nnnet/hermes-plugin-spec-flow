@@ -105,51 +105,48 @@ _LEAF = {"modules": 1, "tasks": 3, "interfaces": 1, "estimated_loc": 80,
          "testable_criteria": True}
 
 
-def test_decomposer_prompt_carries_memory_block(monkeypatch):
-    from harness import llm_backend as lb
+def test_decomposer_prompt_carries_memory_block(monkeypatch, fake_openai):
     from harness import role_worker as rw
-    monkeypatch.setattr(lb, "BACKEND", "openai")
+    from harness_fakeapi import ok
     f = mem.FakeMemory()
     f.retain(mem.role_bank("decomposer"),
              "craft: marketplace specs need explicit payout requirements")
     mem.MANAGER = mem.MemoryManager(f, "p4-case")
-    seen = {}
-
-    def fake_ask(prompt, model, system=None, **kw):
-        seen["prompt"] = prompt
-        return _json.dumps({"atomic": True, "metrics": dict(_LEAF),
-                            "spec_markdown": "## Requirements\n- x"})
-
-    monkeypatch.setattr(lb, "ask", fake_ask)
+    # real local server answers; we then read the prompt the harness sent it.
+    monkeypatch.setattr(rw, "_model_for",
+                        lambda role, specialty="": "openrouter/x:free")
+    srv = fake_openai([(200, ok(_json.dumps(
+        {"atomic": True, "metrics": dict(_LEAF),
+         "spec_markdown": "## Requirements\n- x"})))])
     dec = rw.make_decomposer()
     dec({"project": {"goal": "marketplace with payouts", "target": "t",
                      "constitution": []},
          "node": {"id": "payouts", "title": "Seller payouts"},
          "parent": "L0", "depth": 3, "ancestors": [], "existing_nodes": []})
-    assert "RELEVANT EXPERIENCE" in seen["prompt"]
-    assert "payout requirements" in seen["prompt"]
+    sent = " ".join(m.get("content", "")
+                    for m in srv.requests[0]["messages"])
+    assert "RELEVANT EXPERIENCE" in sent
+    assert "payout requirements" in sent
 
 
-def test_green_leaf_retained_in_both_tiers(tmp_path, monkeypatch):
-    from harness import llm_backend as lb
+def test_green_leaf_retained_in_both_tiers(tmp_path, monkeypatch, fake_openai):
     from harness import role_worker as rw
-    monkeypatch.setattr(lb, "BACKEND", "openai")
+    from harness_fakeapi import ok
     f = mem.FakeMemory()
     mem.MANAGER = mem.MemoryManager(f, "p4-case")
     (tmp_path / "specs").mkdir()
     (tmp_path / "specs" / "pay.md").write_text("spec", encoding="utf-8")
 
-    def fake_ask(prompt, model, system=None, **kw):
-        return _json.dumps({"files": {
-            "src/pay.py": "def ok():\n    return True\n",
-            "tests/test_pay.py":
-                "import sys, pathlib\n"
-                "sys.path.insert(0, str(pathlib.Path(__file__)"
-                ".resolve().parents[1] / 'src'))\n"
-                "import pay\n"
-                "def test_ok():\n    assert pay.ok()\n"}})
-
-    monkeypatch.setattr(lb, "ask", fake_ask)
+    monkeypatch.setattr(rw, "_model_for",
+                        lambda role, specialty="": "openrouter/x:free")
+    fake_openai([(200, ok(_json.dumps({"files": {
+        "src/pay.py": "def ok():\n    return True\n",
+        "tests/test_pay.py":
+            "import sys, pathlib\n"
+            "sys.path.insert(0, str(pathlib.Path(__file__)"
+            ".resolve().parents[1] / 'src'))\n"
+            "import pay\n"
+            "def test_ok():\n    assert pay.ok()\n"}})))])
     impl = rw.make_implementer()
     class W:
         root = str(tmp_path)

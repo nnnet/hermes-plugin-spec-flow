@@ -6,8 +6,8 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from harness import llm_backend as lb            # noqa: E402
 from harness import pytest_verifier as pv        # noqa: E402
+from harness_fakeapi import ok                   # noqa: E402
 
 GREEN = "def test_ok():\n    assert True\n"
 RED = "def test_no():\n    assert False\n"
@@ -40,12 +40,13 @@ def test_smoke_gates_only_the_root(tmp_path):
     assert rootv["status"] == "FAIL", "the root integrate runs the smoke"
 
 
-def test_red_suite_triggers_repair_and_repasses(tmp_path, monkeypatch):
+def test_red_suite_triggers_repair_and_repasses(tmp_path, fake_openai):
     root = _ws(tmp_path, {"tests/test_a.py": RED})
-    monkeypatch.setattr(lb, "ask", lambda prompt, model, system=None, **kw:
-                        json.dumps({"files": {"tests/test_a.py": GREEN}}))
-    out = pv.make_verifier(max_repair=1)({"node": "n1",
-                                          "workspace_root": root})
+    # the repair patch is served by a real local server; the suite itself is a
+    # real pytest run, so the green-up is genuine, not asserted into existence.
+    fake_openai([(200, ok(json.dumps({"files": {"tests/test_a.py": GREEN}})))])
+    out = pv.make_verifier(model="openrouter/x:free", max_repair=1)(
+        {"node": "n1", "workspace_root": root})
     assert out["status"] == "PASS"
     assert "repair round" in out["detail"]
 
@@ -57,14 +58,13 @@ def test_unsafe_paths_are_refused(tmp_path):
     assert pv._safe_rel("src/x.py") and pv._safe_rel("tests/test_x.py")
 
 
-def test_worsening_repair_is_rolled_back(tmp_path, monkeypatch):
+def test_worsening_repair_is_rolled_back(tmp_path, fake_openai):
     # the model "repair" breaks collection — the round must be undone
     root = _ws(tmp_path, {"tests/test_a.py": RED})
-    monkeypatch.setattr(lb, "ask", lambda prompt, model, system=None, **kw:
-                        json.dumps({"files": {
-                            "tests/test_a.py": "import missing_module\n"}}))
-    out = pv.make_verifier(max_repair=1)({"node": "n1",
-                                          "workspace_root": root})
+    fake_openai([(200, ok(json.dumps({"files": {
+        "tests/test_a.py": "import missing_module\n"}})))])
+    out = pv.make_verifier(model="openrouter/x:free", max_repair=1)(
+        {"node": "n1", "workspace_root": root})
     assert out["status"] == "FAIL"
     body = (tmp_path / "tests" / "test_a.py").read_text(encoding="utf-8")
     assert body == RED, "the worsening write must be rolled back"
