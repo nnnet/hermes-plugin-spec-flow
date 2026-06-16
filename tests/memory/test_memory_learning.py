@@ -87,11 +87,20 @@ def test_mental_block_is_cached_per_role():
 
 # ─── failure retention: every role records its misses ─────────────────
 
-def test_verifier_failure_is_retained_with_diagnosis(tmp_path, monkeypatch):
+def _ws(tmp_path, files):
+    """A real workspace on disk so make_verifier runs a genuine pytest."""
+    for rel, body in files.items():
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body, encoding="utf-8")
+    return str(tmp_path)
+
+
+def test_verifier_failure_is_retained_with_diagnosis(tmp_path):
     from harness import pytest_verifier as pv
     prov, _ = _mgr()
-    monkeypatch.setattr(pv, "run_suite",
-                        lambda root, smoke, targets=None: (False, "E assert 1 == 2"))
+    # a REAL red suite: the verdict is a genuine pytest run, not a stub
+    _ws(tmp_path, {"tests/test_x.py": "def test_x():\n    assert 1 == 2\n"})
     verify = pv.make_verifier(model="stub", max_repair=0)
     out = verify({"workspace_root": str(tmp_path), "node": "beta"})
     assert out["status"] == "FAIL"
@@ -99,22 +108,17 @@ def test_verifier_failure_is_retained_with_diagnosis(tmp_path, monkeypatch):
     assert notes and "beta" in notes[0] and "assert 1 == 2" in notes[0]
 
 
-def test_verifier_repair_success_is_retained(tmp_path, monkeypatch,
-                                             fake_openai):
+def test_verifier_repair_success_is_retained(tmp_path, fake_openai):
     from harness import pytest_verifier as pv
     from harness_fakeapi import ok
     prov, _ = _mgr()
-    calls = {"n": 0}
-
-    def suite(root, smoke, targets=None):
-        calls["n"] += 1
-        return (calls["n"] >= 2, "E no route GET /x" if calls["n"] < 2
-                else "all green")
-
-    monkeypatch.setattr(pv, "run_suite", suite)
-    # the repair answer comes from a real local server; a free model id keeps
-    # the free-only gate from blocking the genuine request.
-    fake_openai([(200, ok('{"files": {"src/fix.py": "x = 1"}}'))])
+    # a REAL red test naming the missing route; the repair answer comes from a
+    # real local server and greens it under a genuine pytest re-run (no faked
+    # verdict). A free model id keeps the free-only gate from blocking the call.
+    _ws(tmp_path, {"tests/test_route.py":
+                   'def test_route():\n    assert False, "no route GET /x"\n'})
+    fake_openai([(200, ok('{"files": {"tests/test_route.py":'
+                          ' "def test_route():\\n    assert True\\n"}}'))])
     verify = pv.make_verifier(model="openrouter/x:free", max_repair=2)
     out = verify({"workspace_root": str(tmp_path), "node": "gamma"})
     assert out["status"] == "PASS"
