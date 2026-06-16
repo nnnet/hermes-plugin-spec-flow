@@ -7,7 +7,6 @@ Hermetic: no live LLM, no network, no pytest subprocess. The orchestra's
 building blocks are stubbed and the model door is a fake that CAPTURES the
 kwargs it receives, so we can assert a specialist's model/params actually reach
 the backend call."""
-import contextlib
 import json
 import pathlib
 import sys
@@ -17,20 +16,46 @@ import pytest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from harness import role_worker as rw   # noqa: E402
 from harness import llm_backend as lb    # noqa: E402
+from harness import ws_tx                # noqa: E402
 from harness_fakeapi import ok           # noqa: E402
 
 
-@contextlib.contextmanager
-def _noop_tx(*a, **k):
-    yield object()
+# A real green leaf: the coder's reply is RUNNABLE — the test imports the
+# module and asserts real behaviour, so a real pytest run goes green for real
+# (no faked verdict). Used wherever the orchestra must actually pass the leaf.
+_GREEN_FILES = {
+    "src/leaf1.py": "def value():\n    return 1\n",
+    "tests/test_leaf1.py": (
+        "import sys, pathlib\n"
+        "sys.path.insert(0, str(pathlib.Path(__file__).resolve()"
+        ".parents[1] / 'src'))\n"
+        "import leaf1\n"
+        "def test_value():\n    assert leaf1.value() == 1\n"),
+}
+
+
+class _RealWS:
+    """A real workspace: writes land on disk, so the orchestra's git
+    transaction, pytest run and leaf bar all execute against real files."""
+    enabled = True
+
+    def __init__(self, root):
+        self.root = str(root)
+
+    def _write(self, rel, body, kind):
+        f = pathlib.Path(self.root) / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(body, encoding="utf-8")
+        return rel
 
 
 def _base_ctx(tmp_path):
-    ws = type("WS", (), {"root": str(tmp_path),
-                         "_write": lambda self, *a, **k: None})()
+    spec = pathlib.Path(tmp_path) / "specs" / "leaf1.md"
+    spec.parent.mkdir(parents=True, exist_ok=True)
+    spec.write_text("# Leaf One\nReturn the constant 1.\n", encoding="utf-8")
     return {"node": "leaf1", "title": "Leaf One", "depth": 2,
-            "workspace": ws, "spec": "specs/leaf1.md", "module": "leaf1",
-            "specialty": ""}
+            "workspace": _RealWS(tmp_path), "spec": "specs/leaf1.md",
+            "module": "leaf1", "specialty": ""}
 
 
 # ── config parser: canonical `specialists` + alias list + provider/params ──
@@ -96,41 +121,34 @@ def test_unknown_provider_raises(monkeypatch):
 
 # ── per-specialist model + params reach the backend call ──────────────────
 
-def _stub_orchestra_machinery(monkeypatch):
-    """Stub the heavy orchestra building blocks so a step runs as a single
-    captured model call with no git/pytest/file I/O."""
+def _real_env(monkeypatch, tmp_path, *, model_head="chainhead:free"):
+    """Wire the orchestra to run for REAL — real git workspace, real pytest,
+    real file writes, real leaf bar. ONLY config seams are pinned (skill text,
+    the role's chain-head model, single-member ensemble, the chat path); the
+    verdict is a genuine pytest run, never a stub."""
+    ws_tx.ensure_repo(str(tmp_path))
     monkeypatch.setattr(rw, "load_skill_md", lambda s: "SYS")
-    monkeypatch.setattr(rw, "_model_for", lambda *a, **k: "chainhead:free")
-    monkeypatch.setattr(lb, "model_for", lambda *a, **k: "chainhead:free")
-    monkeypatch.setattr(rw, "_inline_file", lambda root, rel: "SPEC BODY")
-    import harness.ws_tx as wstx
-    monkeypatch.setattr(wstx, "transaction", _noop_tx)
-    import harness.pytest_verifier as pvmod
-    monkeypatch.setattr(pvmod, "run_suite", lambda *a, **k: (True, ""))
-    monkeypatch.setattr(pvmod, "_badness", lambda *a, **k: 0)
-    monkeypatch.setattr(rw, "_write_reply_files", lambda *a, **k: True)
-    monkeypatch.setattr(rw, "_leaf_bar", lambda *a, **k: (True, "green"))
+    monkeypatch.setattr(rw, "_model_for", lambda *a, **k: model_head)
+    monkeypatch.setattr(lb, "model_for", lambda *a, **k: model_head)
+    monkeypatch.setattr(rw, "_ensemble_size", lambda: 1)
+    monkeypatch.setattr(rw, "_chat_only", lambda: True)
+    monkeypatch.setattr(rw.llm_backend, "chain_for",
+                        lambda role, specialty="": [model_head])
 
 
 def test_specialist_model_and_params_reach_backend(monkeypatch, tmp_path,
                                                    fake_openai):
     """A coder specialist with its own model + params: the model used for its
     step is the declared one (not the role chain head), and the params dict is
-    threaded all the way down to the real backend HTTP call. The model door is
-    NOT stubbed — the coder's reply is served by a real local OpenAI server and
-    we read the actual request the harness sent it."""
+    threaded all the way down to the real backend HTTP call. Nothing on the
+    path is faked — the coder's reply is served by a real local OpenAI server,
+    the files it returns are written to a real git workspace and the leaf is
+    verified by a REAL pytest run; we read the actual request the harness sent."""
     monkeypatch.delenv("SPEC_FLOW_IMPLEMENTER_TEAM", raising=False)
     lb.configure_workers(None)
-    _stub_orchestra_machinery(monkeypatch)
+    _real_env(monkeypatch, tmp_path)
 
-    reply = json.dumps({"files": {"src/leaf1.py": "x = 1\n"}})
-    srv = fake_openai([(200, ok(reply))])
-
-    # the coder goes through _ensemble_generate -> _dialog_round -> _call_model
-    # -> (chat-only) llm_backend.ask -> real HTTP; force the chat path only.
-    monkeypatch.setattr(rw, "_chat_only", lambda: True)
-    monkeypatch.setattr(rw.llm_backend, "chain_for",
-                        lambda role, specialty="": ["chainhead:free"])
+    srv = fake_openai([(200, ok(json.dumps({"files": _GREEN_FILES})))])
 
     team = [{"role": "coder", "model": "free/coder:free",
              "params": {"temperature": 0.4, "max_tokens": 4000}}]
@@ -143,24 +161,22 @@ def test_specialist_model_and_params_reach_backend(monkeypatch, tmp_path,
         "the specialist's explicit model must be used for its step"
     assert payload["temperature"] == 0.4 and payload["max_tokens"] == 4000, \
         "the specialist's params must reach the backend call"
+    # the real machinery actually ran: the leaf landed on disk and is green
+    assert (tmp_path / "src" / "leaf1.py").exists()
 
 
 def test_specialist_without_model_falls_back_to_chain(monkeypatch, tmp_path,
                                                       fake_openai):
     """A specialist with NO model uses the implementer role's chain head — the
     same resolver the single-agent path uses (today's behaviour). The reply is
-    served by the real local server; we read the model the harness really sent
-    and confirm a paramless step carries no sampling knobs."""
+    served by the real local server and verified by a real pytest run; we read
+    the model the harness really sent and confirm a paramless step carries no
+    sampling knobs."""
     monkeypatch.delenv("SPEC_FLOW_IMPLEMENTER_TEAM", raising=False)
     lb.configure_workers(None)
-    _stub_orchestra_machinery(monkeypatch)
+    _real_env(monkeypatch, tmp_path)
 
-    reply = json.dumps({"files": {"src/leaf1.py": "x = 1\n"}})
-    srv = fake_openai([(200, ok(reply))])
-
-    monkeypatch.setattr(rw, "_chat_only", lambda: True)
-    monkeypatch.setattr(rw.llm_backend, "chain_for",
-                        lambda role, specialty="": ["chainhead:free"])
+    srv = fake_openai([(200, ok(json.dumps({"files": _GREEN_FILES})))])
 
     team = [{"role": "coder"}]            # no model, no params
     rw._orchestra_run(_base_ctx(tmp_path), str(tmp_path), "leaf1", "leaf1",
@@ -176,50 +192,58 @@ def test_specialist_without_model_falls_back_to_chain(monkeypatch, tmp_path,
 
 # ── team-of-one equivalence + ordered multi-step run ──────────────────────
 
-def test_team_of_one_runs_the_single_coder_step(monkeypatch, tmp_path):
-    """A team of one coder produces exactly one generation step and verifies
-    the leaf — the degenerate orchestra ≡ a single worker call."""
+def test_team_of_one_runs_the_single_coder_step(monkeypatch, tmp_path,
+                                                fake_openai):
+    """A team of one coder produces exactly one generation step and lands a
+    real green leaf — the degenerate orchestra ≡ a single worker call, verified
+    against a REAL pytest run (no faked verdict, no step double)."""
     monkeypatch.delenv("SPEC_FLOW_IMPLEMENTER_TEAM", raising=False)
     lb.configure_workers(None)
-    _stub_orchestra_machinery(monkeypatch)
+    _real_env(monkeypatch, tmp_path)
 
-    gens = {"n": 0}
-
-    def fake_ensemble(prompt, *, node, system, allowed, disallowed, cwd, model,
-                      channel, specialty, meta=None, params=None):
-        gens["n"] += 1
-        return json.dumps({"files": {f"src/{node}.py": "x = 1\n"}})
-
-    monkeypatch.setattr(rw, "_ensemble_generate", fake_ensemble)
-
+    srv = fake_openai([(200, ok(json.dumps({"files": _GREEN_FILES})))])
     rw._orchestra_run(_base_ctx(tmp_path), str(tmp_path), "leaf1", "leaf1",
                       system="SYS", allowed=[], disallowed=[],
                       channel=None, team=[{"role": "coder"}])
-    assert gens["n"] == 1, "team-of-one runs exactly the single coder step"
+    assert len(srv.requests) == 1, \
+        "team-of-one runs exactly the single coder step"
+    assert (tmp_path / "src" / "leaf1.py").exists(), "the leaf landed for real"
 
 
-def test_old_list_form_runs_all_steps_in_order(monkeypatch, tmp_path):
-    """The legacy bare list `team: [{role}...]` still drives every step in
-    declared order through the orchestra."""
+def test_old_list_form_runs_all_steps_in_order(monkeypatch, tmp_path,
+                                               fake_openai):
+    """The legacy bare list `team: [{role}...]` drives every step in declared
+    order through the orchestra, and the order is read from REAL work: the coder
+    ships a RED leaf, the tester strengthens it (still red), and only the fixer
+    greens it under a real pytest run — never a stubbed verdict. Each step is
+    identified by the prompt the harness actually sent the local server."""
     monkeypatch.delenv("SPEC_FLOW_IMPLEMENTER_TEAM", raising=False)
     lb.configure_workers(None)
-    _stub_orchestra_machinery(monkeypatch)
-    # coder/tester leave it RED so the fixer step has real work
-    bar = iter([(False, "FAIL"), (False, "FAIL"), (True, "fixed")])
-    monkeypatch.setattr(rw, "_leaf_bar", lambda *a, **k: next(bar))
+    _real_env(monkeypatch, tmp_path)
 
     order = []
-    monkeypatch.setattr(rw, "_dialog_round",
-                        lambda *a, **k: order.append("architect") or "PLAN")
+    red_src = "def value():\n    return 0\n"       # wrong -> the green test fails
+    green_src = "def value():\n    return 1\n"      # the fixer's correct code
+    test_body = _GREEN_FILES["tests/test_leaf1.py"]
 
-    def fake_ensemble(prompt, *, node, **k):
-        order.append("tester" if "TESTER PASS" in prompt else "coder")
-        return json.dumps({"files": {f"src/{node}.py": "x = 1\n"}})
+    def router(payload):
+        msg = " ".join(m.get("content", "")
+                       for m in payload.get("messages", []))
+        if "The test run FAILED" in msg:           # repair prompt -> fixer
+            order.append("fixer")
+            return 200, ok(json.dumps({"files": {"src/leaf1.py": green_src}}))
+        if "ARCHITECT sub-role" in msg:
+            order.append("architect")
+            return 200, ok("PLAN: expose value() returning 1")
+        if "TESTER PASS" in msg:                   # strengthen tests; src stays red
+            order.append("tester")
+            return 200, ok(json.dumps({"files": {"tests/test_leaf1.py":
+                                                 test_body}}))
+        order.append("coder")
+        return 200, ok(json.dumps({"files": {"src/leaf1.py": red_src,
+                                             "tests/test_leaf1.py": test_body}}))
 
-    monkeypatch.setattr(rw, "_ensemble_generate", fake_ensemble)
-    monkeypatch.setattr(rw, "_call_model",
-                        lambda *a, **k: order.append("fixer") or "no diff")
-    monkeypatch.setattr(rw, "_apply_diff_repair", lambda *a, **k: True)
+    fake_openai(router)
 
     # the OLD list shape, exactly as a pre-phase-1 case wrote it
     team = [{"role": "architect"}, {"role": "coder"},
@@ -228,6 +252,9 @@ def test_old_list_form_runs_all_steps_in_order(monkeypatch, tmp_path):
                       system="SYS", allowed=[], disallowed=[],
                       channel=None, team=team)
     assert order == ["architect", "coder", "tester", "fixer"]
+    # the fixer's real repair landed and greened the leaf for real
+    body = (tmp_path / "src" / "leaf1.py").read_text(encoding="utf-8")
+    assert body.strip().endswith("return 1"), "the fixer's real fix is on disk"
 
 
 # ── RoleTask / RoleResult contract (doc §3) ───────────────────────────────
