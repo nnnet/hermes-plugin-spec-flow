@@ -50,6 +50,12 @@ hitl:
 # the root corpus runs it). So the injection carries ONLY a prose `statement:` —
 # the same thing a person would type in the HITL box. No handed pytest.
 injections:
+  # Arm the semantic late-injection router (#2): красивый_вид is worded with NO
+  # route/file/UI marker and overlaps both web_ui and db only on the shared
+  # domain nouns (notes/list), so the deterministic detectors correctly ABSTAIN
+  # — the strong-model router (reviewer chain, free-only) reads the candidate
+  # specs and folds the presentation edit INTO web_ui instead of forking.
+  llm_route: true
   requirements:
     - name: web_ui
       # Fire on the FIRST leaf implementation — reliable on any tree size, and

@@ -169,6 +169,23 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
         # a case that does NOT opt in must not inherit a stray gate from a
         # previous in-process run (keeps p4/p5 deterministic in batch mode)
         del os.environ["SPEC_FLOW_PRE_GATE"]
+    # Late-injection routing: a case that injects mid-run HITL requirements opts
+    # the _amend matcher in so a refinement of an existing surface folds INTO the
+    # owning node instead of forking a parallel one. Default OFF so non-injecting
+    # cases are unchanged. ``llm_route: true`` (under injections) additionally
+    # arms the strong-model fallback for refinements no deterministic signal
+    # caught; without it routing stays purely deterministic.
+    _inj_cfg = case.get("injections")
+    if _inj_cfg:
+        os.environ["SPEC_FLOW_REQ_AMEND"] = "1"
+        _llm_route = (isinstance(_inj_cfg, dict) and _inj_cfg.get("llm_route"))
+        if _llm_route:
+            os.environ["SPEC_FLOW_AMEND_LLM"] = "1"
+        elif "SPEC_FLOW_AMEND_LLM" in os.environ:
+            del os.environ["SPEC_FLOW_AMEND_LLM"]
+    elif "SPEC_FLOW_REQ_AMEND" in os.environ:
+        del os.environ["SPEC_FLOW_REQ_AMEND"]
+        os.environ.pop("SPEC_FLOW_AMEND_LLM", None)
     trace = case_dir / "trace.jsonl"
     sink = eng.LogSink(path=str(trace), level=eng.L_DETAIL, fmt="jsonl", enabled=True)
     # the plugin ALWAYS builds the tree itself by calling a decomposer — the

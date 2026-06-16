@@ -193,3 +193,33 @@ def test_llm_router_not_called_when_a_detector_matches(tmp_path):
     owner = find("The GET /ui page must paginate.", _mods(web), llm=router)
     assert owner == "src/web_ui.py"
     assert fired["n"] == 0        # a deterministic detector already decided
+
+
+def test_shared_domain_noun_abstains_then_llm_routes(tmp_path):
+    # The красивый_вид class: a presentation requirement whose only lexical
+    # overlap is the project's shared domain nouns (notes / list), which BOTH a
+    # storage and a web module own. Deterministic layers must ABSTAIN — matching
+    # storage on a coincidental list_notes name would be a false amend; the
+    # semantic LLM router then routes presentation into the web module.
+    stmt = ("Make the notes nice to read — a tidy list, a clear heading, an "
+            "easy way to add one; improve the existing presentation.")
+    web = ("web_ui", "def render_notes_page(notes):\n    return '<html>'\n"
+                     "# GET /ui add form list heading layout\n")
+    db = ("db", "def insert_note(text):\n    return 1\n"
+                "def list_notes():\n    return []\n# /notes sqlite storage\n")
+    mods = _mods(web, db)
+    assert find(stmt, mods) is None          # abstains, no false db match
+
+    def router(statement, modules, cand_text):
+        return "src/web_ui.py"
+    assert find(stmt, mods, llm=router) == "src/web_ui.py"
+
+
+def test_distinctive_multitoken_still_routes(tmp_path):
+    # distinctiveness must NOT muzzle a real match: a token unique to ONE
+    # candidate still routes deterministically (no LLM needed).
+    web = ("web_ui", "def paginate_table(rows):\n    return rows\n"
+                     "# pagination table column sorting\n")
+    db = ("db", "def insert_note(text):\n    return 1\n")
+    owner = find("Add column sorting to the paginated table.", _mods(web, db))
+    assert owner == "src/web_ui.py"

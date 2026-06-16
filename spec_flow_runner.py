@@ -784,12 +784,31 @@ def _amend_find_owner(statement: str, modules: list, methods=None,
             "tokens": _amend_tokens(statement),
             "surfaces": _amend_surfaces(statement)}
     # precompute each candidate's features ONCE (detectors are re-run per layer)
-    feats = []
+    raw = []
     for rel, stem, body in modules:
-        feats.append((rel, {"stem": stem, "routes": _amend_routes(body),
-                            "symbols": _amend_symbols(body),
-                            "tokens": _amend_tokens(body),
-                            "surfaces": _amend_surfaces(body)}))
+        raw.append((rel, stem, {"routes": _amend_routes(body),
+                                "symbols": _amend_symbols(body),
+                                "tokens": _amend_tokens(body),
+                                "surfaces": _amend_surfaces(body)}))
+    # DISTINCTIVENESS: a token/symbol owned by TWO-OR-MORE candidates is the
+    # project's shared domain noun (e.g. 'notes', 'list'), not a routing
+    # identity — matching on it picks an owner by coincidence (a presentation
+    # requirement hitting a storage module that happens to define list_notes).
+    # Strip those shared names from each candidate's symbol/token/surface sets
+    # so a deterministic layer fires only on a DISTINCTIVE overlap and otherwise
+    # ABSTAINS (returns None) — letting the semantic LLM router decide. Routes
+    # stay unfiltered: a shared HTTP route is an explicit, strong signal.
+    _freq: dict = {}
+    for _rel, _stem, d in raw:
+        for tok in (d["symbols"] | d["tokens"]):
+            _freq[tok] = _freq.get(tok, 0) + 1
+    _common = {t for t, c in _freq.items() if c > 1}
+    feats = []
+    for rel, stem, d in raw:
+        feats.append((rel, {"stem": stem, "routes": d["routes"],
+                            "symbols": d["symbols"] - _common,
+                            "tokens": d["tokens"] - _common,
+                            "surfaces": d["surfaces"] - _common}))
     for name in methods:
         fn = _AMEND_DETECTORS.get(name)
         if fn is None:
