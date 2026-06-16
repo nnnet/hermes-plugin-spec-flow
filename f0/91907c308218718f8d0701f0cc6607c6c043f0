@@ -1,0 +1,44 @@
+tests/harness/llm_decomposer.py
+  s_a7f45290e91181::t_bb604d1b50bff2 148
+  s_a7f45290e91181::t_0e54d1abb88dad 106-111
+tests/harness/llm_log.py
+  s_a7f45290e91181::t_87b615f675c419 83-88
+tests/coverage/test_single_llm_door.py
+  s_a7f45290e91181::t_d77d3b197c67b3 1-50
+tests/harness/llm_backend.py
+  s_a7f45290e91181::t_5e9bcdc73d6300 380
+  s_a7f45290e91181::t_4a9f11862c29d1 562-565
+  s_a7f45290e91181::t_75bc9d3fcbe013 412-431,441-443
+tests/workers/test_specialist_config.py
+  s_a7f45290e91181::t_c477c0dfcbdafe 125,159
+tests/harness/llm_implementer.py
+  s_a7f45290e91181::t_8a56534acf25a6 67-72
+  s_a7f45290e91181::t_17f13f43e71730 136-138
+.claude/plans/2026-06-16T19-40__single-llm-door-consolidation.md
+  s_a7f45290e91181::t_ca0c1a4e98dd5e 1-172
+tests/harness/llm_judge.py
+  s_a7f45290e91181::t_f096f998f0a994 67-69
+tests/harness/pytest_verifier.py
+  s_a7f45290e91181::t_3c961290e995cb 762-764
+  s_a7f45290e91181::t_256679a47afedd 788-789
+tests/live/test_live_caps.py
+  s_a7f45290e91181::t_434db79333172d 30-33
+tests/harness/role_worker.py
+  s_a7f45290e91181::t_bde382504eeeec 285-287,289-290,294-297
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.7",
+  "base_commit_sha": "f091907c308218718f8d0701f0cc6607c6c043f0",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
