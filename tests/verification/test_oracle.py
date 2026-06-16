@@ -38,6 +38,12 @@ def _run(plugin, tmp_path, monkeypatch, path):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / f"hh_{path.stem}"))
     plugin.tools.CONTRACT_VALIDATORS["openapi"] = [
         "python3", str(eng.OPENAPI_DIFF), "{contract}", "{code}"]
+    # The oracle judges realized CONTENT (episodes, loop counts, coverage,
+    # depth, anchors) — properties of the engine's decisions, not of the worker
+    # pool. Run subtrees serially so the realized RunResult is deterministic and
+    # the oracle never races the thread pool under full-suite load; concurrency
+    # correctness is covered separately (test_full_run / parallel-leaf tests).
+    case["parallel"] = {"children": 1}
     res = eng.run_scenario(case, workspace=str(tmp_path / f"wk_{path.stem}"),
                            depth="spec", tools=plugin.tools,
                            contracts_dir=str(eng.CONTRACTS))

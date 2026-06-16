@@ -23,12 +23,19 @@ TREE_CASES = [p for p in sorted(SCENARIOS_DIR.glob("*.yaml"))
               if "blueprint" in yaml.safe_load(p.read_text(encoding="utf-8"))]
 
 
-def _run(plugin, tmp_path, monkeypatch, path):
+def _run(plugin, tmp_path, monkeypatch, path, serial=False):
     case = yaml.safe_load(path.read_text(encoding="utf-8"))
     # fresh gate state per case so research cooldown never leaks between runs
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / f"hh_{path.stem}"))
     plugin.tools.CONTRACT_VALIDATORS["openapi"] = [
         "python3", str(eng.OPENAPI_DIFF), "{contract}", "{code}"]
+    if serial:
+        # An assertion about SCHEDULING order (a phase precedes another) must
+        # run the subtrees serially: under the case's worker pool the global
+        # event-tick order interleaves across concurrent subtrees, so a
+        # global min(tick) compare is inherently racy. Concurrency itself is
+        # covered by the parallel-leaf tests; here we isolate plan order.
+        case["parallel"] = {"children": 1}
     # the plugin BUILDS the tree itself from the case blueprint (deterministic
     # decomposer); the scenario structure never drives the engine directly
     return eng.run_scenario(case, workspace=str(tmp_path / f"wk_{path.stem}"),
@@ -53,9 +60,11 @@ def test_surface_is_built_from_shipped_folders():
 
 
 def test_research_precedes_implementation_in_p4(plugin, tmp_path, monkeypatch):
-    # the audit's R9 rule: analogs/architecture research before any code
+    # the audit's R9 rule: analogs/architecture research before any code.
+    # Serial run: this asserts plan ORDER, not concurrent execution — under the
+    # case's subtree pool the global tick order interleaves and the compare flakes.
     p4 = [p for p in TREE_CASES if "p4" in p.stem][0]
-    res = _run(plugin, tmp_path, monkeypatch, p4)
+    res = _run(plugin, tmp_path, monkeypatch, p4, serial=True)
     first_research = min(e.tick for e in res.events if e.skill == "spec-research")
     first_impl = min(e.tick for e in res.events if e.skill == "spec-implement")
     assert first_research < first_impl

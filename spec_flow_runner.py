@@ -726,31 +726,87 @@ def _amd_token_overlap(feat: dict, mod: dict) -> float:
     return frac if frac >= _AMEND_TOKEN_FLOOR else 0.0
 
 
-def _amend_find_owner(statement: str, modules: list, methods=None) -> "Optional[str]":
-    """Run the active detectors over every existing module; return the rel-path
-    of the highest-scoring owner above the threshold, else None.
+def _amend_surfaces(text: str) -> set:
+    """Every structural/entity surface a text exposes — routes, defined symbols
+    and distinctive entity tokens, in one set. Used by surface_overlap to catch
+    a refinement that shares SEVERAL weak surfaces with an owner none of which
+    crossed a single-signal detector's bar on its own."""
+    return _amend_routes(text) | _amend_symbols(text) | _amend_tokens(text)
 
-    ``modules`` is [(rel_path, stem, body)]. ``methods`` selects/orders the
-    detectors (default: SPEC_FLOW_AMEND_METHODS env, else all registered)."""
+
+@_amend_detector("surface_overlap")
+def _amd_surface_overlap(feat: dict, mod: dict) -> float:
+    """Structural backstop BEFORE the LLM router: fires when the requirement and
+    the module share two-or-more surfaces (routes / defined symbols / entity
+    nouns) — recall for a vaguely-worded refinement whose single signals each
+    fell under threshold. Requires >=2 shared surfaces AND a non-trivial share
+    so one incidental common word can never route (a false amend is worse than a
+    fork). Universal: surfaces come from the spec text, never a keyword list."""
+    inj = feat["surfaces"]
+    shared = inj & mod["surfaces"]
+    if len(shared) < 2 or not inj:
+        return 0.0
+    frac = len(shared) / len(inj)
+    if frac < 0.34:
+        return 0.0
+    return min(0.5 + 0.1 * len(shared), 0.9)
+
+
+# Detector order = fastest/most-precise first. _amend_find_owner walks this list
+# and SHORT-CIRCUITS on the first detector that yields an owner >= threshold, so
+# the loosest/most-expensive signals (token, then the network LLM router) only
+# run when every cheaper, more-exact signal came up empty.
+_AMEND_DET_ORDER = ("explicit_file", "shared_route", "symbol_overlap",
+                    "token_overlap", "surface_overlap")
+
+
+def _amend_find_owner(statement: str, modules: list, methods=None,
+                      candidates_text=None, llm=None) -> "Optional[str]":
+    """Decide which existing module (if any) owns the surface this requirement
+    refines — fastest-first with short-circuit.
+
+    ``modules`` is [(rel_path, stem, body)]. The deterministic detectors run in
+    ``_AMEND_DET_ORDER`` (override/subset via ``methods`` arg or the
+    SPEC_FLOW_AMEND_METHODS env); the FIRST detector to score a module >=
+    threshold wins and the rest are skipped. Only when every deterministic
+    signal is empty does the optional ``llm`` router fire — one model call that
+    reads the candidate specs and returns an owner id or 'new'. ``llm`` is a
+    ``(statement, [(rel, stem, body)], candidates_text) -> Optional[str]``
+    callable; None (the default / unit-test path) means no network fallback."""
     if methods is None:
         env = os.environ.get("SPEC_FLOW_AMEND_METHODS", "").strip()
         methods = [m.strip() for m in env.split(",") if m.strip()] or \
-            list(_AMEND_DETECTORS)
-    active = [_AMEND_DETECTORS[m] for m in methods if m in _AMEND_DETECTORS]
+            list(_AMEND_DET_ORDER)
     feat = {"files": {m for m in re.findall(r"src/([A-Za-z_]\w*)\.py",
                                             statement)}
             | {m for m in re.findall(r"\b([a-z][a-z0-9_]{3,})\.py", statement)},
             "routes": _amend_routes(statement),
-            "tokens": _amend_tokens(statement)}
-    feat["files"] = {f for f in feat["files"]}
-    best_score, best_path = 0.0, None
+            "tokens": _amend_tokens(statement),
+            "surfaces": _amend_surfaces(statement)}
+    # precompute each candidate's features ONCE (detectors are re-run per layer)
+    feats = []
     for rel, stem, body in modules:
-        mod = {"stem": stem, "routes": _amend_routes(body),
-               "symbols": _amend_symbols(body), "tokens": _amend_tokens(body)}
-        score = max((fn(feat, mod) for fn in active), default=0.0)
-        if score > best_score:
-            best_score, best_path = score, rel
-    return best_path if best_score >= _AMEND_MIN_SCORE else None
+        feats.append((rel, {"stem": stem, "routes": _amend_routes(body),
+                            "symbols": _amend_symbols(body),
+                            "tokens": _amend_tokens(body),
+                            "surfaces": _amend_surfaces(body)}))
+    for name in methods:
+        fn = _AMEND_DETECTORS.get(name)
+        if fn is None:
+            continue
+        best_score, best_path = 0.0, None
+        for rel, mod in feats:
+            score = fn(feat, mod)
+            if score > best_score:
+                best_score, best_path = score, rel
+        if best_path is not None and best_score >= _AMEND_MIN_SCORE:
+            return best_path        # SHORT-CIRCUIT: a cheaper layer decided
+    if llm is not None:
+        try:
+            return llm(statement, modules, candidates_text)
+        except Exception:           # noqa: BLE001 — router must never crash a run
+            return None
+    return None
 
 
 class Workspace:
@@ -1383,26 +1439,104 @@ class Engine:
 
         The owner is decided in CODE by a registry of universal detectors (see
         _amend_find_owner) — route match, file mention, symbol overlap, token
-        overlap — not by asking the model to notice and not by a domain-specific
-        keyword list. Returns None when nothing overlaps or the flag is off."""
+        overlap, surface overlap — not by asking the model to notice and not by
+        a domain-specific keyword list. An LLM router is the slow fallback when
+        every deterministic signal is empty. Returns None when nothing overlaps
+        or the flag is off.
+
+        Candidates are built from BOTH placed-node SPECS (specs/*.md) and built
+        FILES (src/*.py), merged by stem: a node placed but not yet implemented
+        is matchable from its spec text alone — the v0NN miss where a late
+        'make it nice' forked a new node because src/web_ui.py did not exist at
+        match time even though the web_ui spec did."""
         if os.environ.get("SPEC_FLOW_REQ_AMEND", "") in (
                 "", "0", "false", "False", "no"):
             return None
-        srcdir = Path(self.workspace.root) / "src"
-        if not srcdir.is_dir():
-            return None
+        root = Path(self.workspace.root)
         own = _snake(str(node.get("id", "")))
-        modules = []
-        for p in sorted(srcdir.glob("*.py")):
-            if p.stem in ("__init__", own):
-                continue
-            modules.append((f"src/{p.stem}.py", p.stem,
-                            p.read_text(encoding="utf-8", errors="replace")))
-        if not modules:
+        # stem -> {"spec": <md>, "code": <py>}; a placed node owns a candidate
+        # via its spec even before its module file is written.
+        cand: dict = {}
+        specdir = root / "specs"
+        if specdir.is_dir():
+            for p in sorted(specdir.glob("*.md")):
+                stem = p.stem
+                if "." in stem or stem in ("__init__", own):
+                    continue            # skip archived specs/<id>.vN.md + self
+                cand.setdefault(stem, {})["spec"] = p.read_text(
+                    encoding="utf-8", errors="replace")
+        srcdir = root / "src"
+        if srcdir.is_dir():
+            for p in sorted(srcdir.glob("*.py")):
+                if p.stem in ("__init__", own):
+                    continue
+                cand.setdefault(p.stem, {})["code"] = p.read_text(
+                    encoding="utf-8", errors="replace")
+        if not cand:
             return None
+        modules = [(f"src/{stem}.py", stem,
+                    (d.get("spec", "") + "\n" + d.get("code", "")).strip())
+                   for stem, d in sorted(cand.items())]
+        cand_text = {rel: body[:400] for rel, _stem, body in modules}
         stmt = str(node.get("requirement") or node.get("spec_markdown")
                    or node.get("title") or "")
-        return _amend_find_owner(stmt, modules)
+        llm = None
+        if os.environ.get("SPEC_FLOW_AMEND_LLM", "") not in (
+                "", "0", "false", "False", "no"):
+            llm = self._amend_llm_router
+        return _amend_find_owner(stmt, modules, candidates_text=cand_text,
+                                 llm=llm)
+
+    def _amend_llm_router(self, statement: str, modules: list,
+                          candidates_text: "Optional[dict]") -> "Optional[str]":
+        """#2 router: ONE strong-model call, fired only after every cheaper
+        deterministic detector found no owner. The reviewer chain is used (the
+        'strong on checks' tier per the case YAML); free-only via llm_backend.
+        The model is asked to name the owning module rel-path or 'new' — the
+        prompt MUST prefer 'new' when unsure, so a doubtful late requirement
+        forks (cheap to fix) rather than corrupting an unrelated module."""
+        ask, chain_for = self._llm_router_handles()
+        if ask is None:
+            return None
+        rels = [rel for rel, _stem, _body in modules]
+        listing = "\n".join(
+            f"- {rel}\n  {(candidates_text or {}).get(rel, '')[:240]}"
+            for rel in rels)
+        prompt = (
+            "A late requirement arrived AFTER these modules were planned. Decide "
+            "if it REFINES one existing module (route the work into it) or is a "
+            "genuinely NEW concern (a new module).\n\n"
+            f"LATE REQUIREMENT:\n{statement.strip()[:600]}\n\n"
+            f"EXISTING MODULES (rel-path + spec excerpt):\n{listing}\n\n"
+            "Answer with EXACTLY one line: the rel-path of the single owning "
+            "module (e.g. src/web_ui.py) if it clearly refines that module, or "
+            "the bare word new. When unsure, answer new.")
+        try:
+            chain = chain_for("reviewer")
+            reply = ask(prompt, model=chain[0], role="reviewer",
+                        step="amend-route", fallbacks=tuple(chain[1:]))
+        except Exception:               # noqa: BLE001
+            return None
+        ans = (reply or "").strip().splitlines()[-1].strip().strip("`").strip()
+        for rel in rels:
+            if rel == ans or rel in ans or ans.endswith(rel):
+                return rel
+        return None                     # 'new' or unparseable -> fork
+
+    @staticmethod
+    def _llm_router_handles():
+        """Resolve (ask, chain_for) from whichever llm_backend import root is on
+        the path, mirroring the loader used elsewhere in the runner. Returns
+        (None, None) when the backend is unavailable (pure-unit context)."""
+        import importlib
+        for rootmod in ("harness.llm_backend", "tests.harness.llm_backend",
+                        "llm_backend"):
+            try:
+                mod = importlib.import_module(rootmod)
+                return mod.ask, mod.chain_for
+            except Exception:           # noqa: BLE001
+                continue
+        return None, None
 
     def _assembly_node(self) -> "Optional[dict]":
         """B2 mechanism 3: an ENGINE-generated assembly leaf.

@@ -110,3 +110,86 @@ def test_best_owner_wins(tmp_path):
     owner = find("Present the notes list in a nicer table layout.",
                  _mods(web, db))
     assert owner == "src/web_ui.py"
+
+
+# -- #1: candidate matchable from its SPEC text alone (no code file yet). The
+#    v0NN miss: a late 'make it nice' forked because src/web_ui.py did not exist
+#    at match time even though the web_ui SPEC did. The body fed to the matcher
+#    is spec markdown here (no defs) — a defined-symbol match is impossible, so
+#    the looser surface signal must carry it.
+def test_spec_only_candidate_routes_without_a_file(tmp_path):
+    spec_body = ("# Web page\n- Node: web_ui\n"
+                 "Renders the notes list as an HTML page with an add form.\n")
+    owner = find("Make the notes list and the add form look tidy and friendly.",
+                 _mods(("web_ui", spec_body)))
+    assert owner == "src/web_ui.py"
+
+
+# -- #3 surface_overlap: shares >=2 surfaces (notes, form, list) but no single
+#    detector crossed its bar; the structural backstop routes it.
+def test_surface_overlap_routes_on_multiple_weak_surfaces(tmp_path):
+    web = ("web_ui", "An HTML page that lists notes and shows an add form.\n")
+    owner = find("Tidy the notes, the list and the form.", _mods(web),
+                 methods=["surface_overlap"])
+    assert owner == "src/web_ui.py"
+
+
+def test_surface_overlap_silent_on_single_incidental_word(tmp_path):
+    other = ("billing", "Charges a customer card and emits a receipt.\n")
+    owner = find("Tidy the notes list and the add form.", _mods(other),
+                 methods=["surface_overlap"])
+    assert owner is None
+
+
+# -- fastest-first SHORT-CIRCUIT: once an early, cheap detector finds an owner
+#    the later/expensive ones (here a sentinel that would steal the match) never
+#    run. Proven by registering a greedy detector AFTER the matching one and
+#    asserting the cheap match wins.
+def test_short_circuit_skips_later_detectors(tmp_path):
+    calls = {"n": 0}
+
+    @eng._amend_detector("greedy_sentinel")
+    def _greedy(feat, mod):          # noqa: ANN001
+        calls["n"] += 1
+        return 1.0
+    try:
+        web = ("web_ui", "def page():\n    return ''\n# GET /ui\n")
+        owner = find("The GET /ui page must paginate.", _mods(web),
+                     methods=["shared_route", "greedy_sentinel"])
+        assert owner == "src/web_ui.py"
+        assert calls["n"] == 0       # shared_route matched first → sentinel skipped
+    finally:
+        eng._AMEND_DETECTORS.pop("greedy_sentinel", None)
+
+
+# -- #2 llm_router: deterministic layers all empty → the injected router fires
+#    and its answer is honoured (id) / forks (new / error).
+def test_llm_router_fires_only_when_deterministic_empty(tmp_path):
+    db = ("db", "def connect():\n    return 1\n")
+    # statement shares nothing structural with db → all detectors 0
+    stmt = "Add an unrelated background reaper for stale sessions."
+
+    def router_picks(statement, modules, cand_text):
+        return "src/db.py"
+    owner = find(stmt, _mods(db), llm=router_picks)
+    assert owner == "src/db.py"
+
+    def router_new(statement, modules, cand_text):
+        return None              # 'new'
+    assert find(stmt, _mods(db), llm=router_new) is None
+
+    def router_boom(statement, modules, cand_text):
+        raise RuntimeError("backend down")
+    assert find(stmt, _mods(db), llm=router_boom) is None  # safe fork
+
+
+def test_llm_router_not_called_when_a_detector_matches(tmp_path):
+    web = ("web_ui", "def page():\n    return ''\n# GET /ui\n")
+    fired = {"n": 0}
+
+    def router(statement, modules, cand_text):
+        fired["n"] += 1
+        return "src/web_ui.py"
+    owner = find("The GET /ui page must paginate.", _mods(web), llm=router)
+    assert owner == "src/web_ui.py"
+    assert fired["n"] == 0        # a deterministic detector already decided
