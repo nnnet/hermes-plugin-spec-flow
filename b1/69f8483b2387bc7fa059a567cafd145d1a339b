@@ -1,0 +1,25 @@
+tests/harness/role_worker.py
+  s_a7f45290e91181::t_0c2c801489406e 1180-1187
+tests/harness/contract_checks.py
+  s_a7f45290e91181::t_c85ff6ba9588d0 349-386,389-395
+  s_a7f45290e91181::t_99b39547956836 26
+  s_a7f45290e91181::t_afa03be01dd2e0 451
+tests/harness/test_contract_checks.py
+  s_a7f45290e91181::t_35673022456b8e 252-280
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.7",
+  "base_commit_sha": "b169f8483b2387bc7fa059a567cafd145d1a339b",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
