@@ -568,16 +568,22 @@ def _amd_symbol_overlap(feat: dict, mod: dict) -> float:
     return min(0.6 + 0.1 * len(hit), 0.95) if hit else 0.0
 
 
+_AMEND_TOKEN_FLOOR = 0.5
+
 @_amend_detector("token_overlap")
 def _amd_token_overlap(feat: dict, mod: dict) -> float:
     """Share of the requirement's distinctive tokens that also appear in the
-    module's own text — catches refinements worded with no route/symbol at
-    all ('present the notes nicely' meets the module that renders notes)."""
+    module's own text — the LOOSEST signal, the fallback when no route, file or
+    defined symbol matched. Held to a HIGHER floor (_AMEND_TOKEN_FLOOR) than the
+    registry minimum: a genuinely-new feature that merely shares a couple of
+    incidental words with an unrelated module must NOT be mis-routed into it
+    (a false amend corrupts that module — worse than the original fork). Recall
+    for vaguely-worded refinements comes from symbol_overlap, which is precise."""
     want = feat["tokens"]
-    if not want:
+    if len(want) < 2:
         return 0.0
     frac = len(want & mod["tokens"]) / len(want)
-    return frac if frac >= _AMEND_MIN_SCORE else 0.0
+    return frac if frac >= _AMEND_TOKEN_FLOOR else 0.0
 
 
 def _amend_find_owner(statement: str, modules: list, methods=None) -> "Optional[str]":

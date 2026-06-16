@@ -90,6 +90,18 @@ def test_registry_is_extensible(tmp_path):
         eng._AMEND_DETECTORS.pop("always_one", None)
 
 
+# -- PRECISION: a new feature that shares only a couple of incidental words
+#    with an unrelated module must NOT be mis-routed into it (false amend
+#    corrupts that module — worse than forking). token_overlap is held to a
+#    higher floor; only a real symbol/route/file match may route.
+def test_low_overlap_new_feature_not_misrouted(tmp_path):
+    listing = ("catalog", "def render_catalog(items):\n    return ''\n"
+                          "# product items grid layout price\n")
+    owner = find("Add structured audit logging for every write operation.",
+                 _mods(listing), methods=["token_overlap"])
+    assert owner is None
+
+
 # -- best owner wins when several modules share tokens (highest overlap)
 def test_best_owner_wins(tmp_path):
     web = ("web_ui", "def render_notes_page(notes):\n    return ''\n"
