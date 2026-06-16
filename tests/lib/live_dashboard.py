@@ -694,6 +694,17 @@ def _flow_timeaxis(events: list[dict], tree: dict | None = None) -> str | None:
     if not miles:
         return None
 
+    # checkpoints are NOT a flow of their own — they are run-wide markers. Pull
+    # them out of the lane boxes and render each as a ★ on the time axis + a
+    # dashed horizontal line across the whole chart (below).
+    def _is_cp(e: dict) -> bool:
+        return str(e.get("task") or "").split(":")[0] == "checkpoint"
+
+    cps = [e for e in miles if _is_cp(e)]
+    miles = [e for e in miles if not _is_cp(e)]
+    if not miles:
+        return None        # nothing but checkpoints -> no flow to chart
+
     def esc(s: object) -> str:
         return (str(s).replace("&", "&amp;").replace("<", "&lt;")
                 .replace(">", "&gt;"))[:90]
@@ -717,8 +728,14 @@ def _flow_timeaxis(events: list[dict], tree: dict | None = None) -> str | None:
     secs: dict = {}
     for e, lane in zip(miles, lane_of):
         secs.setdefault(int(float(e["t"])), []).append((e, lane))
+    # give every checkpoint second a (possibly empty) row slot so it sits at its
+    # real time on the axis even when no milestone shares that second.
+    cp_secs = {int(float(e["t"])) for e in cps if isinstance(e.get("t"),
+                                                             (int, float))}
+    for s in cp_secs:
+        secs.setdefault(s, [])
 
-    AXIS, LANEW, PADT, BOXH, RGAP = 78, 250, 22, 56, 8
+    AXIS, LANEW, PADT, BOXH, RGAP, CPH = 78, 250, 22, 56, 8, 18
 
     def hms(t) -> str:
         return _time.strftime("%H:%M:%S", _time.localtime(float(t)))
@@ -731,7 +748,9 @@ def _flow_timeaxis(events: list[dict], tree: dict | None = None) -> str | None:
         for e, lane in secs[sec]:
             per_lane.setdefault(lane, []).append(e)
         by_lane[sec] = per_lane
-        row_h[sec] = max(len(v) for v in per_lane.values()) * BOXH + RGAP
+        nboxes = max((len(v) for v in per_lane.values()), default=0)
+        # a checkpoint-only second is a thin marker row (no boxes)
+        row_h[sec] = (nboxes * BOXH + RGAP) if nboxes else CPH
         row_top[sec] = y
         y += row_h[sec]
     width = AXIS + len(order) * LANEW + 16
@@ -790,6 +809,18 @@ def _flow_timeaxis(events: list[dict], tree: dict | None = None) -> str | None:
                          f'width:{LANEW - 18}px;max-height:{BOXH - 6}px;overflow:hidden;'
                          f'background:{bg};border:1px solid {border};border-radius:6px;'
                          f'padding:3px 6px;box-sizing:border-box;line-height:1.2">{label}</div>')
+    # checkpoints: a ★ on the time (Y) axis + a dashed horizontal line spanning
+    # the whole chart at that instant — NOT a lane/flow of their own.
+    for sec in cp_secs:
+        if sec not in row_top:
+            continue
+        cy = row_top[sec] + row_h[sec] / 2
+        p.append(f'<div title="чекпойнт {hms(sec)}" style="position:absolute;'
+                 f'left:{AXIS}px;top:{cy:.0f}px;width:{width - AXIS}px;height:0;'
+                 f'border-top:1px dashed #8b949e;opacity:.55"></div>')
+        p.append(f'<div title="чекпойнт сохранён · {hms(sec)}" '
+                 f'style="position:absolute;left:{AXIS - 16}px;top:{cy - 9:.0f}px;'
+                 f'color:#e3b341;font-size:13px;line-height:1">★</div>')
     p.append('</div>')
     return "".join(p)
 
