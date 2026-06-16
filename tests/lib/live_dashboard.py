@@ -158,6 +158,14 @@ def _node_ids(tree: dict) -> set:
 _NODE_PHASES = {"implement", "review", "integrate", "lifecycle", "contract",
                 "respec"}
 
+# engine-internal nodes that appear in a run but were NEVER injected by a human
+# — build machinery (checkpoint snapshots, the boot/assembly/contract gates, the
+# built entry module). They get a ⚙️ badge so the tree distinguishes a TECHNICAL
+# attachment from a late HUMAN requirement (web_ui, seller_directory) which keeps
+# the 📌 pin.
+_TECHNICAL_TASKS = {"checkpoint", "verify", "product_entry", "boot",
+                    "boot_gate", "assembly", "integrate", "contract"}
+
 
 def _attach_orphan_nodes(tree: dict, events: list) -> list:
     """Late requirements (web_ui, seller_directory) are added by the engine
@@ -184,8 +192,10 @@ def _attach_orphan_nodes(tree: dict, events: list) -> list:
         return []
     tree.setdefault("children", [])
     for base in order:
-        tree["children"].append({"id": base, "children": [],
-                                 "attached": True})
+        node = {"id": base, "children": [], "attached": True}
+        if base in _TECHNICAL_TASKS:
+            node["technical"] = True   # engine machinery, not a human injection
+        tree["children"].append(node)
     return order
 
 
@@ -245,6 +255,8 @@ def _tree_view(node: dict, meta: dict) -> dict:
     }
     if node.get("attached"):
         view["attached"] = True       # late-injected requirement node
+    if node.get("technical"):
+        view["technical"] = True      # engine machinery (⚙️, not a 📌 injection)
     if node.get("pending"):
         view["pending"] = True        # injected but not yet materialized
     return view
@@ -2157,7 +2169,7 @@ function treeHTML(n){
  const sel=SEL===n.id?' sel':'';
  const act=isActive(n.id);
  const ico=act?'⏳':(has?'🌿':'🍃');
- const pin=n.attached?'<span title="позднее требование, вброшено в прогон">📌</span> ':'';
+ const pin=n.technical?'<span title="служебный узел движка (чекпойнт/гейт/сборка) — не вброс человека">⚙️</span> ':(n.attached?'<span title="позднее требование, вброшено в прогон">📌</span> ':'');
  const pend=n.pending?'<span title="вброшено, ещё не материализовано в узел" style="color:#e3a008">⏳вброшено</span> ':'';
  let h=`<li>${tw}<span class="node${sel}${act?' actv':''}" data-id="${n.id}">${ico} ${pin}${pend}${n.id} <span class=badge>${badgeHTML(n.episodes)}</span></span>`;
  if(has&&open){h+='<ul>'+n.children.map(treeHTML).join('')+'</ul>';}
@@ -2576,7 +2588,7 @@ function graphSVG(){
   s+=`<g class=gnode data-id="${n.id}" transform="translate(${X(n)},${Y(n)})" style="cursor:pointer">`+
      (tip?`<title>${esc(tip)}</title>`:'')+
      `<rect width="${BW}" height="${BH}" rx="5" fill="${n.pending?'#3a2e12aa':(act?'#3a2a1255':(sel?'#1f6feb55':(leaf?'#161b22':'#13251a')))}" stroke="${n.pending?'#e3a008':(act?'#e3b341':(sel?'#1f6feb':(leaf?'#30363d':'#3fb950')))}"${(act||n.pending)?' stroke-dasharray="4 3"':''}/>`+
-     `<text x="7" y="15" fill="#c9d1d9" font-size="11">${ico} ${n.pending?'⏳':(n.attached?'📌':'')}${esc(n.id).slice(0,14)}${tail}</text>`+
+     `<text x="7" y="15" fill="#c9d1d9" font-size="11">${ico} ${n.pending?'⏳':(n.technical?'⚙️':(n.attached?'📌':''))}${esc(n.id).slice(0,14)}${tail}</text>`+
      (bdg?`<text x="${BW-5}" y="14" text-anchor="end" font-size="8">${bdg}</text>`:'')+`</g>`;});
  s+='</svg>';return '<div style="overflow:auto;border:1px solid #21262d;border-radius:6px;padding:6px">'+s+'</div>'+legendHTML();
 }

@@ -57,3 +57,23 @@ def test_tree_view_carries_attached_marker():
     assert child["id"] == "web_ui" and child.get("attached") is True
     # a normal node carries no marker
     assert "attached" not in view
+
+
+def test_engine_machinery_marked_technical_not_a_human_injection():
+    # a checkpoint/gate node that ran is engine machinery (⚙️), while a late
+    # requirement (web_ui) is a human injection (📌) — the tree must tell them
+    # apart so the badge differs.
+    tree = {"id": "L0", "children": []}
+    events = [_ev("checkpoint", phase="integrate"),
+              _ev("web_ui", phase="review")]
+    dash._attach_orphan_nodes(tree, events)
+    kids = {c["id"]: c for c in tree["children"]}
+    assert kids["checkpoint"].get("technical") is True
+    assert "technical" not in kids["web_ui"]      # a real requirement stays 📌
+    # and the marker survives into the client view
+    meta = {}
+    dash._flatten(tree, 0, meta, None)
+    view = dash._tree_view(tree, meta)
+    vk = {c["id"]: c for c in view["children"]}
+    assert vk["checkpoint"].get("technical") is True
+    assert vk["web_ui"].get("attached") is True and "technical" not in vk["web_ui"]
