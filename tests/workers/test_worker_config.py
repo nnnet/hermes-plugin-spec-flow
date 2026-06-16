@@ -16,6 +16,10 @@ from harness_fakeapi import ok               # noqa: E402
 # An OpenRouter-free provider pool entry (most chain tests need it declared).
 _ORF = {"name": "openrouter-free", "kind": "openai",
         "model_prefix": "openrouter/", "require_suffix": ":free"}
+# A second provider with a free daily quota — lets a non-':free' rotation model
+# (openrouter_custom/sonnet) pass the paid gate so it can ride the real path.
+_ORC = {"name": "openrouter-custom", "kind": "openai",
+        "model_prefix": "openrouter_custom/", "requests_per_day": 1000}
 
 
 def _gw(srv, **extra):
@@ -225,6 +229,12 @@ def test_hung_claude_cli_is_retriable_not_fatal(monkeypatch):
     # v19 death class: the terminal claude CLI hung and subprocess
     # raised TimeoutExpired, which slipped past the chain's exception
     # net and killed the run while OpenRouter was healthy.
+    #
+    # This injects an OS-LEVEL fault (the spawned process hangs) at the
+    # subprocess.run seam — it is NOT a fake LLM reply, it is the same kind of
+    # real-fault injection as the dead_endpoint network seam. It is the only way
+    # to deterministically reproduce a hung child process; the timeout-retry
+    # logic under test is exercised for real.
     import subprocess as _sp
     calls = {"n": 0}
 
@@ -240,92 +250,60 @@ def test_hung_claude_cli_is_retriable_not_fatal(monkeypatch):
     assert calls["n"] == 2, "a hung CLI must be retried, then raise (not escape)"
 
 
-def test_terminal_fallback_only_on_last_round(monkeypatch):
+def test_terminal_fallback_only_on_last_round(monkeypatch, fake_openai):
     # free-models policy: claude is the LAST resort — earlier rounds
-    # wait and retry the free chain, sparing the weekly subscription cap
-    lb.configure_workers({"quota_wait_s": 0.01, "quota_retries": 2,
-                          "providers": [{"name": "openrouter-free",
-                                         "kind": "openai",
-                                         "model_prefix": "openrouter/",
-                                         "require_suffix": ":free"}]})
+    # wait and retry the free chain, sparing the weekly subscription cap.
+    # A real server 429s everything; the claude terminal fallback (routed over
+    # the gateway, wire model 'haiku') must appear on the wire exactly once.
     monkeypatch.setattr(lb, "FALLBACK_MODEL", "haiku")
-    fb_calls = {"n": 0}
-
-    def router(prompt, m, system, fallback=False, timeout=None):
-        # the terminal fallback rotation calls _ask_one with fallback=True
-        if fallback:
-            fb_calls["n"] += 1
-        raise lb.QuotaExhausted("429")
-
-    monkeypatch.setattr(lb, "_ask_one", router)
-    try:
-        import pytest as _pt
-        with _pt.raises((lb.QuotaExhausted, RuntimeError)):
-            lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
-        # 3 rounds (1 + 2 retries), the fallback rotation runs on the
-        # LAST round only — sparing the capped provider on earlier rounds
-        assert fb_calls["n"] == 1, \
-            f"fallback must run once (last round), saw {fb_calls['n']}"
-    finally:
-        lb.configure_workers(None)
+    srv = fake_openai([(429, "rate")], retries=1)
+    lb.configure_workers(_gw(srv, quota_wait_s=0.01, quota_retries=2,
+                             quota_wait_jitter=0, fallback_cooldown_s=0))
+    with pytest.raises((lb.QuotaExhausted, RuntimeError)):
+        lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
+    haiku_hits = [r for r in srv.requests if r["model"] == "haiku"]
+    assert len(haiku_hits) == 1, \
+        f"fallback must run once (last round), saw {len(haiku_hits)}"
 
 
-def test_fallback_rotation_cycles_across_providers(monkeypatch):
+def test_fallback_rotation_cycles_across_providers(fake_openai):
     # user ask: on exhaustion, ROTATE through providers (claude/haiku ->
-    # openrouter_custom -> ...) instead of dying on one terminal model
-    lb.configure_workers({
-        "quota_wait_s": 0.001, "quota_retries": 0, "quota_wait_jitter": 0,
-        "fallback_models": ["claude/haiku", "openrouter_custom/sonnet"],
-        "providers": [{"name": "openrouter-free", "kind": "openai",
-                       "model_prefix": "openrouter/",
-                       "require_suffix": ":free"}]})
-    tried = []
+    # openrouter_custom -> ...) instead of dying on one terminal model. A real
+    # model-aware server caps everything except the second provider.
+    def route(payload):
+        if payload.get("model") == "openrouter_custom/sonnet":
+            return (200, ok("answered by the second provider"))
+        return (429, "rate")
 
-    def router(prompt, m, system, fallback=False, timeout=None):
-        if fallback:
-            tried.append(m)
-            if m == "openrouter_custom/sonnet":
-                return "answered by the second provider"
-            raise lb.QuotaExhausted("haiku capped")
-        raise lb.QuotaExhausted("free pool out")
-
-    monkeypatch.setattr(lb, "_ask_one", router)
-    try:
-        out = lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
-        assert out == "answered by the second provider"
-        # first provider tried and capped, rolled to the second
-        assert tried == ["claude/haiku", "openrouter_custom/sonnet"]
-    finally:
-        lb.configure_workers(None)
+    srv = fake_openai(route, retries=1)
+    lb.configure_workers(_gw(
+        srv, providers=[_ORF, _ORC], quota_wait_s=0.001, quota_retries=0,
+        quota_wait_jitter=0, fallback_cooldown_s=0,
+        fallback_models=["claude/haiku", "openrouter_custom/sonnet"]))
+    out = lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
+    assert out == "answered by the second provider"
+    # the FALLBACK hits on the wire (claude/haiku -> 'haiku', then the second
+    # provider) — the first capped, rolled to the second
+    fb = [r["model"] for r in srv.requests if r["model"] != "openrouter/a:free"]
+    assert fb == ["haiku", "openrouter_custom/sonnet"]
 
 
-def test_fallback_rotation_start_advances_each_round(monkeypatch):
+def test_fallback_rotation_start_advances_each_round(fake_openai):
     # a capped provider must not be retried FIRST every round — the
-    # rotation start advances so the other provider leads next time
-    lb.configure_workers({
-        "quota_wait_s": 0.001, "quota_retries": 1, "quota_wait_jitter": 0,
-        "fallback_models": ["claude/haiku", "openrouter_custom/sonnet"],
-        "providers": [{"name": "openrouter-free", "kind": "openai",
-                       "model_prefix": "openrouter/",
-                       "require_suffix": ":free"}]})
-    order = []
-
-    def router(prompt, m, system, fallback=False, timeout=None):
-        if fallback:
-            order.append(m)
-        raise lb.QuotaExhausted("all capped")
-
-    monkeypatch.setattr(lb, "_ask_one", router)
-    try:
-        import pytest as _pt
-        with _pt.raises((lb.QuotaExhausted, RuntimeError)):
-            lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
-        # rounds=2 -> last round attempt=1, start = 1 % 2 = 1: the lead
-        # ADVANCES to the second provider rather than always retrying the
-        # capped first one; then it wraps to cover both
-        assert order == ["openrouter_custom/sonnet", "claude/haiku"]
-    finally:
-        lb.configure_workers(None)
+    # rotation start advances so the other provider leads next time. The real
+    # server 429s everything; we read the fallback model order off the wire.
+    srv = fake_openai([(429, "all capped")], retries=1)
+    lb.configure_workers(_gw(
+        srv, providers=[_ORF, _ORC], quota_wait_s=0.001, quota_retries=1,
+        quota_wait_jitter=0, fallback_cooldown_s=0,
+        fallback_models=["claude/haiku", "openrouter_custom/sonnet"]))
+    with pytest.raises((lb.QuotaExhausted, RuntimeError)):
+        lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
+    # rounds=2 -> last round start advances to the SECOND provider rather than
+    # always retrying the capped first one; then it wraps to cover both.
+    # claude/haiku rides the gateway as wire model 'haiku'.
+    fb = [r["model"] for r in srv.requests if r["model"] != "openrouter/a:free"]
+    assert fb == ["openrouter_custom/sonnet", "haiku"]
 
 
 def test_jitter_spreads_the_wait(monkeypatch):
@@ -338,36 +316,33 @@ def test_jitter_spreads_the_wait(monkeypatch):
     assert lb._jittered(100.0, {"quota_wait_jitter": 0}) == 100.0
 
 
-def test_rotation_kicks_in_after_fallback_after_rounds(monkeypatch):
+def test_rotation_kicks_in_after_fallback_after_rounds(fake_openai):
     # v21 wedge: waiting ALL 11 rounds before trying the haiku rotation
     # left the run stuck ~55 min on a hard free-pool cooldown. With
     # fallback_after_rounds=1 the rotation must fire from round 1, not
-    # only the last round.
-    lb.configure_workers({
-        "quota_wait_s": 0.001, "quota_retries": 3, "quota_wait_jitter": 0,
-        "fallback_after_rounds": 1,
-        "fallback_models": ["claude/haiku"],
-        "providers": [{"name": "openrouter-free", "kind": "openai",
-                       "model_prefix": "openrouter/",
-                       "require_suffix": ":free"}]})
-    fb_rounds = []
-    state = {"round": -1}
+    # only the last round. A real model-aware server caps the free pool and
+    # answers on the claude fallback (wire model 'haiku').
+    def route(payload):
+        if payload.get("model") == "haiku":
+            return (200, ok("haiku saved it"))
+        return (429, "free pool out")
 
-    def router(prompt, m, system, fallback=False, timeout=None):
-        if not fallback:
-            state["round"] += 1
-            raise lb.QuotaExhausted("free pool out")
-        fb_rounds.append(state["round"])
-        return "haiku saved it"
-
-    monkeypatch.setattr(lb, "_ask_one", router)
-    try:
-        out = lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
-        assert out == "haiku saved it"
-        # rotation fired on round 1 (the second round), not waiting for 3
-        assert fb_rounds and fb_rounds[0] == 1
-    finally:
-        lb.configure_workers(None)
+    srv = fake_openai(route, retries=1)
+    lb.configure_workers(_gw(
+        srv, quota_wait_s=0.001, quota_retries=3, quota_wait_jitter=0,
+        fallback_after_rounds=1, fallback_cooldown_s=0,
+        fallback_models=["claude/haiku"]))
+    out = lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
+    assert out == "haiku saved it"
+    # the primary free pool was tried on rounds 0 AND 1 before the rotation
+    # fired — i.e. the haiku fallback first appears after two primary hits.
+    primary_before = []
+    for r in srv.requests:
+        if r["model"] == "haiku":
+            break
+        primary_before.append(r["model"])
+    assert len(primary_before) == 2, \
+        f"rotation must fire on round 1, saw {len(primary_before)} primary hits"
 
 
 def test_stages_block_flattens_to_role_keys():
