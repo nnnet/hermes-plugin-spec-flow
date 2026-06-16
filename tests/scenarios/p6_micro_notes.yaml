@@ -123,6 +123,16 @@ review:
   on_reject: rework
   max_rework: 2
 
+# B1/B2 — the honest hard floor. With pre_gate on, the ROOT integrate (L0) runs
+# the un-mockable boot-gate: it ASSEMBLES the product in a fresh subprocess,
+# boots its real WSGI entry and drives the acceptance endpoints (GET /health,
+# GET /ui, POST+GET /notes round-trip). A product that does not actually boot or
+# answer is RED even when the per-module pytest suite is green — so "L0 PASS"
+# means a genuinely runnable product, not just passing unit tests. Default OFF
+# (engine-wide) keeps p4/p5 unaffected; p6 opts in here.
+integrate:
+  pre_gate: true
+
 # Acceptance oracle (declarative). The assembled app must satisfy these; the
 # verifier turns them into the root gate. web_ui acceptance arrives mid-run via
 # the HITL requirement injection, not here.

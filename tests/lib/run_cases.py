@@ -157,6 +157,18 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
         # claude -p is a full agent: its incidental file writes land here, not
         # in the plugin root (the engine's REAL artifacts go to workspace/)
         os.environ["SPEC_FLOW_LLM_CWD"] = str(case_dir / "agent-scratch")
+    # B1/B2: opt-in pre-integrate contract gate + un-mockable boot-gate. Default
+    # OFF (env unset) so p4/p5 are unchanged; a case turns it on with
+    # ``integrate: {pre_gate: true}``. This is the honest hard floor — with it
+    # on, a green L0 means the ASSEMBLED product actually boots and answers its
+    # acceptance endpoints, not merely that the per-module pytest suite passed.
+    _integ_cfg = case.get("integrate") or {}
+    if _integ_cfg.get("pre_gate"):
+        os.environ["SPEC_FLOW_PRE_GATE"] = "1"
+    elif "SPEC_FLOW_PRE_GATE" in os.environ and not os.environ.get("SPEC_FLOW_PRE_GATE_STICKY"):
+        # a case that does NOT opt in must not inherit a stray gate from a
+        # previous in-process run (keeps p4/p5 deterministic in batch mode)
+        del os.environ["SPEC_FLOW_PRE_GATE"]
     trace = case_dir / "trace.jsonl"
     sink = eng.LogSink(path=str(trace), level=eng.L_DETAIL, fmt="jsonl", enabled=True)
     # the plugin ALWAYS builds the tree itself by calling a decomposer — the

@@ -384,7 +384,7 @@ def goal_wants_notes(constitution, goal: str = "") -> bool:
 # sys.modules mocks and conftest fixtures CANNOT leak into the assembly —
 # this is the whole point of B2: import the real product entry, no mocking.
 _BOOT_PROBE = r'''
-import io, json, os, sys, tempfile
+import glob, importlib, io, json, os, sys, tempfile
 from pathlib import Path
 
 ws = Path(sys.argv[1]).resolve()
@@ -399,14 +399,35 @@ def fail(msg):
     print("BOOTGATE_FAIL " + msg)
     raise SystemExit(0)
 
-try:
-    import app  # the product's real entry — NO mocking
-except Exception as exc:  # noqa: BLE001
-    fail("cannot import src/app.py: %r" % (exc,))
-
-wsgi = getattr(app, "wsgi_app", None)
-if wsgi is None or not callable(wsgi):
-    fail("src/app.py does not expose a callable wsgi_app")
+# Find the WSGI callable. Prefer the constitution's declared entry (src/app.py
+# exposing wsgi_app), but FALL BACK to discovering any assembled module under
+# src/ that exposes a WSGI callable — the product is judged on whether it BOOTS
+# and answers, not on a filename. This mirrors how serve-product.sh boots it.
+cands = []
+if (ws / "src" / "app.py").exists():
+    cands.append("app")
+for f in sorted(glob.glob(str(ws / "src" / "*.py"))):
+    stem = Path(f).stem
+    if stem != "__init__" and stem not in cands:
+        cands.append(stem)
+wsgi = None
+last_err = ""
+for name in cands:
+    try:
+        m = importlib.import_module(name)  # real product module — NO mocking
+    except Exception as exc:  # noqa: BLE001
+        last_err = "import %s: %r" % (name, exc)
+        continue
+    for attr in ("wsgi_app", "application", "app"):
+        c = getattr(m, attr, None)
+        if callable(c):
+            wsgi = c
+            break
+    if wsgi is not None:
+        break
+if wsgi is None:
+    fail("no module under src/ exposes a callable wsgi_app/application/app"
+         + ((" (last import error: " + last_err + ")") if last_err else ""))
 
 def call(method, path, payload=None, query=""):
     body = json.dumps(payload).encode() if payload is not None else b""

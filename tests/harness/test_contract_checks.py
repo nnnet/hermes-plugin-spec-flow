@@ -190,10 +190,22 @@ def test_boot_gate_passes_on_assembled_app(tmp_path):
     assert ok, detail
 
 
+def test_boot_gate_discovers_entry_in_non_app_module(tmp_path):
+    # The worker may name the WSGI module anything (e.g. wsgi_application.py)
+    # instead of the constitution's src/app.py. The boot-gate must DISCOVER the
+    # callable and still boot+drive it — a runnable product is green regardless
+    # of filename. Guards the v014 escape (entry was wsgi_application.py).
+    _src(tmp_path, "wsgi_application.py", _GOOD_APP)
+    ok, detail = cc.boot_gate(str(tmp_path), _ENTRY_CONST)
+    assert ok, detail
+
+
 def test_boot_gate_fails_when_entry_missing(tmp_path):
+    # empty src/ — discovery finds no module exposing a WSGI callable, so the
+    # boot-gate is RED (the product cannot be assembled or booted at all).
     (tmp_path / "src").mkdir()
     ok, detail = cc.boot_gate(str(tmp_path), _ENTRY_CONST)
-    assert not ok and "import" in detail.lower(), detail
+    assert not ok and "no module under src" in detail.lower(), detail
 
 
 def test_boot_gate_fails_when_no_wsgi_app(tmp_path):
