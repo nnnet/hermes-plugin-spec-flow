@@ -1128,30 +1128,33 @@ class Engine:
         if os.environ.get("SPEC_FLOW_PRE_GATE", "") in (
                 "", "0", "false", "False", "no"):
             return None
-        try:
-            from tests.harness import contract_checks
-            entry = contract_checks.constitution_declares_entry(
-                self._constitution)
-        except Exception:  # noqa: BLE001 — never break the run
-            entry = None
-        if not entry:
-            return None
+        # Entry detection is INLINE — the plugin must not import the test
+        # harness (tests/ is not on sys.path inside a real run; the old
+        # `from tests.harness import contract_checks` silently raised, the
+        # except swallowed it, entry became None and the node never injected).
+        blob = " ".join(str(r) for r in (self._constitution or [])).lower()
+        if "wsgi_app" not in blob or not ("app.py" in blob or "src/app" in blob):
+            return None             # no declared entry ⇒ no assembly (p4/p5)
+        entry = "src/app.py"
         if (Path(self.workspace.root) / entry).is_file():
             return None             # a feature leaf already built the entry
-        statement = (
-            "ASSEMBLE THE PRODUCT ENTRY (engine-required, binding).\n\n"
-            f"Create {entry} exposing a module-level `wsgi_app` callable that "
-            "wires the feature modules ALREADY built under src/ into one "
+        # The implementer reads the node's SPEC, not a `requirement` field, so
+        # the build directive goes into spec_markdown (which lands in the spec
+        # body); the title is the short heading.
+        spec_md = (
+            "## ASSEMBLE THE PRODUCT ENTRY (engine-required, binding)\n\n"
+            f"Create `{entry}` exposing a module-level `wsgi_app` callable that "
+            "wires the feature modules ALREADY built under `src/` into one "
             "running WSGI app. Import the existing modules (do NOT reimplement "
             "them, do NOT mock them); dispatch every endpoint the constitution "
             "API contract declares to the matching handler/storage already "
             "present. The app must boot in a fresh process and answer "
-            "GET /health -> 200. Standard library only.\n\n"
-            "Constitution API contract:\n"
-            + "\n".join(f"  - {r}" for r in (self._constitution or [])))
+            "`GET /health` -> 200. Standard library only.\n\n"
+            "### Constitution API contract\n"
+            + "\n".join(f"- {r}" for r in (self._constitution or [])))
         return {"id": "product_entry",
-                "title": "Assemble product entry " + entry,
-                "requirement": statement, "atomic": True,
+                "title": "Assemble product entry (" + entry + ")",
+                "spec_markdown": spec_md, "atomic": True,
                 "metrics": {"modules": 1, "tasks": 2, "interfaces": 1,
                             "estimated_loc": 60, "open_decisions": 0,
                             "single_concern": True,
@@ -1403,12 +1406,12 @@ class Engine:
         # / no entry declared, behavior is unchanged.
         if os.environ.get("SPEC_FLOW_PRE_GATE", "") not in ("", "0", "false",
                                                             "False", "no"):
-            try:
-                from tests.harness import contract_checks
-                entry = contract_checks.constitution_declares_entry(
-                    self._constitution)
-            except Exception:  # noqa: BLE001 — gate never breaks the run
-                entry = None
+            # inline entry detection — the plugin must not import the test
+            # harness (it is not importable inside a real run; see _assembly_node)
+            _blob = " ".join(str(r) for r in
+                             (self._constitution or [])).lower()
+            entry = ("src/app.py" if "wsgi_app" in _blob
+                     and ("app.py" in _blob or "src/app" in _blob) else None)
             if entry and not (Path(self.workspace.root) / entry).is_file():
                 self.emit("integrate", "engine", "spec-integrate",
                           "L0:integrate",

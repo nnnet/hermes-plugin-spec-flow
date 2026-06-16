@@ -87,6 +87,22 @@ def test_no_entry_declared_injects_nothing(tmp_path, monkeypatch):
     assert "product_entry" not in _children_ids(res.project["tree"], "L0")
 
 
+def test_plugin_does_not_import_contract_checks_for_entry():
+    """Regression guard: the assembly node must detect the entry INLINE. The
+    first cut did `from tests.harness import contract_checks`, which raises
+    ModuleNotFoundError inside a real run (tests/ is not on sys.path) — the
+    except swallowed it, entry became None and product_entry never injected,
+    yet this very test passed because pytest makes `tests` importable. Pin the
+    plugin to inline detection so the test env can't mask the run env again."""
+    runner_src = (pathlib.Path(__file__).resolve().parents[2]
+                  / "spec_flow_runner.py").read_text(encoding="utf-8")
+    # scan IMPORT statements only — a mention inside a comment is fine
+    bad = [ln for ln in runner_src.splitlines()
+           if ln.lstrip().startswith(("from ", "import "))
+           and "contract_checks" in ln]
+    assert not bad, f"plugin imports contract_checks: {bad}"
+
+
 def test_assembly_skipped_when_entry_already_built(tmp_path, monkeypatch):
     monkeypatch.setenv("SPEC_FLOW_PRE_GATE", "1")
 
