@@ -247,3 +247,55 @@ def test_call_cause_keys_by_role_not_window(tmp_path):
     # the implement gap's own per-gap LLM count is not inflated by the
     # decomposer call (реализация has no llm-log calls -> stays 0)
     assert (impl is None) or (impl["llm"] == 0)
+
+
+# ─── failure report: abnormal responses → fallback / error (Part 2) ──────
+
+def test_failures_report_aggregates_abnormal_and_fallbacks(tmp_path):
+    trace = [_ev(0, task="L0", phase="review"), _ev(5, task="L0", phase="review")]
+    llm = [
+        {"event": "llm_attempt", "model": "m_a", "provider": "openrouter",
+         "status": 429, "abnormal": True, "slept_s": 3.0, "t": 1.0},
+        {"event": "llm_attempt", "model": "m_a", "provider": "openrouter",
+         "status": 429, "abnormal": True, "slept_s": 2.0, "t": 2.0},
+        {"event": "llm_attempt", "model": "m_a", "provider": "openrouter",
+         "status": 200, "abnormal": False, "t": 3.0},
+        {"event": "llm_fallback", "from_model": "m_a", "to_model": "m_b",
+         "reason": "429", "terminal": False, "t": 3.1},
+        {"event": "llm_fallback", "from_model": "m_b", "to_model": None,
+         "reason": "429", "terminal": True, "t": 4.0},
+    ]
+    f = dash._idle_analysis(_run(tmp_path, trace, llm))["failures"]
+    a = next(r for r in f["by_model"] if r["model"] == "m_a")
+    assert a["abn"] == 2 and a["429"] == 2 and a["delay_s"] == 5.0
+    assert a["fallbacks"] == 1
+    b = next(r for r in f["by_model"] if r["model"] == "m_b")
+    assert b["fallbacks"] == 1 and b["errors"] == 1     # terminal counts as error
+    assert f["totals"]["abnormal"] == 2
+    assert f["totals"]["terminal"] == 1
+    assert f["totals"]["delay_s"] == 5.0
+    assert any(t["terminal"] and t["to"] is None for t in f["transitions"])
+
+
+def test_failures_report_empty_on_clean_run(tmp_path):
+    trace = [_ev(0, task="L0", phase="review"), _ev(2, task="L0", phase="implement")]
+    llm = [{"event": "llm_attempt", "model": "m_a", "status": 200,
+            "abnormal": False, "t": 1.0}]
+    f = dash._idle_analysis(_run(tmp_path, trace, llm))["failures"]
+    assert f["by_model"] == [] and f["totals"]["abnormal"] == 0
+    assert f["totals"]["fallbacks"] == 0
+
+
+def test_abnormal_attempt_not_double_counted_as_request(tmp_path):
+    # llm_attempt / llm_fallback must NOT inflate the LLM request count
+    trace = [_ev(0, task="L0", phase="review"), _ev(5, task="L0", phase="review")]
+    llm = [
+        {"event": "call_start", "role": "reviewer", "model": "m_a", "t": 0.5},
+        {"event": "llm_attempt", "model": "m_a", "status": 429,
+         "abnormal": True, "slept_s": 1.0, "t": 1.0},
+        {"event": "call_ok", "role": "reviewer", "node": "L0",
+         "latency_s": 2.0, "t": 3.0},
+    ]
+    a = dash._idle_analysis(_run(tmp_path, trace, llm))
+    total_req = sum(c.get("req", 0) for c in a["by_cause"])
+    assert total_req <= 1            # the single call_start, not the attempt too

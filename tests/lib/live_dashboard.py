@@ -1140,7 +1140,7 @@ def _build_state(run_dir: pathlib.Path) -> dict:
 # llm-log events that RECORD A COMPLETION (not a new request). Kept as a set so
 # a start/result pair counts as one request; extend if a worker adds another
 # terminal name. Everything else carrying a `model` field is a request start.
-_LLM_RESULT_EVENTS = {"outcome"}
+_LLM_RESULT_EVENTS = {"outcome", "llm_attempt", "llm_fallback"}
 
 # fields that are NOT categorical dimensions: the timestamp and free-text /
 # high-cardinality payload. Everything else a call logs IS a dimension — the
@@ -1223,6 +1223,19 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
 
     waits = []
     calls = []
+    # FAILURE report: when a model did NOT answer normally (429/5xx/timeout/empty)
+    # — how many times, what it led to (a fallback to another model, or a terminal
+    # error) and the delay it cost. Fed by the `llm_attempt` (abnormal) and
+    # `llm_fallback` records the backend now emits.
+    fail: dict = {}
+    transitions: list = []
+
+    def _fm(model: str) -> dict:
+        return fail.setdefault(model or "—", {
+            "model": model or "—", "abn": 0, "429": 0, "5xx": 0,
+            "timeout": 0, "empty": 0, "fallbacks": 0, "errors": 0,
+            "delay_s": 0.0})
+
     # completion records (call_ok / call_error) carry the real `latency_s` (how
     # long the model actually worked) but NOT `model`, so they are not request
     # records themselves. We queue them per identity and later splice their
@@ -1246,6 +1259,29 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
                 if t is not None:
                     waits.append((_epoch(float(t)),
                                   float(e.get("wait_s", 0) or 0)))
+            elif ev_ == "llm_attempt" and e.get("abnormal"):
+                d = _fm(e.get("model"))
+                d["abn"] += 1
+                d["delay_s"] += float(e.get("slept_s", 0) or 0)
+                st = e.get("status")
+                if st == 429:
+                    d["429"] += 1
+                elif isinstance(st, int) and 500 <= st <= 599:
+                    d["5xx"] += 1
+                elif st == 0:
+                    d["timeout"] += 1
+                if e.get("error") == "empty":
+                    d["empty"] += 1
+            elif ev_ == "llm_fallback":
+                frm = e.get("from_model")
+                transitions.append({"from": frm, "to": e.get("to_model"),
+                                    "reason": e.get("reason"),
+                                    "terminal": bool(e.get("terminal"))})
+                if frm:
+                    d = _fm(frm)
+                    d["fallbacks"] += 1
+                    if e.get("terminal"):
+                        d["errors"] += 1
             elif ev_ in _COMPLETION_EVENTS:
                 lat = e.get("latency_s")
                 if lat is not None:
@@ -1472,6 +1508,18 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
         # node) — the data side of the multi-axis analysis; the UI can slice it
         # any way without re-reading the log.
         "llm_usage": _llm_usage(calls),
+        # FAILURE report — abnormal responses → fallback / error, with delay
+        "failures": {
+            "by_model": sorted(fail.values(),
+                               key=lambda r: r["delay_s"], reverse=True),
+            "transitions": transitions[-60:],
+            "totals": {
+                "abnormal": sum(r["abn"] for r in fail.values()),
+                "fallbacks": sum(r["fallbacks"] for r in fail.values()),
+                "terminal": sum(1 for tr in transitions if tr["terminal"]),
+                "delay_s": round(sum(r["delay_s"] for r in fail.values()), 1),
+            },
+        },
     }
 
 
@@ -2218,6 +2266,34 @@ function idleHTML(){
    `<td>${fmtDur(r.total)}</td><td>${r.count}</td><td>${r.llm||0}</td>`+
    `<td><span style="display:inline-block;height:8px;background:${causeColor(r.cause)};width:${sh}px;max-width:120px"></span> ${sh}%</td></tr>`;});
  h+='</tbody></table></div>';
+ // FAILURE report — abnormal responses → fallback / error, with the delay they
+ // cost. Only shown when something actually went wrong (a clean run hides it).
+ const fl=IDLE.failures||{by_model:[],transitions:[],totals:{}};
+ const ft=fl.totals||{};
+ if((ft.abnormal||0)>0||(ft.fallbacks||0)>0){
+  h+='<h4 style="color:#f85149">Сбои моделей → фоллбек/ошибка</h4>';
+  h+='<p class=muted>модель не ответила нормально <b>'+(ft.abnormal||0)+'</b> раз → '+
+   '<b>'+(ft.fallbacks||0)+'</b> фоллбеков, <b style="color:#f85149">'+(ft.terminal||0)+
+   '</b> терминальных ошибок; потеряно на ретраях/ожидании <b>'+fmtDur(ft.delay_s||0)+'</b>.</p>';
+  h+='<div class=cmpscroll style="max-height:240px"><table class=cmp><thead><tr>'+
+   '<th>модель</th><th>сбоев</th><th>429</th><th>5xx</th><th>timeout</th><th>пусто</th>'+
+   '<th>фоллбеков</th><th>ошибок</th><th>задержка</th></tr></thead><tbody>';
+  (fl.by_model||[]).forEach(r=>{ if(!(r.abn||r.fallbacks))return;
+   h+=`<tr><td>${esc(r.model)}</td><td>${r.abn||0}</td><td>${r['429']||0}</td>`+
+    `<td>${r['5xx']||0}</td><td>${r.timeout||0}</td><td>${r.empty||0}</td>`+
+    `<td>${r.fallbacks||0}</td><td style="color:${r.errors?'#f85149':'inherit'}">${r.errors||0}</td>`+
+    `<td>${fmtDur(r.delay_s||0)}</td></tr>`;});
+  h+='</tbody></table></div>';
+  // transition chain: who fell back to whom and why
+  const trs=(fl.transitions||[]);
+  if(trs.length){
+   h+='<p class=muted style="margin-top:6px">Переходы (что пробовали после сбоя):</p><div class=cmpscroll style="max-height:160px"><ul style="margin:2px 0 0 14px;padding:0">';
+   trs.slice().reverse().forEach(t=>{
+    const to=t.terminal||!t.to ? '<b style="color:#f85149">✗ цепочка исчерпана</b>' : esc(t.to);
+    h+=`<li><span class=dim>${esc(t.from||'—')}</span> →<span style="color:#db6d28">(${esc(t.reason||'?')})</span>→ ${to}</li>`;});
+   h+='</ul></div>';
+  }
+ }
  // token economics by role+model (#6) — real spend, not call counts
  const tok=IDLE.tokens||{rows:[],total:0};
  if(tok.rows.length){
