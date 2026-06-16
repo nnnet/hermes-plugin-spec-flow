@@ -867,6 +867,14 @@ def _implementer_team() -> list[dict]:
         raw = (cfg.get("implementer") or {}).get("team")
     # canonical {team: {specialists: [...]}} (a dict) OR the alias bare list.
     # A JSON env value may carry either shape, so unwrap dict here too.
+    return _normalise_team(raw)
+
+
+def _normalise_team(raw: Any) -> list[dict]:
+    """Normalise a raw team value into a specialist LIST. Accepts the canonical
+    `{specialists: [...]}` dict and the legacy bare list — a JSON env value, a
+    WORKERS_CFG block, or a per-leaf executor team (C1) all reach here. Anything
+    else -> []."""
     if isinstance(raw, dict):
         raw = raw.get("specialists")
     if not isinstance(raw, list):
@@ -1403,8 +1411,10 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
                 return None     # no implementer call — the work already exists
         # D1: a configured `team` runs the orchestra; with NO team (the
         # default, and p4/p5) we fall through to the existing single-agent
-        # path, byte-for-byte unchanged.
-        team = _implementer_team()
+        # path, byte-for-byte unchanged. C1: a per-leaf executor team on the
+        # ctx (the engine routed this leaf to a domain executor) takes
+        # precedence over the globally-configured implementer team.
+        team = _normalise_team(ctx.get("team")) or _implementer_team()
         if team:
             out = _orchestra_run(ctx, ws_root, nid, fn, system=system,
                                  allowed=allowed, disallowed=disallowed,

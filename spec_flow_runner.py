@@ -453,6 +453,21 @@ def _load_provider_adapter(provider: str, transport=None):
     return get_provider(provider, transport=transport)
 
 
+def _workers_cfg() -> dict:
+    """The active worker config (llm_backend.WORKERS_CFG) across module roots,
+    or {} — the source for the C1 executor roster. Mirrors the scan used by
+    _external_team_config so a stale duplicate module never masks it."""
+    for root in ("harness.llm_backend", "tests.harness.llm_backend",
+                 "llm_backend"):
+        try:
+            cfg = __import__(root, fromlist=["WORKERS_CFG"]).WORKERS_CFG
+        except Exception:               # noqa: BLE001
+            continue
+        if isinstance(cfg, dict) and cfg:
+            return cfg
+    return {}
+
+
 def _external_team_config(role: str) -> Optional[dict]:
     """The external-team config for ``role`` from the worker config, or None.
 
@@ -1432,6 +1447,10 @@ class Engine:
         self._project_meta: dict = {}
         self._impl_specialties: set = set()
         self._auto_specialty = False
+        # C1: executor roster (domain -> agent | D1 team-spec) + the auto-route
+        # switch; set in run() from the project + worker config
+        self._executors_cfg: dict = {}
+        self._auto_domain = False
         # П1: set True when a run ends via a cooperative STOP (partial result)
         self._stopped = False
         self._checkpoint_lock = threading.Lock()
@@ -1939,6 +1958,19 @@ class Engine:
         self._project_meta = project
         self._auto_specialty = bool(project.get("auto_specialty"))
         self._impl_specialties = set()
+        # C1: load the executor roster from the worker config; auto domain
+        # inference rides the same opt-in as specialty (or its own flag)
+        try:
+            from tests.harness import executors as _ex  # noqa: F401
+            self._executors_cfg = _ex.parse_executors(_workers_cfg())
+        except Exception:  # noqa: BLE001
+            try:
+                from harness import executors as _ex  # type: ignore # noqa: F401
+                self._executors_cfg = _ex.parse_executors(_workers_cfg())
+            except Exception:  # noqa: BLE001
+                self._executors_cfg = {}
+        self._auto_domain = bool(project.get("auto_executor",
+                                             project.get("auto_specialty")))
         if self._isolation == "worktree":
             self.workspace.git_provenance = True
         try:
@@ -2561,6 +2593,23 @@ class Engine:
         return _sp.resolve_specialty(node, self._project_meta,
                                      self._impl_specialties, self._auto_specialty)
 
+    def _resolve_executor(self, node: dict) -> tuple:
+        """C1: route a leaf to an executor. Returns (domain, team) where team is
+        a D1 specialist LIST when the routed executor is a team-spec, else None
+        (a named agent or the default single-agent path). Pure + offline."""
+        if not self._executors_cfg:
+            return "general", None
+        try:
+            from tests.harness import executors as _ex
+        except Exception:  # noqa: BLE001
+            try:
+                from harness import executors as _ex  # type: ignore
+            except Exception:  # noqa: BLE001
+                return "general", None
+        domain = _ex.resolve_domain(node, self._project_meta, self._auto_domain)
+        spec = _ex.resolve_executor(domain, self._executors_cfg)
+        return domain, _ex.team_of(spec)
+
     def _has_sibling_deps(self, kids: list) -> bool:
         """True when some child declares a depends_on on ANOTHER sibling —
         the signal that forces sequential (topo) execution for correctness."""
@@ -3156,6 +3205,19 @@ class Engine:
                 sp = self._resolve_specialty(node)
                 if sp:
                     ictx["specialty"] = sp
+                # C1: route the leaf to a domain executor. A team-spec executor
+                # runs the D1 orchestra with that team for THIS leaf (overrides
+                # the global implementer team); a named agent / no match keeps
+                # the default path.
+                if self._executors_cfg:
+                    domain, team = self._resolve_executor(node)
+                    if team:
+                        ictx["team"] = team
+                        self.emit("implement", "engine", "spec-implement",
+                                  f"{nid}:route",
+                                  f"executor routing: {domain} → team",
+                                  ", ".join(s.get("role", "?") for s in team),
+                                  "executor", level=L_DETAIL)
                 if self._leaf_seconds:
                     ictx["deadline"] = time.time() + self._leaf_seconds
                 try:
