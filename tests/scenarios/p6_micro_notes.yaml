@@ -177,11 +177,13 @@ workers:
   # WITHIN the stage, a separate axis. Legacy flat keys (decomposer/…) still
   # work; this `stages:` grouping is the clean, standard-aligned shape.
   #
-  # MODELS: WEAK free OpenRouter models are PRIMARY on every stage — p6 proves
-  # the ENGINE makes a working product regardless of model strength. No strong
-  # model is primary anywhere; haiku is the last fallback. xiaomimimo (MiMo) is
-  # used but NOT everywhere: only the implement chain + one specialist (fixer) +
-  # the verify chain — never primary, never on decompose/review/architect.
+  # MODELS — chain ORDER (primary first, fallbacks after):
+  # The OpenRouter free pool is currently answering 429 ("too many requests")
+  # and several ':free' slugs are gone (404), so leading with them just burns
+  # time before a fallback. Per the operator's call, every chain now LEADS with
+  # the models that actually answer — claude/haiku and the lighter
+  # xiaomimimo/mimo-v2.5 — and keeps the OpenRouter ':free' models LAST, used
+  # only if/when the free pool recovers. mimo here is the lighter v2.5 (not -pro).
   #
   # PROVIDERS: a specialist need not be a raw LLM. The implement team is a MIX —
   # architect/coder run as local LLMs, `tester` runs on a HERMES agent and
@@ -189,28 +191,28 @@ workers:
   # remote specialist still carries a `model:` used as a graceful fallback if
   # its service is unreachable (a provider_fallback event records the gap).
   defaults:
-    models: ["openrouter/qwen/qwen3-coder:free", "claude/haiku"]
+    models: ["claude/haiku", "xiaomimimo/mimo-v2.5", "openrouter/qwen/qwen3-coder:free"]
   stages:
-    decompose:                          # weak free primary; haiku fallback (no mimo)
-      models: ["openrouter/qwen/qwen3-next-80b-a3b-instruct:free", "openrouter/qwen/qwen3-coder:free", "claude/haiku"]
+    decompose:                          # haiku + light mimo first; OpenRouter free last
+      models: ["claude/haiku", "xiaomimimo/mimo-v2.5", "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"]
     implement:
-      models: ["openrouter/qwen/qwen3-coder:free", "xiaomimimo/mimo-v2.5", "claude/haiku"]
-      # MIXED team: local LLMs + a Hermes agent + a Mission-Control agent. Each
-      # remote specialist keeps a local `model:` as the fallback. Secrets
+      models: ["claude/haiku", "xiaomimimo/mimo-v2.5", "openrouter/qwen/qwen3-coder:free"]
+      # MIXED team: local LLMs + a Hermes agent + a Mission-Control agent. Models
+      # follow the same order policy (working models first). Secrets
       # (token/api_key) are NEVER in this file — the adapter reads them from the
       # environment; without them the remote call degrades to the local model.
       team:
         specialists:
-          - {role: architect, model: "openrouter/qwen/qwen3-next-80b-a3b-instruct:free", params: {temperature: 0.2}}
-          - {role: coder,     model: "openrouter/qwen/qwen3-coder:free", params: {temperature: 0.4, max_tokens: 4000}}
+          - {role: architect, model: "claude/haiku", params: {temperature: 0.2}}
+          - {role: coder,     model: "xiaomimimo/mimo-v2.5", params: {temperature: 0.4, max_tokens: 4000}}
           - {role: tester,    provider: hermes,          agent: "tester",
-             gateway: "http://127.0.0.1:8642", model: "openrouter/qwen/qwen3-coder:free"}
+             gateway: "http://127.0.0.1:8642", model: "claude/haiku"}
           - {role: fixer,     provider: mission-control, agent_template: "fixer",
              api: "http://127.0.0.1:3000", model: "xiaomimimo/mimo-v2.5"}
-    review:                             # weak free primary; haiku fallback (no mimo)
-      models: ["openrouter/qwen/qwen3-next-80b-a3b-instruct:free", "claude/haiku"]
-    verify:                             # weak free primary; mimo mid-fallback; haiku last
-      models: ["openrouter/qwen/qwen3-coder:free", "xiaomimimo/mimo-v2.5", "claude/haiku"]
+    review:                             # haiku + light mimo first; OpenRouter free last
+      models: ["claude/haiku", "xiaomimimo/mimo-v2.5", "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"]
+    verify:                             # haiku + light mimo first; OpenRouter free last
+      models: ["claude/haiku", "xiaomimimo/mimo-v2.5", "openrouter/qwen/qwen3-coder:free"]
   #
   # SONNET-PRIMARY (diagnostic — commented): sonnet via claude-cli subscription.
   # defaults: {models: ["claude/sonnet", "openrouter/qwen/qwen3-coder:free", "claude/haiku"]}
