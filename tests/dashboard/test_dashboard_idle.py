@@ -62,12 +62,37 @@ def test_llm_calls_counted_when_log_is_run_relative(tmp_path):
     epoch0 = 1_781_000_000.0
     rows = [_ev(epoch0, task="d", phase="decompose"),
             _ev(epoch0 + 300, task="d", phase="decompose")]
-    # two calls fired inside the gap, logged run-relative (100s, 200s)
-    llm = [{"event": "call_start", "t": 100.0},
-           {"event": "call_start", "t": 200.0}]
+    # two calls fired inside the gap, logged run-relative (100s, 200s). A real
+    # LLM call always names its `model` — that is the universal request marker.
+    llm = [{"event": "call_start", "t": 100.0, "model": "m"},
+           {"event": "call_start", "t": 200.0, "model": "m"}]
     a = dash._idle_analysis(_run(tmp_path, rows, llm))
     assert a["top"][0]["llm"] == 2
     assert sum(r.get("llm", 0) for r in a["by_cause"]) == 2
+
+
+def test_llm_calls_counted_universally_by_model_field(tmp_path):
+    # an LLM call is ANY event carrying a `model` field, whatever the worker
+    # names it (call_start, orchestra_step, creator_candidate, a future
+    # orchestra step). Result records (outcome) and bookkeeping events (no
+    # model) are excluded. Role-independent and future-proof.
+    rows = [_ev(0, task="impl", phase="implement"),
+            _ev(300, task="impl", phase="implement")]
+    llm = [{"event": "orchestra_step", "t": 50.0, "role": "architect", "model": "m"},
+           {"event": "orchestra_step", "t": 90.0, "role": "coder", "model": "m"},
+           {"event": "creator_candidate", "t": 150.0, "model": "m"},
+           {"event": "future_orchestra_step", "t": 180.0, "model": "m"},
+           {"event": "call_start", "t": 200.0, "model": "m"},
+           {"event": "outcome", "t": 210.0, "model": "m"},     # result — excluded
+           {"event": "commit_queue", "t": 220.0}]              # no model — ignored
+    a = dash._idle_analysis(_run(tmp_path, rows, llm))
+    assert a["top"][0]["llm"] == 5
+    # multi-parameter usage is discovered from whatever was logged
+    u = a["llm_usage"]
+    assert u["total"] == 5
+    assert "role" in u["dims"]
+    by_role = {r["key"]: r["count"] for r in u["by_role"]}
+    assert by_role.get("architect") == 1 and by_role.get("coder") == 1
 
 
 def test_quota_wait_window_is_detected(tmp_path):

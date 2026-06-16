@@ -845,6 +845,46 @@ def _build_state(run_dir: pathlib.Path) -> dict:
     }
 
 
+# llm-log events that RECORD A COMPLETION (not a new request). Kept as a set so
+# a start/result pair counts as one request; extend if a worker adds another
+# terminal name. Everything else carrying a `model` field is a request start.
+_LLM_RESULT_EVENTS = {"outcome"}
+
+# fields that are NOT categorical dimensions: the timestamp and free-text /
+# high-cardinality payload. Everything else a call logs IS a dimension — the
+# list of dimensions is discovered from the data, never hard-coded, so a new
+# logged parameter (solo/orchestra, retry number, ...) becomes a slice on its
+# own with no change here.
+_LLM_NON_DIMS = {"t", "reason", "detail", "text", "error", "files", "idx"}
+
+
+def _llm_usage(calls: list, dims=None) -> dict:
+    """Multi-parameter LLM-usage rollup over an OPEN dimension set.
+
+    Returns {total, dims: [...], by_<dim>: [{key, count}]}. When `dims` is None
+    the dimensions are DISCOVERED as the union of categorical keys present
+    across the calls (minus _LLM_NON_DIMS) — so usage can be read by role, by
+    specialty, by model, by node, or by any future parameter, with no edit
+    here. Pass `dims` to restrict/order them."""
+    if dims is None:
+        seen: set = set()
+        for c in calls:
+            seen |= set(c.keys())
+        dims = sorted(d for d in seen if d not in _LLM_NON_DIMS)
+    out: dict = {"total": len(calls), "dims": list(dims)}
+    for d in dims:
+        agg: dict = {}
+        for c in calls:
+            v = c.get(d)
+            if v is None or v == "":
+                continue
+            agg[str(v)] = agg.get(str(v), 0) + 1
+        out["by_" + d] = sorted(
+            ({"key": k, "count": n} for k, n in agg.items()),
+            key=lambda x: x["count"], reverse=True)
+    return out
+
+
 def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
     """Duration / idle analysis for the ⏱ tab. Each trace event's gap to the
     NEXT event is the time that operation took; we attribute it to the owner
@@ -902,10 +942,29 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
                 if t is not None:
                     waits.append((_epoch(float(t)),
                                   float(e.get("wait_s", 0) or 0)))
-            elif ev_ == "call_start":
+            elif "model" in e and ev_ not in _LLM_RESULT_EVENTS:
+                # UNIVERSAL, role-independent LLM-request signal: every model
+                # invocation names its `model`, whatever the worker calls the
+                # event (call_start for decomposer/reviewer, orchestra_step for
+                # an implementer team, creator_candidate for the ensemble, and
+                # any FUTURE orchestra step — all carry `model`). Bookkeeping
+                # events (claim, commit_queue, ws_write, *_start markers) have
+                # no model and are ignored. Terminal result records are excluded
+                # so a start/result pair counts as ONE request. Counting only
+                # call_start used to make the implement phase read 0 LLM calls.
+                #
+                # Capture the WHOLE event as the call record (only `event` is
+                # dropped, `t` is normalised onto the epoch axis). The set of
+                # dimensions is therefore OPEN — role, model, node, specialty
+                # today; solo/orchestra, retry number, anything a caller logs
+                # tomorrow — all become slice-able automatically, no schema to
+                # edit here. We do not know the final list, so we do not pin it.
                 t = e.get("t")
                 if t is not None:
-                    calls.append(_epoch(float(t)))
+                    rec = dict(e)
+                    rec.pop("event", None)
+                    rec["t"] = _epoch(float(t))
+                    calls.append(rec)
 
     def _cause(ev: dict, gap: float, t0: float, t1: float) -> str:
         for wt, _ws in waits:
@@ -939,7 +998,7 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
             continue
         # how many LLM calls were started inside this gap [t0, t1) — lets the
         # idle table show whether a cause's time was spent making requests
-        llm = sum(1 for ct in calls if float(t0) <= ct < float(t1))
+        llm = sum(1 for c in calls if float(t0) <= c["t"] < float(t1))
         # A gap is the time the engine spent PRODUCING the next event, so it is
         # attributed to that NEXT event's work — not the previous one. (Otherwise
         # the idle after an auto-approved HITL checkpoint is mislabelled "ответ
@@ -977,6 +1036,10 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
         "by_phase": _rollup("phase"),
         "by_cause": _rollup("cause"),
         "tokens": _token_economics(run_dir),
+        # multi-parameter LLM-usage breakdown (by role / specialty / model /
+        # node) — the data side of the multi-axis analysis; the UI can slice it
+        # any way without re-reading the log.
+        "llm_usage": _llm_usage(calls),
     }
 
 
