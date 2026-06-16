@@ -403,3 +403,41 @@ def test_rotation_kicks_in_after_fallback_after_rounds(monkeypatch):
         assert fb_rounds and fb_rounds[0] == 1
     finally:
         lb.configure_workers(None)
+
+
+def test_stages_block_flattens_to_role_keys():
+    # The clean spec-pipeline shape: workers.stages with verb names. It must
+    # flatten onto the internal -er role keys the engine resolves by.
+    try:
+        lb.configure_workers({
+            "defaults": {"models": ["d/x"]},
+            "stages": {
+                "decompose": {"models": ["openrouter/dec:free"]},
+                "implement": {"models": ["openrouter/imp:free"],
+                              "team": {"specialists": [{"role": "coder"}]}},
+                "review": {"models": ["openrouter/rev:free"]},
+                "verify": {"models": ["openrouter/ver:free"]},
+            },
+        })
+        assert lb.model_for("decomposer") == "openrouter/dec:free"
+        assert lb.model_for("implementer") == "openrouter/imp:free"
+        assert lb.model_for("reviewer") == "openrouter/rev:free"
+        assert lb.model_for("verifier") == "openrouter/ver:free"
+        # the implement team survives the flatten
+        assert lb.WORKERS_CFG["implementer"]["team"]["specialists"][0]["role"] == "coder"
+        # the verb key itself is consumed, not left dangling
+        assert "stages" not in lb.WORKERS_CFG
+    finally:
+        lb.configure_workers(None)
+
+
+def test_flat_key_wins_over_stage_of_same_meaning():
+    # An explicit flat key must not be clobbered by a stage alias.
+    try:
+        lb.configure_workers({
+            "decomposer": {"models": ["flat/wins"]},
+            "stages": {"decompose": {"models": ["stage/loses"]}},
+        })
+        assert lb.model_for("decomposer") == "flat/wins"
+    finally:
+        lb.configure_workers(None)

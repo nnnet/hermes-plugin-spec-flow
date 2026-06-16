@@ -349,6 +349,35 @@ def _kv_table(d: dict) -> str:
     return "| параметр | значение |\n|---|---|\n" + "\n".join(rows) if rows else ""
 
 
+# Spec-pipeline stage names (verbs) ↔ internal worker role keys (-er nouns).
+_STAGE2ROLE = {"decompose": "decomposer", "implement": "implementer",
+               "review": "reviewer", "verify": "verifier"}
+# RU stage labels for the map (the four STAGES of the spec pipeline).
+_STAGE_RU = {"decomposer": "декомпозиция", "implementer": "реализация",
+             "reviewer": "ревью", "verifier": "верификация"}
+
+
+def _normalise_workers_block(workers) -> dict:
+    """Flatten a raw ``workers`` block to {internal_role: cfg}.
+
+    Accepts both the legacy flat shape (``workers.decomposer`` …) and the
+    ``workers.stages`` grouping with verb names (``decompose`` …), so the
+    dashboard renders either identically. A flat key wins over a stage of the
+    same meaning."""
+    if not isinstance(workers, dict):
+        return {}
+    out: dict = {}
+    stages = workers.get("stages")
+    if isinstance(stages, dict):
+        for name, cfg in stages.items():
+            out[_STAGE2ROLE.get(name, name)] = cfg
+    for k, v in workers.items():
+        if k == "stages":
+            continue
+        out[k] = v          # explicit flat key overrides the stage
+    return out
+
+
 def _team_card_md(run_dir: pathlib.Path, llm: list[dict]) -> list[str]:
     """Render the team card for a role whose executor is a TEAM (orchestra).
 
@@ -382,7 +411,8 @@ def _team_card_md(run_dir: pathlib.Path, llm: list[dict]) -> list[str]:
         except (json.JSONDecodeError, OSError):
             return {}
 
-    workers = _load("meta.json").get("workers") or _load("inputs.json").get("workers")
+    workers = _normalise_workers_block(
+        _load("meta.json").get("workers") or _load("inputs.json").get("workers"))
     # per-step models actually seen in the log (fills config gaps / log-only mode)
     log_models: dict = {}
     for s in (_orchestra_sequences(llm) or {}).values():
@@ -519,11 +549,30 @@ def _inputs_md(run_dir: pathlib.Path, llm: list[dict] | None = None) -> str:
     # role -> model map: which model each worker role actually ran on
     # (the workers block resolves it per role; meta.json records it)
     wm = meta.get("worker_models") or {}
+    workers_norm = _normalise_workers_block(meta.get("workers") or {})
     if isinstance(wm, dict) and wm:
-        ru = {"decomposer": "декомпозитор", "reviewer": "ревьюер",
-              "implementer": "исполнитель", "verifier": "верификатор"}
-        rows = {ru.get(role, role): model for role, model in wm.items()}
-        out += ["## 🧠 Карта роль → модель", _kv_table(rows)]
+        rows: dict = {}
+        for role, model in wm.items():
+            label = _STAGE_RU.get(role, role)
+            cfg = workers_norm.get(role)
+            team = cfg.get("team") if isinstance(cfg, dict) else None
+            specs = (team.get("specialists") if isinstance(team, dict)
+                     else team if isinstance(team, list) else None)
+            if isinstance(specs, list) and specs:
+                # this stage runs a TEAM — show each specialist's provider+model,
+                # not one misleading model (the implement stage is an orchestra)
+                parts = []
+                for s in specs:
+                    if not isinstance(s, dict):
+                        parts.append(str(s)); continue
+                    r = s.get("role", "—")
+                    prov = s.get("provider") or "local"
+                    m = s.get("model") or "—"
+                    parts.append(f"{r}={prov}:{m}" if prov != "local" else f"{r}={m}")
+                rows[f"{label} (оркестр)"] = "; ".join(parts)
+            else:
+                rows[label] = model
+        out += ["## 🧠 Карта: этап → модель", _kv_table(rows)]
     # team card: when a role's executor is a team, list its specialists. A
     # single-worker run adds nothing here.
     out += _team_card_md(run_dir, llm or [])
@@ -2149,6 +2198,12 @@ function idleHTML(){
     `<td>${r.prompt}</td><td>${r.completion}</td><td><b>${r.total}</b></td>`+
     `<td><span style="display:inline-block;height:8px;background:#58a6ff;width:${sh}px;max-width:120px"></span> ${sh}%</td></tr>`;});
   h+=`</tbody></table></div><p class=dim>всего токенов: <b>${tok.total}</b></p>`;
+ } else {
+  // never vanish silently — say WHY the table is empty (a stopped/young run has
+  // no token_usage events yet; a completed run repopulates it per specialist).
+  h+='<h4>Токены по роли/специалисту+модели</h4>'+
+   '<p class=dim>нет событий token_usage в текущем прогоне '+
+   '(прогон ещё идёт или был остановлен рано — таблица заполнится по мере вызовов LLM).</p>';
  }
  // roll-up by node — which nodes cost the most
  h+='<h4>По узлам (самые дорогие)</h4><div class=cmpscroll style="max-height:260px">'+

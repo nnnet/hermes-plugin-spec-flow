@@ -168,37 +168,54 @@ workers:
     - {name: xiaomimimo, kind: openai, model_prefix: "xiaomimimo/", requests_per_day: 1000}
     - {name: openrouter-free, kind: openai, model_prefix: "openrouter/", require_suffix: ":free", requests_per_day: 1000}
     - {name: claude-cli, kind: claude, model_prefix: "claude/"}
-  # ── MODEL CHAINS ───────────────────────────────────────────────────────
-  # SWITCH: free-primary is ACTIVE. To force sonnet (diagnostic), comment the FREE
-  # block and uncomment the SONNET block below (and set cycle_models: false above).
+  # ── SPEC-PIPELINE STAGES ────────────────────────────────────────────────
+  # A spec flows through FOUR stages, each one link of the chain (a STAGE, not a
+  # team role): decompose → implement → review → verify. `defaults` is the
+  # shared chain; each stage may override it with its own `models:` list
+  # (primary first, quota fallbacks after). The `implement` stage additionally
+  # runs a TEAM of specialists (architect/coder/tester/fixer) — those are roles
+  # WITHIN the stage, a separate axis. Legacy flat keys (decomposer/…) still
+  # work; this `stages:` grouping is the clean, standard-aligned shape.
   #
-  # FREE-PRIMARY (ACTIVE). WEAK free OpenRouter models are the PRIMARY on EVERY
-  # role — p6 proves the ENGINE makes a working product regardless of model
-  # strength. No strong model is primary anywhere; haiku is the last fallback;
-  # xiaomimimo appears ONLY as one safety fallback in the heaviest role.
+  # MODELS: WEAK free OpenRouter models are PRIMARY on every stage — p6 proves
+  # the ENGINE makes a working product regardless of model strength. No strong
+  # model is primary anywhere; haiku is the last fallback. xiaomimimo (MiMo) is
+  # used but NOT everywhere: only the implement chain + one specialist (fixer) +
+  # the verify chain — never primary, never on decompose/review/architect.
+  #
+  # PROVIDERS: a specialist need not be a raw LLM. The implement team is a MIX —
+  # architect/coder run as local LLMs, `tester` runs on a HERMES agent and
+  # `fixer` on a MISSION-CONTROL agent (the provider seam, doc §3/§4). Each
+  # remote specialist still carries a `model:` used as a graceful fallback if
+  # its service is unreachable (a provider_fallback event records the gap).
   defaults:
     models: ["openrouter/qwen/qwen3-coder:free", "openrouter/deepseek/deepseek-chat-v3.1:free", "claude/haiku"]
-  decomposer:                           # weak free primary; haiku fallback
-    models: ["openrouter/qwen/qwen3-next-80b-a3b-instruct:free", "openrouter/qwen/qwen3-coder:free", "claude/haiku"]
-  implementer:
-    models: ["openrouter/qwen/qwen3-coder:free", "openrouter/deepseek/deepseek-chat-v3.1:free", "xiaomimimo/mimo-v2.5", "claude/haiku"]
-    # D1: implementer orchestra — each specialist a DIFFERENT weak free model,
-    # so the team card + call sequence shows distinct (weak) models and the
-    # ENGINE, not any single model, carries quality.
-    team:
-      specialists:
-        - {role: architect, model: "openrouter/qwen/qwen3-next-80b-a3b-instruct:free", params: {temperature: 0.2}}
-        - {role: coder,     model: "openrouter/qwen/qwen3-coder:free",                 params: {temperature: 0.4, max_tokens: 4000}}
-        - {role: tester,    model: "openrouter/deepseek/deepseek-chat-v3.1:free"}
-        - {role: fixer,     model: "openrouter/qwen/qwen3-coder:free"}
-  reviewer:                             # weak free primary; haiku fallback
-    models: ["openrouter/qwen/qwen3-next-80b-a3b-instruct:free", "claude/haiku"]
-  verifier:                             # weak free primary; haiku fallback
-    models: ["openrouter/qwen/qwen3-coder:free", "claude/haiku"]
+  stages:
+    decompose:                          # weak free primary; haiku fallback (no mimo)
+      models: ["openrouter/qwen/qwen3-next-80b-a3b-instruct:free", "openrouter/qwen/qwen3-coder:free", "claude/haiku"]
+    implement:
+      models: ["openrouter/qwen/qwen3-coder:free", "openrouter/deepseek/deepseek-chat-v3.1:free", "xiaomimimo/mimo-v2.5", "claude/haiku"]
+      # MIXED team: local LLMs + a Hermes agent + a Mission-Control agent. Each
+      # remote specialist keeps a local `model:` as the fallback. Secrets
+      # (token/api_key) are NEVER in this file — the adapter reads them from the
+      # environment; without them the remote call degrades to the local model.
+      team:
+        specialists:
+          - {role: architect, model: "openrouter/qwen/qwen3-next-80b-a3b-instruct:free", params: {temperature: 0.2}}
+          - {role: coder,     model: "openrouter/qwen/qwen3-coder:free", params: {temperature: 0.4, max_tokens: 4000}}
+          - {role: tester,    provider: hermes,          agent: "tester",
+             gateway: "http://127.0.0.1:8642", model: "openrouter/deepseek/deepseek-chat-v3.1:free"}
+          - {role: fixer,     provider: mission-control, agent_template: "fixer",
+             api: "http://127.0.0.1:3000", model: "xiaomimimo/mimo-v2.5"}
+    review:                             # weak free primary; haiku fallback (no mimo)
+      models: ["openrouter/qwen/qwen3-next-80b-a3b-instruct:free", "claude/haiku"]
+    verify:                             # weak free primary; mimo mid-fallback; haiku last
+      models: ["openrouter/qwen/qwen3-coder:free", "xiaomimimo/mimo-v2.5", "claude/haiku"]
   #
   # SONNET-PRIMARY (diagnostic — commented): sonnet via claude-cli subscription.
-  # defaults:   {models: ["claude/sonnet", "openrouter/qwen/qwen3-coder:free", "claude/haiku"]}
-  # decomposer: {models: ["claude/sonnet", "openrouter/qwen/qwen3-next-80b-a3b-instruct:free", "claude/haiku"]}
-  # implementer:{models: ["claude/sonnet", "openrouter/qwen/qwen3-coder:free", "claude/haiku"]}
-  # reviewer:   {models: ["claude/sonnet", "claude/haiku"]}
-  # verifier:   {models: ["claude/sonnet", "claude/haiku"]}
+  # defaults: {models: ["claude/sonnet", "openrouter/qwen/qwen3-coder:free", "claude/haiku"]}
+  # stages:
+  #   decompose: {models: ["claude/sonnet", "openrouter/qwen/qwen3-next-80b-a3b-instruct:free", "claude/haiku"]}
+  #   implement: {models: ["claude/sonnet", "openrouter/qwen/qwen3-coder:free", "claude/haiku"]}
+  #   review:    {models: ["claude/sonnet", "claude/haiku"]}
+  #   verify:    {models: ["claude/sonnet", "claude/haiku"]}

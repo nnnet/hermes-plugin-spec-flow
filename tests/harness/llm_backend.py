@@ -80,6 +80,21 @@ def configure_workers(cfg: dict | None) -> None:
     global FALLBACK_MODEL, FALLBACK_COOLDOWN
     WORKERS_CFG.clear()
     WORKERS_CFG.update(cfg or {})
+    # Spec-pipeline STAGES: a case may group the four stage chains under
+    # ``workers.stages`` with verb names (decompose/implement/review/verify) —
+    # the clean, standard-aligned shape. We flatten them onto the internal
+    # role keys the engine resolves by (decomposer/implementer/reviewer/
+    # verifier) via this alias map. Flat legacy keys (p4/p5) keep working
+    # unchanged; an explicit flat key wins over a stage of the same meaning.
+    _stages = (cfg or {}).get("stages")
+    if isinstance(_stages, dict):
+        _alias = {"decompose": "decomposer", "implement": "implementer",
+                  "review": "reviewer", "verify": "verifier"}
+        for _name, _scfg in _stages.items():
+            _key = _alias.get(_name, _name)
+            if _key not in WORKERS_CFG:        # don't clobber an explicit flat key
+                WORKERS_CFG[_key] = _scfg
+        WORKERS_CFG.pop("stages", None)
     _calls_made = 0          # a fresh case starts with a fresh budget
     # A case workers block overrides the transport floor (.test.env) ONLY for
     # keys it explicitly carries — an absent key leaves the current value

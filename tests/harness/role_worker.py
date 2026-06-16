@@ -265,8 +265,20 @@ def _call_model(prompt: str, *, system: str, allowed: list[str],
 
     def _do(p: str) -> str:
         if provider != LOCAL_PROVIDER:
-            return _remote_call(provider, prompt=p, model=model, role=role,
-                                specialty=specialty, cwd=cwd, meta=meta)
+            # Route to the remote agent (Hermes / Mission-Control / A2A). If it
+            # is unreachable or its API contract differs from the running
+            # service, DEGRADE to the specialist's local model rather than
+            # failing the leaf — the run still yields a product, and the
+            # provider_fallback event records the gap honestly.
+            try:
+                return _remote_call(provider, prompt=p, model=model, role=role,
+                                    specialty=specialty, cwd=cwd, meta=meta)
+            except Exception as exc:  # noqa: BLE001 — remote down → local fallback
+                llm_log.log({"event": "provider_fallback", "provider": provider,
+                             "role": role or "",
+                             "step": (meta or {}).get("step", ""),
+                             "model": model, "error": str(exc)[:200]})
+                # fall through to the local LLM path on the specialist's model
         if _chat_only():
             step = (meta or {}).get("step", "")    # orchestra specialist tag
             fallbacks = llm_backend.chain_for(role, specialty)[1:] if role else ()
