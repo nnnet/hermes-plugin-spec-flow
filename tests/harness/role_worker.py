@@ -1158,6 +1158,19 @@ inserts ../src into sys.path and imports the module by name:
 TDD discipline: the tests must cover every acceptance criterion of the spec;
 the implementation must be the MINIMUM that makes them pass. Standard library
 only — no third-party imports. Keep to the spec's scope; no extra features.
+
+REAL CODE ONLY — STUBS, MOCKS AND SMOKE ARE FORBIDDEN (the build is mechanically
+checked and a violation REJECTS the leaf):
+  * NO stub bodies — a public function/handler whose body is just `pass`, `...`,
+    `raise NotImplementedError`, a lone docstring or a `# TODO` is not a product.
+    Every function does its real work now.
+  * NO mocking a LOCAL module — never `unittest.mock` / Mock / MagicMock /
+    monkeypatch a sibling src module to fake the product. (Patching the real
+    network/clock is fine; faking your own code is not.)
+  * NO smoke-only tests — a test that only does `assert True`, imports the
+    module, or never asserts behaviour proves nothing. Each test asserts the
+    REAL behaviour the spec promises (inputs → outputs), end to end through the
+    public surface.
 If the leaf registers HTTP routes: every handler MUST accept EXACTLY two
 positional arguments (payload, query) and return (status_code, dict) — the
 platform dispatcher calls handler(payload, query); your tests MUST invoke
@@ -1236,6 +1249,17 @@ def _leaf_bar(ws_root: str, fn: str, baseline: int, pv) -> tuple[bool, str]:
     passed, out = _run_pytest(ws_root, f"tests/test_{fn}.py")
     if not passed:
         return False, out
+    # REALNESS gate at the LEAF: a green test is not enough — the leaf's own
+    # code must not be a stub/mock-of-a-local-module, and its test must assert
+    # real behaviour (not smoke). A hollow leaf is RED here, before integrate,
+    # so the rework loop fixes it at the source.
+    from . import contract_checks as _cc
+    real_viol = _cc.realness_violations(ws_root, modules={fn})
+    if real_viol:
+        return False, ("OWN tests pass but the leaf is NOT a real product "
+                       "(stubs / mocks of a local module / smoke-only tests are "
+                       "FORBIDDEN — ship working code and tests that assert real "
+                       "behaviour):\n- " + "\n- ".join(real_viol))
     s_passed, s_out = pv.run_suite(ws_root, include_smoke=False)
     if pv._badness(s_passed, s_out) > baseline:
         return False, ("OWN tests green, but the WHOLE suite degraded after"
@@ -1595,6 +1619,12 @@ requirements trace to the project goal and that is valid by definition.
 Apply the skill's gate to the authored sections: REQ-id traceability,
 EARS form, testable acceptance, explicit scope boundary, constitution
 compliance. Binary verdict.{repo_map}{refusals}
+
+REJECT a spec whose acceptance criteria would be satisfiable by a STUB, a MOCK
+of the product's own modules, or a SMOKE-only test. Acceptance must demand REAL
+observable behaviour (concrete inputs → concrete outputs through the public
+surface), so a hollow implementation cannot pass it. "It imports", "it returns
+something", "no error" are NOT acceptable criteria.
 Reply with ONLY: {{"verdict": "PASS"|"REJECT", "reasons": ["..."]}}"""
 
 

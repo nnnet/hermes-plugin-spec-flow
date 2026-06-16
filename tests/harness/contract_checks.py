@@ -293,6 +293,78 @@ def stub_bodies(root: str) -> list:
     return sorted(set(viol))
 
 
+def _asserts_nothing(node) -> bool:
+    """True if a test function body never really asserts behaviour.
+
+    A test is 'smoke only' when, after dropping a docstring, it contains no
+    ``assert`` (and no ``pytest.raises``/``self.assert*`` call) OR its only
+    assertion is a constant-true (``assert True`` / ``assert 1``). Such a test
+    is green by construction and proves nothing."""
+    real = False
+    for n in ast.walk(node):
+        if isinstance(n, ast.Assert):
+            t = n.test
+            # assert True / assert 1 / assert "x" — a constant — proves nothing
+            if isinstance(t, ast.Constant) and bool(t.value):
+                continue
+            real = True
+        elif isinstance(n, ast.Call):
+            f = n.func
+            nm = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
+            if nm.startswith("assert") or nm in ("raises", "fail", "approx"):
+                real = True
+    return not real
+
+
+def smoke_only_tests(root: str) -> list:
+    """Test functions that assert NOTHING real (smoke-only / always-green).
+
+    Why: a leaf can look green while its test only does ``assert True`` or just
+    imports the module — that is a fake proof, forbidden. Catch it like a stub.
+    What: walks ``tests/**`` (and any ``test_*`` under src), flags each
+    ``test_*`` function whose body never asserts real behaviour
+    (see ``_asserts_nothing``).
+    Test: a test with ``assert add(2,2)==4`` ⇒ []; one with only ``assert True``
+    or no assert ⇒ one violation.
+    """
+    viol: list = []
+    for rel, p in _iter_py(root, subs=("tests", "src")):
+        if "test" not in Path(rel).name:
+            continue
+        try:
+            tree = ast.parse(p.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError):
+            continue
+        for node in ast.walk(tree):
+            if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name.startswith("test")):
+                if _asserts_nothing(node):
+                    viol.append(
+                        f"{rel}:{node.lineno} test '{node.name}' asserts nothing "
+                        f"real (smoke-only / always green) — not a proof")
+    return sorted(set(viol))
+
+
+def realness_violations(root: str, modules=None) -> list:
+    """Combined 'no fake product' check for a LEAF or BRANCH at REVIEW time:
+    stub bodies + mocks of a local module + smoke-only tests. When ``modules``
+    is given (a set of src stems, e.g. the node's own file), only violations in
+    those files are returned — so a per-node review flags ONLY that node's
+    hollow code. Used by the leaf gate; the full set runs at integrate."""
+    v = stub_bodies(root) + mocks_local_module(root) + smoke_only_tests(root)
+    if modules:
+        keep = []
+        for line in v:
+            rel = line.split(":", 1)[0]
+            stem = Path(rel).name
+            stem = stem[5:] if stem.startswith("test_") else stem
+            stem = stem[:-3] if stem.endswith(".py") else stem
+            if stem in modules:
+                keep.append(line)
+        return keep
+    return v
+
+
 def tests_collect(root: str) -> list:
     """Run ``pytest --collect-only`` — a collection error is a violation.
 
@@ -334,6 +406,7 @@ def run_all(root: str) -> list:
     viol += imported_but_unbuilt(root)
     viol += mocks_local_module(root)
     viol += stub_bodies(root)
+    viol += smoke_only_tests(root)        # forbid always-green / no-assert tests
     # reuse existing deterministic detectors (don't duplicate them)
     for f, mod, name in _cross_module_import_violations(root):
         viol.append(f"{f} imports '{name}' from '{mod}' but src/{mod}.py "

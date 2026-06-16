@@ -228,3 +228,24 @@ def test_boot_gate_skipped_when_no_entry_declared(tmp_path):
     _src(tmp_path, "app.py", "x = 1\n")
     ok, detail = cc.boot_gate(str(tmp_path), ["build a CLI tool"])
     assert ok and "skipped" in detail.lower(), detail
+
+
+def test_smoke_only_tests_flagged(tmp_path):
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_x.py").write_text(
+        "def test_smoke():\n    assert True\n"
+        "def test_import_only():\n    import os\n"
+        "def test_real():\n    assert 2 + 2 == 4\n")
+    v = cc.smoke_only_tests(str(tmp_path))
+    names = " ".join(v)
+    assert "test_smoke" in names and "test_import_only" in names
+    assert "test_real" not in names
+
+
+def test_realness_violations_filters_by_module(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text("def handle():\n    pass\n")
+    (tmp_path / "src" / "b.py").write_text("def go():\n    return 1\n")
+    only_a = cc.realness_violations(str(tmp_path), modules={"a"})
+    assert only_a and all("/a.py" in x for x in only_a)
+    assert cc.realness_violations(str(tmp_path), modules={"b"}) == []
