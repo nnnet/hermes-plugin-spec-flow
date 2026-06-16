@@ -11,9 +11,19 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 RUN_DIR="${1:-$(ls -dt "$HERE"/tests/runs-out/*__v*__p6-micro-notes 2>/dev/null | head -1)}"
-PORT="${2:-${PORT:-8099}}"
 WS="$RUN_DIR/workspace"
 DB="$(mktemp -u)"   # fresh path; the app's db layer creates it on first connect
+
+# Port: start from the requested one (2nd arg / PORT, default 8099) and scan
+# upward to the first FREE port — never curl a stranger's server on a busy port.
+want="${2:-${PORT:-8099}}"
+PORT=""
+for p in $(seq "$want" $((want + 40))); do
+  if ! { exec 3<>"/dev/tcp/127.0.0.1/$p"; } 2>/dev/null; then PORT="$p"; break; fi
+  exec 3>&- 2>/dev/null || true
+done
+[ -n "$PORT" ] || { echo "no free port near $want" >&2; exit 1; }
+[ "$PORT" = "$want" ] || echo "(port $want busy → using $PORT)"
 
 if [ ! -d "$WS/src" ]; then
   echo "no workspace/src in: $RUN_DIR" >&2; exit 1
@@ -53,9 +63,15 @@ make_server("127.0.0.1", port, app).serve_forever()
 PY
 SERVER_PID=$!
 trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
-sleep 2
 
+# Wait until OUR child is actually listening; bail loudly if it died (e.g. no
+# WSGI callable, import error) instead of curling whatever else holds the port.
 BASE="http://127.0.0.1:${PORT}"
+for _ in $(seq 1 40); do
+  kill -0 "$SERVER_PID" 2>/dev/null || { echo "server process exited before binding" >&2; exit 1; }
+  curl -s -o /dev/null --noproxy '*' "${BASE}/health" && break
+  sleep 0.25
+done
 echo "================  app up at ${BASE}  ================"
 echo
 
