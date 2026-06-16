@@ -377,7 +377,8 @@ def _log_token_usage(model: str, usage: dict,
 
 def ask(prompt: str, *, model: str, role: str, step: str,
         system: str | None = None, fallbacks: tuple | list = (),
-        params: dict | None = None, meta: dict | None = None) -> str:
+        params: dict | None = None, meta: dict | None = None,
+        provider: str = "", provider_call=None) -> str:
     """Send one prompt, return the reply text.
 
     ``role`` (the pipeline STAGE: decomposer/implementer/reviewer/verifier) and
@@ -479,6 +480,24 @@ def ask(prompt: str, *, model: str, role: str, step: str,
     # as before. Hoisted here so both the chain loop and the terminal-fallback
     # rotation below see it.
     extra = {"params": params} if params else {}
+    # PROVIDER folded INTO the single door (Phase 2): when a remote specialist
+    # supplies an adapter call, it is the FIRST link of the chain — tried before
+    # any local model. If the remote is unreachable or its contract differs, the
+    # door logs the degradation as a normal llm_fallback hop and falls through to
+    # the local model chain below. This replaces the old _call_model bypass (its
+    # private try/except + provider_fallback event), so a provider attempt and
+    # its degradation now live in ask()'s ONE logging path like every other hop.
+    if provider_call is not None:
+        _plabel = f"{provider or 'provider'}:{model}"
+        _spend_call()
+        try:
+            return _ret(provider_call(prompt), _plabel)
+        except Exception as exc:  # noqa: BLE001 — remote down → local chain
+            last_exc = exc
+            _log_event({"event": "llm_fallback", "from_model": _plabel,
+                        "to_model": chain[0] if chain else None,
+                        "provider": provider,
+                        "reason": _failure_reason(exc), "terminal": False})
     for attempt in range(rounds):
         if attempt:
             from . import llm_log

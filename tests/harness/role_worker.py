@@ -262,38 +262,44 @@ def _call_model(prompt: str, *, system: str, allowed: list[str],
     the orchestra's downstream parsing (``_extract_json``) is provider-blind and
     ``_orchestra_run`` is unchanged. ``local`` is byte-for-byte today's path."""
     provider = str((meta or {}).get("provider") or LOCAL_PROVIDER)
+    remote = provider != LOCAL_PROVIDER
+
+    def _provider_call(p: str) -> str:
+        # the remote adapter as a plain prompt->reply callable; ask() owns the
+        # degrade-to-local-chain decision and all logging around it (Phase 2).
+        return _remote_call(provider, prompt=p, model=model, role=role,
+                            specialty=specialty, cwd=cwd, meta=meta)
 
     def _do(p: str) -> str:
-        if provider != LOCAL_PROVIDER:
-            # Route to the remote agent (Hermes / Mission-Control / A2A). If it
-            # is unreachable or its API contract differs from the running
-            # service, DEGRADE to the specialist's local model rather than
-            # failing the leaf — the run still yields a product, and the
-            # provider_fallback event records the gap honestly.
-            try:
-                return _remote_call(provider, prompt=p, model=model, role=role,
-                                    specialty=specialty, cwd=cwd, meta=meta)
-            except Exception as exc:  # noqa: BLE001 — remote down → local fallback
-                llm_log.log({"event": "provider_fallback", "provider": provider,
-                             "role": role or "",
-                             "step": (meta or {}).get("step", ""),
-                             "model": model, "error": str(exc)[:200]})
-                # fall through to the local LLM path on the specialist's model
         if _chat_only():
             step = (meta or {}).get("step", "")    # orchestra specialist tag
             fallbacks = llm_backend.chain_for(role, specialty)[1:] if role else ()
-            # node/specialty ride into the SINGLE door's call_start logging.
+            # node/specialty ride into the SINGLE door's call_start logging;
+            # provider (when remote) is folded into the door as the chain's
+            # first link, so the old provider_fallback bypass here is gone.
             ask_meta = {"node": (meta or {}).get("node", ""),
                         "specialty": specialty}
             return llm_backend.ask(p, model=model, system=system,
                                    fallbacks=fallbacks or (), role=role or "",
-                                   step=step, params=params, meta=ask_meta)
+                                   step=step, params=params, meta=ask_meta,
+                                   provider=provider if remote else "",
+                                   provider_call=_provider_call if remote else None)
+        # non-chat (claude agentic CLI) path: the provider still degrades to the
+        # local CLI here until Phase 4 moves _run_claude into the door too.
+        if remote:
+            try:
+                return _provider_call(p)
+            except Exception as exc:  # noqa: BLE001 — remote down → local CLI
+                llm_log.log({"event": "provider_fallback", "provider": provider,
+                             "role": role or "",
+                             "step": (meta or {}).get("step", ""),
+                             "model": model, "error": str(exc)[:200]})
         return _run_claude(p, system=system, allowed=allowed,
                            disallowed=disallowed, cwd=cwd, model=model)
 
     # The SINGLE door (llm_backend.ask) logs call_start/ok/error itself, so the
-    # chat path needs no wrapper. The remote-provider and claude-CLI branches are
-    # consolidated into the door in later phases; for now they run un-wrapped.
+    # chat path needs no wrapper. The claude-CLI branch is consolidated into the
+    # door in Phase 4; for now it runs un-wrapped.
     return _do(prompt)
 
 

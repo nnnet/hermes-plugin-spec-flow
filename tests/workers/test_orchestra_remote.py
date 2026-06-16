@@ -133,5 +133,9 @@ def test_remote_specialist_falls_back_to_local_when_unreachable(monkeypatch, tmp
 
     assert srv.call_count >= 1, "remote down must fall back to the local model"
     assert captured.get("files") == {"src/leaf1.py": "def leaf1():\n    return 2\n"}
-    assert any(e.get("event") == "provider_fallback" and e.get("provider") == "hermes"
-               for e in events), "the degradation must be logged as provider_fallback"
+    # Phase 2: the provider is the chain's first link inside the single door, so
+    # the degradation is one of ask()'s normal llm_fallback hops (carrying the
+    # provider name), not a private provider_fallback bypass event.
+    assert any(e.get("event") == "llm_fallback" and e.get("provider") == "hermes"
+               and e.get("from_model", "").startswith("hermes:")
+               for e in events), "the degradation must be logged as an llm_fallback hop"
