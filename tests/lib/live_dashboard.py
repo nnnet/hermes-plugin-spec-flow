@@ -52,8 +52,21 @@ def _is_run_dir(p: pathlib.Path) -> bool:
 
 
 def _latest_run() -> pathlib.Path | None:
+    """The run the dashboard auto-follows when nothing is pinned.
+
+    A LIVE run (its ``run.pid`` is alive) always wins over any finished run —
+    even one with a newer directory mtime. Without this, a dead older run whose
+    workspace was touched after a newer run started (observed: a stale
+    ``v018`` mtime-bumped at 16:38 outranked the actually-running ``v020`` from
+    16:22) would be shown as 'live'. Version numbers also repeat across cases
+    (two ``v020`` dirs — p4 and p6), so selection is by liveness + mtime, never
+    by the ``vNNN`` label. Among equally-live (or all-dead) runs the newest
+    mtime wins."""
     dirs = [p for p in OUT_DIR.iterdir() if _is_run_dir(p)] if OUT_DIR.exists() else []
-    return max(dirs, key=lambda p: p.stat().st_mtime) if dirs else None
+    if not dirs:
+        return None
+    alive = [p for p in dirs if _pid_alive(p)]
+    return max(alive or dirs, key=lambda p: p.stat().st_mtime)
 
 
 def _resolve_run(name: str) -> pathlib.Path | None:

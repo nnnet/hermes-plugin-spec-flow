@@ -47,6 +47,33 @@ def _isolate(tmp_path, monkeypatch):
     return out
 
 
+# ── auto-follow picks the LIVE run, not newest-mtime ────────────────────────
+
+def test_latest_run_prefers_alive_over_newer_dead(tmp_path, monkeypatch):
+    # The bug: a dead older run whose dir was mtime-bumped after a newer run
+    # started (stale v018 touched at 16:38 vs the running v020 from 16:22) was
+    # shown as 'live' because selection was pure newest-mtime. _latest_run must
+    # prefer the run whose run.pid is ALIVE, even with an older mtime — and be
+    # robust to duplicate vNNN labels across cases.
+    out = _isolate(tmp_path, monkeypatch)
+    live = _mkrun(out, "2026-06-16T16-22-52__v020__p6-micro-notes")
+    (live / "run.pid").write_text(str(os.getpid()), encoding="utf-8")   # alive
+    dead = _mkrun(out, "2026-06-16T13-13-55__v018__p6-micro-notes")
+    (dead / "run.pid").write_text("999999", encoding="utf-8")           # not alive
+    # make the DEAD run newer by mtime — it must still lose to the live one
+    os.utime(dead, None)
+    assert dash._latest_run() == live
+
+
+def test_latest_run_newest_when_none_alive(tmp_path, monkeypatch):
+    out = _isolate(tmp_path, monkeypatch)
+    old = _mkrun(out, "2026-06-16T10-00-00__v001__p6-micro-notes")
+    new = _mkrun(out, "2026-06-16T11-00-00__v002__p6-micro-notes")
+    os.utime(old, (1000, 1000))               # explicitly older
+    os.utime(new, (2000, 2000))               # newest mtime, both dead
+    assert dash._latest_run() == new
+
+
 # ── select ────────────────────────────────────────────────────────────────
 
 def test_select_pins_run(tmp_path, monkeypatch):

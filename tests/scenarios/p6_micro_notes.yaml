@@ -226,16 +226,23 @@ workers:
       team:
         specialists:
           - {role: architect, model: "claude/haiku", params: {temperature: 0.2}}        # hard → weak
-          - {role: coder,     model: "claude/haiku", params: {temperature: 0.4, max_tokens: 4000}}  # hard → weak
+          - {role: coder,     model: "openrouter/nvidia/nemotron-3-super-120b-a12b:free", params: {temperature: 0.4, max_tokens: 4000}}  # hard → weak
           - {role: tester,    provider: hermes,          agent: "tester",
-             gateway: "http://127.0.0.1:8642", model: "xiaomimimo/mimo-v2.5"}            # check → strong
+             gateway: "http://127.0.0.1:8642", model: "openrouter/google/gemma-4-31b-it:free"}  # check → strong
           - {role: fixer,     provider: mission-control, agent_template: "fixer",
              api: "http://127.0.0.1:3000", model: "claude/haiku"}                         # hard → weak
-    review:                             # CHECK → strong (mimo-v2.5) leads; haiku fallback
-      models: ["xiaomimimo/mimo-v2.5", "claude/haiku", "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"]
-    verify:                             # CHECK / final gate → strongest (mimo-pro) leads
-      models: ["xiaomimimo/mimo-v2.5-pro", "xiaomimimo/mimo-v2.5", "claude/haiku"]
+    # CHECK stages lead with the 3 strongest VERIFIED-RESPONDING free OpenRouter
+    # models (model-independence: the gates are carried by free models, not a
+    # single paid/Bifrost provider). cycle_models:false ⇒ the lead really runs.
+    review:                             # CHECK → strong; nemotron-120b leads, gemma-31b + haiku fall back
+      models: ["openrouter/nvidia/nemotron-3-super-120b-a12b:free", "openrouter/google/gemma-4-31b-it:free", "claude/haiku"]
+    verify:                             # CHECK / final gate → STRONGEST: gpt-oss-120b leads
+      models: ["xiaomimimo/mimo-v2.5-pro", "openrouter/openai/gpt-oss-120b:free", "openrouter/nvidia/nemotron-3-super-120b-a12b:free", "claude/haiku"]
   #
+  #  review: # CHECK → strong (mimo-v2.5) leads; haiku fallback
+  #    models: [ "xiaomimimo/mimo-v2.5", "claude/haiku", "openrouter/qwen/qwen3-next-80b-a3b-instruct:free" ]
+  #  verify:                             # CHECK / final gate → strongest (mimo-pro) leads
+  #    models: [ "xiaomimimo/mimo-v2.5-pro", "xiaomimimo/mimo-v2.5", "claude/haiku" ]
   # SONNET-PRIMARY (diagnostic — commented): sonnet via claude-cli subscription.
   # defaults: {models: ["claude/sonnet", "openrouter/qwen/qwen3-coder:free", "claude/haiku"]}
   # stages:

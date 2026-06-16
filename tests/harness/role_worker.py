@@ -1280,6 +1280,25 @@ def _run_pytest(ws_root: str, test_rel: str) -> tuple[bool, str]:
     return proc.returncode == 0, out[-1500:]
 
 
+def _path_header(fn: str) -> str:
+    """A two-line provenance header naming the product-relative paths of THIS
+    leaf's code and test, prepended to both files so the dashboard Код/Тест tabs
+    (and anyone reading the file) immediately see WHERE the artifact lives. Paths
+    are repo/product-relative on purpose — absolute paths are forbidden in
+    artifacts; this is the full path within the runnable product."""
+    return f"# code: src/{fn}.py\n# test: tests/test_{fn}.py\n"
+
+
+def _ensure_path_header(body: str, fn: str) -> str:
+    """Prepend the path header if the body does not already start with one
+    (idempotent across re-writes / diff repairs). A leading ``#`` comment keeps
+    a following module docstring valid as the first statement."""
+    head = body.lstrip("\n")
+    if head.startswith("# code: src/"):
+        return body
+    return _path_header(fn) + body
+
+
 def _write_reexport(ws: Any, fn: str, owner_module: str, owner: str) -> None:
     """Variant B cache-hit: instead of re-implementing a duplicate intent,
     write a thin module that re-exports the owner's public surface plus a
@@ -1290,8 +1309,8 @@ def _write_reexport(ws: Any, fn: str, owner_module: str, owner: str) -> None:
     test = (f'def test_{fn}_reexports_{owner_module}():\n'
             f'    import {fn}  # the de-duplicated module imports cleanly\n'
             f'    assert {fn} is not None\n')
-    ws._write(f"src/{fn}.py", src, "code")
-    ws._write(f"tests/test_{fn}.py", test, "test")
+    ws._write(f"src/{fn}.py", _ensure_path_header(src, fn), "code")
+    ws._write(f"tests/test_{fn}.py", _ensure_path_header(test, fn), "test")
     llm_log.log({"event": "ws_write", "writer": "dedup", "node": fn,
                  "paths": [f"src/{fn}.py", f"tests/test_{fn}.py"]})
 
@@ -1317,7 +1336,8 @@ def _write_reply_files(ws: Any, files: dict, fn: str) -> bool:
                              "node": fn, "path": rel,
                              "reason": "touches platform internals"})
                 continue
-            ws._write(rel, body if body.endswith("\n") else body + "\n", kind)
+            body = body if body.endswith("\n") else body + "\n"
+            ws._write(rel, _ensure_path_header(body, fn), kind)
             # every workspace write is journaled with its writer — the
             # one tool that ATTRIBUTES any future clobbering instantly
             llm_log.log({"event": "ws_write", "writer": "implementer",
