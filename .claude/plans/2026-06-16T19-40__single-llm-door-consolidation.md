@@ -351,3 +351,25 @@ boot/assembly/integrate/contract) получают значок `⚙️` (сво
   бюджетом.
 - #81: снос НЕ-ЛЛМ заглушек оркестра (`_stub_orchestra_machinery`: run_suite/
   _leaf_bar/_write_reply_files/git) → реальный pytest+git. Отдельный пласт.
+
+## ЗАВЕРШЕНО 2026-06-16: дверь ЛЛМ консолидирована полностью (ca44ec6)
+
+### Фаза 4 ЧАСТЬ 2 — ЗАКРЫТА: агентский claude в дверь
+Агентский non-chat путь (бывший `role_worker._run_claude` — CLI-сессия с tools)
+теперь через `llm_backend.ask(..., tools=, cwd=)`: `_ask_claude` получил
+allowed/disallowed/cwd (агентская команда), `_ask_one` пробрасывает tools/cwd и
+при `claude_gateway` шлёт агентский бэкенд по тому же HTTP, `_call_model`
+non-chat зовёт `ask()` как chat (провайдер сложен, single-door логирование).
+Мёртвый `_run_claude` удалён. 5 агентских тестов + question/operator —
+мигрированы через `_agw(srv)` (BACKEND=claude + claude_gateway→сервер), читают
+собранные system+prompt с провода. ВЕРИФИЦИРОВАНО ВЖИВУЮ на bifrost
+(anthropic/claude-haiku-4-5 → 'AGENTIC').
+
+### #80 — ЗАКРЫТО полностью
+Все LLM-door monkeypatch сняты. Исключения (легитимны, НЕ LLM-reply фейки):
+OS-сем subprocess.run (hung-CLI + CLI-attempt-лог тесты) + 1 CLI-direct тест
+(наблюдает флаг direct через стаб _ask_claude — тест роутинга _ask_one).
+
+### Итог: Фазы 1,2,3,4(ч1+ч2),5 + #80 — ВСЁ ЗАКРЫТО. Набор 888 зелёный (без live).
+ОСТАЛОСЬ: #81 — снос НЕ-ЛЛМ заглушек оркестра (`_stub_orchestra_machinery`:
+run_suite/_leaf_bar/_write_reply_files/git → реальный pytest+git). Отдельный пласт.
