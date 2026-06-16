@@ -170,3 +170,50 @@ flags) в llm_backend; role_worker больше не держит CLI-путь. 
 смены маршрутизации) → 2 (провайдер в цепочку) → 3 (attempt на всех) → 4 (CLI
 переезд) → 5 (дашборд+UI). После каждой фазы — полный pytest + ast-parse; смену
 поведения нигде не вносим, только КОНСОЛИДАЦИЮ места и логов.
+
+---
+
+## PROGRESS + DECISIONS (2026-06-16, до компакта)
+
+### Сделано и запушено (ветка feat/roadmap-phase-1)
+- `f091907` **Фаза 1**: call_start/ok/error внутри `ask()` (+ параметр `meta`);
+  `llm_log.timed_ask` УДАЛЁН; ручной call_start верификатора убран; decomposer/
+  implementer/judge/`_call_model`/verifier зовут дверь напрямую. Инвариант
+  `tests/coverage/test_single_llm_door.py` (без monkeypatch).
+- Тест-фреймворк БЕЗ подмен кода (решение пользователя «а+в»):
+  - `tests/harness_fakeapi.py` + фикстура `fake_openai(script)` — реальный
+    локальный HTTP-сервер OpenAI-протокола, отдаёт по заказу 429/500/200.
+  - `real_bifrost` — живой bifrost :8080, модель `openrouter/xiaomi/mimo-v2-flash`
+    (skip если недоступен).
+  - `dead_endpoint` — недоступный адрес → реальная ошибка сети.
+  - все три в `tests/conftest.py`.
+- Переведены БЕЗ monkeypatch: `tests/llm/test_llm_backend.py` (5/5),
+  `tests/nodes/test_cycle_fallbacks.py` (7/7).
+- `9915e85` узел сборки `code_target=src/app.py` + AST-API (v026 собрал app.py).
+- `9f561a0` дашборд namespace-устойчивый `_run_active`.
+- live_dashboard «Сбои» теперь читает живые `call_error`/`provider_fallback`
+  (закоммичено отдельно).
+
+### ЖЁСТКОЕ правило тестов (память feedback_specflow_no_monkeypatch_real_seams)
+НЕТ monkeypatch/stub/smoke на ЛЛМ-пути. claude-путь — реальный
+`headroom wrap claude` + haiku (НЕ фейковый claude-скрипт; синтаксис: claude
+args после headroom-опций, `-p` конфликтует с `--port` headroom — разобраться).
+
+### Осталось (пофайлово, набор зелёный после каждого)
+Снос ЛЛМ-monkeypatch в 10 файлах: `test_specialist_config`, `test_worker_config`
+(claude-кроссовер → headroom-haiku или bifrost claude-haiku-4-5 по HTTP),
+`test_orchestra`, `test_orchestra_remote`, `test_role_workers` (патчит
+`_run_claude`), `test_memory_learning`, `test_memory_modes`,
+`test_verification/test_pytest_verifier`, `test_review_artifacts`,
+`test_parallel_children`, `test_spec_lint`. ОТДЕЛЬНЫЙ слой: снос НЕ-ЛЛМ заглушек
+в оркестр-тестах (`_stub_orchestra_machinery`: run_suite/_leaf_bar/
+_write_reply_files/git) → реальный pytest+git.
+
+Двери: Фаза 2 (провайдер `_remote_call` ЗВЕНОМ в `ask(fallbacks=)`, убрать
+`provider_fallback`), Фаза 3 (`llm_attempt` на claude/provider), Фаза 4
+(`_run_claude` в llm_backend), Фаза 5 (дашборд + значок `⚙️` техн-инъекций
+checkpoint/verify/product_entry, источник НЕ hitl/requirements, вместо `📌`).
+
+Шаблон перевода: заменить `monkeypatch.setattr(lb,"_http_post"/"ask"/...)` на
+`fake_openai([(200, ok(json.dumps(reply)))])` (контролируемый ответ) ИЛИ
+`real_bifrost` (живой) ИЛИ `dead_endpoint` (сбой); ассертить по `srv.requests`.

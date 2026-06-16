@@ -1265,6 +1265,29 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
             "timeout": 0, "empty": 0, "fallbacks": 0, "errors": 0,
             "delay_s": 0.0})
 
+    # call_error carries no `model` (the request marker lives on the preceding
+    # call_start), so remember the last model seen per identity and attribute
+    # the failure to it. This is how the report populates on the LIVE path,
+    # which emits call_error / provider_fallback — NOT the llm_attempt /
+    # llm_fallback records (those only fire when a call goes through the
+    # llm_backend.ask retry chain, which the orchestra/provider path bypasses).
+    last_model: dict = {}
+
+    def _err_class(s: str) -> str:
+        s = (s or "").lower()
+        if "429" in s or "rate limit" in s or "too many" in s or "quota" in s:
+            return "429"
+        if any(c in s for c in ("500", "502", "503", "504", "bad gateway",
+                                "server error")):
+            return "5xx"
+        if any(c in s for c in ("timeout", "timed out", "refused",
+                                "connection", "unreachable", "temporarily")):
+            return "timeout"
+        if any(c in s for c in ("empty", "malformed", "no verdict",
+                                "reasoning", "could not parse")):
+            return "empty"
+        return ""
+
     # completion records (call_ok / call_error) carry the real `latency_s` (how
     # long the model actually worked) but NOT `model`, so they are not request
     # records themselves. We queue them per identity and later splice their
@@ -1317,7 +1340,32 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
                     completions.setdefault(_ident_key(e), []).append(
                         {"latency_s": float(lat),
                          "wall": e.get("wall")})
+                # a call_error IS an abnormal response on the live path; the
+                # model is on the preceding call_start (see last_model).
+                if ev_ == "call_error":
+                    mdl = last_model.get(_ident_key(e)) or "—"
+                    d = _fm(mdl)
+                    d["abn"] += 1
+                    d["errors"] += 1
+                    d["delay_s"] += float(lat or 0)
+                    cls = _err_class(e.get("error") or "")
+                    if cls:
+                        d[cls] += 1
+            elif ev_ == "provider_fallback":
+                # a remote provider was unreachable and the run degraded to the
+                # local model — an abnormal outcome with a real transition.
+                mdl = e.get("model") or "—"
+                d = _fm(mdl)
+                d["abn"] += 1
+                d["fallbacks"] += 1
+                cls = _err_class(e.get("error") or "")
+                if cls:
+                    d[cls] += 1
+                transitions.append({"from": e.get("provider") or mdl,
+                                    "to": mdl, "reason": cls or "provider down",
+                                    "terminal": False})
             elif "model" in e and ev_ not in _LLM_RESULT_EVENTS:
+                last_model[_ident_key(e)] = e.get("model")
                 # UNIVERSAL, role-independent LLM-request signal: every model
                 # invocation names its `model`, whatever the worker calls the
                 # event (call_start for decomposer/reviewer, orchestra_step for
