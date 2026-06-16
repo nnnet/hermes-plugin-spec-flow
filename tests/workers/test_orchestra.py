@@ -240,3 +240,102 @@ def test_step_error_does_not_crash_run(monkeypatch, tmp_path):
                       system="SYS", allowed=[], disallowed=[],
                       channel=None, team=team)
     assert reached_coder["n"] == 1, "run continued to the coder after the error"
+
+
+# ── phase 2: declarative workflow drives the step order ───────────────────
+
+def _wire_team_fakes(monkeypatch, rw, lb, order, seen_prompts, bar_results):
+    """Shared fake wiring for the workflow-driven orchestra tests: the four
+    role branches record their name + prompt and the leaf bar is scripted."""
+    monkeypatch.setattr(rw, "load_skill_md", lambda s: "SYS")
+    monkeypatch.setattr(rw, "_model_for", lambda *a, **k: "m")
+    monkeypatch.setattr(lb, "model_for", lambda *a, **k: "m")
+    monkeypatch.setattr(rw, "_inline_file", lambda root, rel: "SPEC BODY")
+    import harness.ws_tx as wstx
+    monkeypatch.setattr(wstx, "transaction", _noop_tx)
+    import harness.pytest_verifier as pvmod
+    monkeypatch.setattr(pvmod, "run_suite", lambda *a, **k: (True, ""))
+    monkeypatch.setattr(pvmod, "_badness", lambda *a, **k: 0)
+
+    def fake_dialog(prompt, *, role, node, system, allowed, disallowed, cwd,
+                    model, channel, specialty="", **kw):
+        order.append("architect")
+        return "PLAN: def make_note(text): ..."
+
+    def fake_ensemble(prompt, *, node, system, allowed, disallowed, cwd, model,
+                      channel, specialty, **kw):
+        tag = "tester" if "TESTER PASS" in prompt else "coder"
+        order.append(tag)
+        seen_prompts[tag] = prompt
+        return json.dumps({"files": {f"src/{node}.py": "x = 1\n"}})
+
+    def fake_call(prompt, *, system, allowed, disallowed, cwd, model, role,
+                  specialty="", **kw):
+        order.append("fixer")
+        seen_prompts["fixer"] = prompt
+        return ("FILE: src/leaf1.py\n<<<<<<< SEARCH\nx = 1\n"
+                "=======\nx = 2\n>>>>>>> REPLACE")
+
+    monkeypatch.setattr(rw, "_leaf_bar", lambda *a, **k: next(bar_results))
+    monkeypatch.setattr(rw, "_write_reply_files", lambda *a, **k: True)
+    monkeypatch.setattr(rw, "_apply_diff_repair", lambda *a, **k: True)
+    monkeypatch.setattr(rw, "_dialog_round", fake_dialog)
+    monkeypatch.setattr(rw, "_ensemble_generate", fake_ensemble)
+    monkeypatch.setattr(rw, "_call_model", fake_call)
+
+
+def test_explicit_sequential_workflow_runs_four_steps_in_order(monkeypatch,
+                                                               tmp_path):
+    """An explicit `process: sequential` (no edge graph) drives the four steps
+    in declared order, identical to the default bare-list behaviour."""
+    lb.configure_workers(None)
+    order, seen = [], {}
+    bar = iter([(True, "green"), (True, "green"),
+                (True, "green"), (True, "green")])
+    _wire_team_fakes(monkeypatch, rw, lb, order, seen, bar)
+    # carry the flow spec via the env (the orchestra re-sources it read-only);
+    # `sequential` with no edges == today.
+    monkeypatch.setenv("SPEC_FLOW_IMPLEMENTER_TEAM", json.dumps({
+        "process": "sequential",
+        "specialists": [{"role": "architect"}, {"role": "coder"},
+                        {"role": "tester"}, {"role": "fixer"}]}))
+    team = [{"role": "architect"}, {"role": "coder"},
+            {"role": "tester"}, {"role": "fixer"}]
+    rw._orchestra_run(_base_ctx(tmp_path), str(tmp_path), "leaf1", "leaf1",
+                      system="SYS", allowed=[], disallowed=[],
+                      channel=None, team=team)
+    # green throughout means the fixer's `if passed: continue` skips it.
+    assert order == ["architect", "coder", "tester"], \
+        f"sequential workflow order broke: {order}"
+
+
+def test_graph_workflow_loops_fixer_then_reruns_tester(monkeypatch, tmp_path):
+    """With a tester->fixer(when tests_failed)->tester(when retry)->DONE(when
+    tests_passed) graph, a failing-then-passing tester drives the fixer and
+    then a tester RE-RUN (the evaluator-optimizer loop)."""
+    lb.configure_workers(None)
+    order, seen = [], {}
+    # tester RED first, fixer still RED (so `retry` fires), tester GREEN -> DONE
+    bar = iter([(False, "RED1"),      # after coder write (tester branch unused)
+                (False, "RED_TESTER"),  # tester 1st visit -> RED
+                (False, "RED_FIXER"),   # fixer attempt -> still RED -> retry
+                (True, "green")])       # tester 2nd visit -> GREEN -> DONE
+    _wire_team_fakes(monkeypatch, rw, lb, order, seen, bar)
+    graph = {"start": "architect", "edges": [
+        {"from": "architect", "to": "coder"},
+        {"from": "coder", "to": "tester"},
+        {"from": "tester", "to": "fixer", "when": "tests_failed"},
+        {"from": "fixer", "to": "tester", "when": "retry"},
+        {"from": "tester", "to": "DONE", "when": "tests_passed"}]}
+    monkeypatch.setenv("SPEC_FLOW_IMPLEMENTER_TEAM", json.dumps({
+        "workflow": graph,
+        "specialists": [{"role": "architect"}, {"role": "coder"},
+                        {"role": "tester"}, {"role": "fixer"}]}))
+    team = [{"role": "architect"}, {"role": "coder"},
+            {"role": "tester"}, {"role": "fixer"}]
+    rw._orchestra_run(_base_ctx(tmp_path), str(tmp_path), "leaf1", "leaf1",
+                      system="SYS", allowed=[], disallowed=[],
+                      channel=None, team=team)
+    assert order == ["architect", "coder", "tester", "fixer", "tester"], \
+        f"evaluator-optimizer loop did not drive as expected: {order}"
+    assert "TESTER_FAIL" not in str(seen)   # sanity: prompts captured

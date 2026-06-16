@@ -873,11 +873,33 @@ def _orchestra_run(ctx: dict, ws_root: str, nid: str, fn: str, *,
     # unsupported provider fails loudly (phase-3 message) instead of being
     # logged-and-skipped like a transient step error.
     tasks = [_specialist_task(step, ctx, nid, fn, ws_root) for step in team]
+    # Phase 2: the STEP ORDER is now declarative. A team with no `workflow:`/
+    # `process:` (today's bare list) drives the specialists sequentially — the
+    # exact architect->coder->tester->fixer order, byte-for-byte. A `workflow:`
+    # graph drives loops/branches (e.g. tester<->fixer until green). The driver
+    # decides the next ROLE; the per-role branch bodies below stay as-is.
+    from . import orchestra_workflow as owf
+    wf_spec, proc_spec = owf.workflow_of(
+        owf.team_config_raw(llm_backend, os.environ))
+    plan = owf.WorkflowPlan.from_team(team, workflow=wf_spec, process=proc_spec)
+    state = owf.WorkflowState()
+    # Map each role to its resolved RoleTask. Sequential keeps positional order
+    # (duplicate roles consume in declaration order); a graph looks a role up.
+    by_role: dict[str, list] = {}
+    for t in tasks:
+        by_role.setdefault(t.role, []).append(t)
     llm_log.log({"event": "orchestra_start", "node": nid,
                  "steps": [t.role for t in tasks],
-                 "providers": [t.provider for t in tasks]})
+                 "providers": [t.provider for t in tasks],
+                 "flow": "graph" if not plan.is_sequential else "sequential"})
 
-    for task in tasks:
+    for step_role in plan.run(state):
+        queue = by_role.get(step_role)
+        if not queue:
+            continue                    # graph names a role with no specialist
+        # Sequential pops in declaration order; a graph re-runs the same task
+        # for a looped role (tester revisited), so peek without exhausting.
+        task = queue.pop(0) if plan.is_sequential else queue[0]
         role = task.role
         s_model = task.model
         s_params = task.params
@@ -955,6 +977,10 @@ def _orchestra_run(ctx: dict, ws_root: str, nid: str, fn: str, *,
             llm_log.log({"event": "orchestra_step_error", "node": nid,
                          "role": role, "error": str(exc)[:150]})
             continue
+        finally:
+            # Feed the just-run step's outcome back so the driver's conditional
+            # edges (tests_passed / tests_failed / retry) resolve the next role.
+            state.passed, state.wrote = passed, wrote
 
     # the SAME completion contract as the single path: a green leaf is
     # remembered, a red one teaches; the leaf is judged by its artifacts.
