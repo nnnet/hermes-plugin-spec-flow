@@ -2237,36 +2237,46 @@ function hitlHTML(){
  if(HITL.empty)return '<p class=dim>нет активного прогона</p>';
  const asks=HITL.asks||[],ans=HITL.answered||[],reqs=HITL.requirements||[],sent=HITL.sent||[];
  const open=asks.filter(a=>a&&typeof a==='object'&&!a.answered).length;
- // the HITL panel is a flex column filling the detail pane: banner + answer box
- // + inject form stay fixed at the top, only the chat history (flex:1) scrolls.
- let h='<div class=hitlwrap>';
+ // TWO vertical panels: LEFT = input fields (answer + inject), RIGHT = chat
+ // history that scrolls. A full-width header sits above the two-column row.
+ let h='<div class=hitlwrap2>';
  h+='<h3 class=muted>✋ HITL — двусторонний канал с прогоном '+
   '<span class="tab" id=hitlreload style="margin-left:8px">↻ обновить</span></h3>';
+ h+='<div class=hitlrow>';
+ // ── LEFT PANEL: input fields ─────────────────────────────────────────
+ h+='<div class=hitlcol-left>';
  h+='<div class='+(HITL.pending?'errbox':'fixbox')+'>'+
   (HITL.pending?'⏳ <b>ответ записан, воркер ещё не забрал</b> (answer.md ждёт потребления)'
    :'✓ <b>нет неотправленного ответа</b> — можно отвечать на новый вопрос')+
   (open?' · <span style="color:#c0392b">без ответа: '+open+'</span>':'')+'</div>';
- // ── INPUT FIELDS (top) ───────────────────────────────────────────────
  h+='<h4>Ответить воркеру (человек → worker)</h4>'+
-  '<textarea id=hitlans rows=3 style="width:100%" placeholder="Текст ответа — попадёт в hitl/answer.md, воркер заберёт его из своего цикла ожидания"></textarea>'+
+  '<textarea id=hitlans rows=4 style="width:100%" placeholder="Текст ответа — попадёт в hitl/answer.md, воркер заберёт его из своего цикла ожидания"></textarea>'+
   '<div style="margin:6px 0"><span class="tab" id=hitlsend>➤ отправить ответ</span> '+
   '<span class=dim id=hitlmsg></span></div>';
  h+='<h4>Вбросить позднее требование (человек → движок)</h4>'+
   '<div class=dim>имя = папка под hitl/requirements/; первая строка тела может быть «@scope: &lt;узел&gt;»</div>'+
-  '<input id=hitlname placeholder="имя требования (web_ui)" style="width:240px;margin:4px 0">'+
-  '<textarea id=hitlreq rows=3 style="width:100%" placeholder="Текст требования (REQUIREMENT.md)"></textarea>'+
+  '<input id=hitlname placeholder="имя требования (web_ui)" style="width:100%;margin:4px 0">'+
+  '<textarea id=hitlreq rows=4 style="width:100%" placeholder="Текст требования (REQUIREMENT.md)"></textarea>'+
   '<div style="margin:6px 0"><span class="tab" id=hitlinject>➤ вбросить</span> '+
   '<span class=dim id=hitlimsg></span></div>';
- // ── CHAT (below inputs, messenger-style, scrollable) ─────────────────
+ h+='</div>';  // .hitlcol-left
+ // ── RIGHT PANEL: chat history (messenger-style, scrollable) ───────────
  // incoming (worker→human) on the left, outgoing (human→worker/engine) on
  // the right; meta header (time/sender/node) atop each bubble; unanswered
  // questions flagged red + ⏳.
+ h+='<div class=hitlcol-right>';
  const chatCss=
-   // the HITL panel is a flex column that fills the detail height; only the
-   // chat history scrolls (flex:1; min-height:0) — the banner, answer box and
-   // inject form above it stay fixed regardless of viewport size.
-   '.hitlwrap{display:flex;flex-direction:column;height:calc(100vh - 130px);min-height:320px}'+
-   '.hitlwrap>h3,.hitlwrap>h4,.hitlwrap>div:not(.chat),.hitlwrap>input,.hitlwrap>textarea{flex:0 0 auto}'+
+   // outer column: full-width header + a two-panel row that fills the rest.
+   '.hitlwrap2{display:flex;flex-direction:column;height:calc(100vh - 130px);min-height:340px}'+
+   '.hitlwrap2>h3{flex:0 0 auto}'+
+   '.hitlrow{flex:1 1 auto;min-height:0;display:flex;flex-direction:row;gap:14px}'+
+   // LEFT: inputs, fixed share of the width, own scroll if tall.
+   '.hitlcol-left{flex:0 0 40%;max-width:40%;display:flex;flex-direction:column;'+
+   'overflow-y:auto;min-height:0;padding-right:6px}'+
+   '.hitlcol-left>h4,.hitlcol-left>div,.hitlcol-left>input,.hitlcol-left>textarea{flex:0 0 auto}'+
+   // RIGHT: chat column, the .chat fills it and scrolls.
+   '.hitlcol-right{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;min-height:0}'+
+   '.hitlcol-right>h4{flex:0 0 auto}'+
    '.chat{flex:1 1 auto;min-height:0;overflow-y:auto;padding:8px;margin-top:4px;'+
    'background:#0e1117;border:1px solid #222;border-radius:8px;display:flex;flex-direction:column}'+
    '.bub{max-width:78%;margin:4px 0;padding:6px 9px;border-radius:12px;'+
@@ -2315,7 +2325,9 @@ function hitlHTML(){
  h+='<h4>История переписки ('+(asks.length+reqs.length+sent.length)+')</h4>';
  h+= chat? '<div class="chat keepscroll" id=hitlchat>'+chat+'</div>'
    : '<p class=dim>пока сообщений нет</p>';
- h+='</div>';  // .hitlwrap
+ h+='</div>';  // .hitlcol-right
+ h+='</div>';  // .hitlrow
+ h+='</div>';  // .hitlwrap2
  return h;
 }
 function runCtl(path,payload){
