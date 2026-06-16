@@ -41,9 +41,16 @@ SKILLS_DIR = PLUGIN_ROOT / "skills"
 PROFILES_DIR = PLUGIN_ROOT / "profiles"
 
 # Phase-1 provider seam: a specialist names WHERE it runs. Only `local` (the
-# built-in role_worker LLM call) is wired this phase; the others (hermes / a2a /
-# mission-control) are forward-declared in the YAML schema and land later.
+# built-in role_worker LLM call) runs in-process; the remote ones (hermes / a2a /
+# mission-control) live in the ``providers`` package and run a RoleTask over the
+# wire. Phase 3 dispatches non-local specialists through those adapters.
 LOCAL_PROVIDER = "local"
+
+# Injectable transport for the remote provider adapters (doc §4). Tests set this
+# to a fake (url/method/body -> (status, text)); a live run leaves it None and
+# the adapter uses its stdlib urllib transport. Module-global so a test can swap
+# it WITHOUT threading a param through the unchanged ``_orchestra_run`` loop.
+PROVIDER_TRANSPORT = None
 
 TIMEOUT = config.env("WORKER_TIMEOUT", int)
 RETRIES = config.env("WORKER_RETRIES", int)
@@ -161,6 +168,71 @@ def _granular_commit(ws_root: str, fn: str, stage: str) -> None:
         pass
 
 
+def _provider_config(provider: str, role: str) -> dict:
+    """The adapter config (endpoint/agent/auth) for the specialist that runs as
+    ``role`` on ``provider`` — re-read from the SAME team config the orchestra
+    resolved from, so no extra param threads through the unchanged loop.
+
+    Why: the call path needs WHERE/HOW to reach the remote agent, which lives on
+    the specialist record, not on the bare model/meta the orchestra passes.
+    What: scans the configured implementer team for the matching specialist and
+    returns its ``_PROVIDER_CFG_KEYS`` (endpoint/agent/api/token/…); empty when
+    none matches (the adapter then raises a clear 'needs endpoint' error).
+    Test: a team with {role:'coder', provider:'hermes', gateway, agent} yields
+    that gateway+agent for ('hermes','coder')."""
+    for spec in _implementer_team():
+        if spec.get("provider") == provider and spec.get("role") == role:
+            return {k: spec[k] for k in _PROVIDER_CFG_KEYS if k in spec}
+    return {}
+
+
+def _remote_call(provider: str, *, prompt: str, model: str,
+                 role: Optional[str], specialty: str, cwd: Optional[str],
+                 meta: Optional[dict]) -> str:
+    """Route ONE specialist call to a remote provider adapter and render its
+    RoleResult back into the local reply shape (a ``{"files": {...}}`` JSON
+    string), so the orchestra parses it provider-blind.
+
+    Why: this is the dispatch seam — ``provider != local`` runs on Hermes / MC /
+    A2A instead of the LLM, yet returns what the local path returns.
+    What: builds a RoleTask from the call args + the specialist's adapter config,
+    calls ``providers.get_provider(provider).execute(task)``, and serialises the
+    returned artifacts (or verdict) as the reply text.
+    Test: with a fake transport, a 'hermes' specialist's step returns the canned
+    files as a JSON ``{"files": {...}}`` reply and the orchestra writes them."""
+    from .providers import get_provider
+    m = meta or {}
+    node = str(m.get("node") or "")
+    # the SPECIALIST role (architect/coder/tester/fixer) is the orchestra step;
+    # the orchestra threads the call's generic role as 'implementer', so the
+    # adapter config is keyed on the step, falling back to the call role.
+    step_role = str(m.get("step") or role or "")
+    cfg = _provider_config(provider, step_role)
+    task = RoleTask(
+        role=step_role, node=node,
+        title=str(m.get("title") or ""), spec=str(m.get("spec") or ""),
+        workspace=cwd, specialty=specialty, provider=provider, model=model,
+        params=None, context={"prompt": prompt, **cfg})
+    adapter = get_provider(provider, transport=PROVIDER_TRANSPORT)
+    result = adapter.execute(task)
+    return _render_remote_reply(result)
+
+
+def _render_remote_reply(result: Any) -> str:
+    """A remote RoleResult → the reply string the local coder would emit.
+
+    files → ``{"files": {path: content}}``; a verdict-only result →
+    ``{"verdict": {...}}``; this keeps the orchestra's ``_extract_json`` step
+    identical for local and remote specialists."""
+    artifacts = getattr(result, "artifacts", None) or {}
+    verdict = getattr(result, "verdict", None)
+    if artifacts:
+        return json.dumps({"files": dict(artifacts)})
+    if verdict is not None:
+        return json.dumps({"verdict": verdict})
+    return json.dumps({"files": {}})
+
+
 def _call_model(prompt: str, *, system: str, allowed: list[str],
                 disallowed: list[str], cwd: Optional[str], model: str,
                 role: Optional[str] = None, specialty: str = "",
@@ -181,8 +253,20 @@ def _call_model(prompt: str, *, system: str, allowed: list[str],
     open-schema ``meta`` (role, model, specialty + whatever the caller adds:
     step/mode/attempt/...), so request + outcome are recorded the same way for
     EVERY worker — solo or orchestra — and the usage analysis is multi-axis by
-    construction. No caller needs its own call_start."""
+    construction. No caller needs its own call_start.
+
+    Phase 3: when ``meta['provider']`` names a non-local provider, the call is
+    routed to that provider's adapter (Hermes / Mission-Control / A2A) instead of
+    the local LLM. The adapter's RoleResult is rendered back into the SAME reply
+    string the local coder would produce (a ``{"files": {...}}`` JSON object), so
+    the orchestra's downstream parsing (``_extract_json``) is provider-blind and
+    ``_orchestra_run`` is unchanged. ``local`` is byte-for-byte today's path."""
+    provider = str((meta or {}).get("provider") or LOCAL_PROVIDER)
+
     def _do(p: str) -> str:
+        if provider != LOCAL_PROVIDER:
+            return _remote_call(provider, prompt=p, model=model, role=role,
+                                specialty=specialty, cwd=cwd, meta=meta)
         if _chat_only():
             fallbacks = llm_backend.chain_for(role, specialty)[1:] if role else ()
             if fallbacks:
@@ -730,11 +814,26 @@ def _normalise_specialist(item: Any) -> Optional[dict]:
     if not isinstance(item, dict) or not item.get("role"):
         return None
     params = item.get("params")
-    return {"role": str(item["role"]),
-            "provider": str(item.get("provider") or LOCAL_PROVIDER),
-            "skill": item.get("skill"),
-            "model": item.get("model"),
-            "params": dict(params) if isinstance(params, dict) else None}
+    rec = {"role": str(item["role"]),
+           "provider": str(item.get("provider") or LOCAL_PROVIDER),
+           "skill": item.get("skill"),
+           "model": item.get("model"),
+           "params": dict(params) if isinstance(params, dict) else None}
+    # Phase 3: a remote specialist also carries its adapter config (where/how to
+    # reach the agent). These keys are transport/auth details — kept verbatim so
+    # the provider adapter reads them at call time, never leaked into the prompt.
+    for key in _PROVIDER_CFG_KEYS:
+        if key in item:
+            rec[key] = item[key]
+    return rec
+
+
+# Adapter-config keys a non-local specialist may carry (doc §4). They live on
+# the specialist record and are forwarded to the provider adapter — endpoint/
+# agent/auth, never sampling. Capability-named: the role schema names WHERE, the
+# adapter owns the transport.
+_PROVIDER_CFG_KEYS = ("agent", "agent_template", "endpoint", "gateway", "api",
+                      "api_key", "token", "agent_card", "poll_attempts")
 
 
 def _implementer_team() -> list[dict]:
@@ -775,14 +874,22 @@ def _implementer_team() -> list[dict]:
 
 
 def _resolve_provider(step: dict) -> str:
-    """A step's provider, after asserting phase-1 support. Only `local` runs
-    this phase; any other provider is a forward-declared schema that needs an
-    adapter (phases 2-3) and must fail LOUDLY, not be silently skipped.
-    Test: provider 'hermes' raises NotImplementedError mentioning phase 3."""
+    """A step's provider NAME, validated against the adapter registry.
+
+    Why: `local` is the built-in LLM call; every other name must resolve to a
+    registered remote adapter (phase 3) — an unknown provider must fail LOUDLY
+    here, not be silently skipped.
+    What: returns the provider name unchanged for `local`; for a non-local name
+    it confirms an adapter exists (``providers.get_provider``) and returns the
+    name (the orchestra reads it off the RoleTask; the actual adapter is looked
+    up at call time in ``_call_model``).
+    Test: 'hermes' returns 'hermes'; 'bogus' raises a clear error naming the
+    available providers."""
     provider = str(step.get("provider") or LOCAL_PROVIDER)
-    if provider != LOCAL_PROVIDER:
-        raise NotImplementedError(
-            f"provider {provider} not available until phase 3")
+    if provider == LOCAL_PROVIDER:
+        return provider
+    from .providers import get_provider          # local import: layering
+    get_provider(provider)                       # raises ValueError if unknown
     return provider
 
 

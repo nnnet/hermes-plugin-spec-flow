@@ -78,24 +78,19 @@ def test_specialists_env_override_json(monkeypatch):
     assert team[0]["params"] == {"top_p": 0.9}
 
 
-def test_non_local_provider_raises_phase3(monkeypatch, tmp_path):
-    """A specialist on a provider other than `local` is PARSED (the YAML schema
-    is forward-declared) but raises a clear phase-3 NotImplementedError when the
-    orchestra resolves it — adapters land in a later phase."""
-    monkeypatch.delenv("SPEC_FLOW_IMPLEMENTER_TEAM", raising=False)
-    lb.configure_workers(None)
-    monkeypatch.setattr(rw, "load_skill_md", lambda s: "SYS")
-    monkeypatch.setattr(rw, "_model_for", lambda *a, **k: "m")
-    monkeypatch.setattr(lb, "model_for", lambda *a, **k: "m")
-    monkeypatch.setattr(rw, "_inline_file", lambda root, rel: "SPEC")
+def test_known_provider_resolves(monkeypatch):
+    """A specialist on a registered remote provider resolves to that provider
+    NAME (the adapter exists); only an UNKNOWN provider fails."""
+    assert rw._resolve_provider({"role": "coder", "provider": "hermes"}) == "hermes"
+    assert rw._resolve_provider({"role": "coder"}) == "local"
 
-    team = [{"role": "coder", "provider": "hermes", "agent": "qa-bot"}]
-    with pytest.raises(NotImplementedError) as exc:
-        rw._orchestra_run(_base_ctx(tmp_path), str(tmp_path),
-                          "leaf1", "leaf1", system="SYS", allowed=[],
-                          disallowed=[], channel=None, team=team)
-    assert "phase 3" in str(exc.value)
-    assert "hermes" in str(exc.value)
+
+def test_unknown_provider_raises(monkeypatch):
+    """An unregistered provider fails LOUDLY at resolution, naming the available
+    ones — it must never be silently skipped."""
+    with pytest.raises(ValueError) as exc:
+        rw._resolve_provider({"role": "coder", "provider": "bogus"})
+    assert "bogus" in str(exc.value)
 
 
 # ── per-specialist model + params reach the backend call ──────────────────
@@ -262,14 +257,16 @@ def test_roletask_roundtrips_specialist_config():
     assert task.context["module"] == "leaf1"
 
 
-def test_roletask_non_local_provider_raises():
-    """Building the RoleTask for a non-local specialist raises the phase-3
-    NotImplementedError at resolution time (the schema is forward-declared)."""
+def test_roletask_remote_provider_resolves():
+    """Building the RoleTask for a registered remote specialist carries that
+    provider name (the adapter exists); an unknown provider raises."""
     lb.configure_workers(None)
-    with pytest.raises(NotImplementedError) as exc:
-        rw._specialist_task({"role": "coder", "provider": "a2a"},
+    task = rw._specialist_task({"role": "coder", "provider": "a2a"},
+                               {"specialty": ""}, "leaf1", "leaf1", "/ws")
+    assert task.provider == "a2a"
+    with pytest.raises(ValueError):
+        rw._specialist_task({"role": "coder", "provider": "nope"},
                             {"specialty": ""}, "leaf1", "leaf1", "/ws")
-    assert "phase 3" in str(exc.value)
 
 
 def test_roleresult_shape():
