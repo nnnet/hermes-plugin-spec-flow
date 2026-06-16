@@ -149,38 +149,42 @@ workers:
   quota_retries: 11
   fallback_models: [claude/haiku]
   providers:
-    # Xiaomi MiMo — its OWN Bifrost provider "mimo" (custom OpenAI-compatible,
+    # Xiaomi MiMo — its OWN Bifrost provider "xiaomimimo" (custom OpenAI-compatible,
     # base_url xiaomimimo.com, keys XIAOMIMIMO_API_KEY), NOT OpenRouter. Bifrost
-    # routes by the "mimo/" model prefix to that provider; free under the account
-    # keys. mimo/mimo-v2.5 = general, mimo/mimo-v2.5-pro = the responsible roles
-    # (decomposer/reviewer/verifier/architect).
-    - {name: xiaomimimo, kind: openai, model_prefix: "mimo/", requests_per_day: 1000}
+    # routes by the "xiaomimimo/" model prefix to that provider. It is AVAILABLE
+    # but deliberately NOT the primary on any role: p6 measures the engine on
+    # WEAK free models (model-independence), so a strong model must not carry the
+    # run. It appears only as one last-ditch fallback in the heaviest role.
+    - {name: xiaomimimo, kind: openai, model_prefix: "xiaomimimo/", requests_per_day: 1000}
     - {name: openrouter-free, kind: openai, model_prefix: "openrouter/", require_suffix: ":free", requests_per_day: 1000}
     - {name: claude-cli, kind: claude, model_prefix: "claude/"}
   # ── MODEL CHAINS ───────────────────────────────────────────────────────
   # SWITCH: free-primary is ACTIVE. To force sonnet (diagnostic), comment the FREE
   # block and uncomment the SONNET block below (and set cycle_models: false above).
   #
-  # FREE-PRIMARY (ACTIVE — free OpenRouter primary, haiku fallback):
+  # FREE-PRIMARY (ACTIVE). WEAK free OpenRouter models are the PRIMARY on EVERY
+  # role — p6 proves the ENGINE makes a working product regardless of model
+  # strength. No strong model is primary anywhere; haiku is the last fallback;
+  # xiaomimimo appears ONLY as one safety fallback in the heaviest role.
   defaults:
-    models: ["mimo/mimo-v2.5", "openrouter/qwen/qwen3-coder:free", "claude/haiku"]
-  decomposer:                           # responsible role → mimo-v2.5-pro
-    models: ["mimo/mimo-v2.5-pro", "openrouter/qwen/qwen3-next-80b-a3b-instruct:free", "claude/haiku"]
+    models: ["openrouter/qwen/qwen3-coder:free", "openrouter/deepseek/deepseek-chat-v3.1:free", "claude/haiku"]
+  decomposer:                           # weak free primary; haiku fallback
+    models: ["openrouter/qwen/qwen3-next-80b-a3b-instruct:free", "openrouter/qwen/qwen3-coder:free", "claude/haiku"]
   implementer:
-    models: ["mimo/mimo-v2.5", "openrouter/qwen/qwen3-coder:free", "openrouter/deepseek/deepseek-chat-v3.1:free", "claude/haiku"]
-    # D1: implementer orchestra — per-specialist model + params (new schema).
-    # Each specialist names its own FREE model so the run exercises the team
-    # card + the specialist call sequence on the dashboard with distinct models.
+    models: ["openrouter/qwen/qwen3-coder:free", "openrouter/deepseek/deepseek-chat-v3.1:free", "xiaomimimo/mimo-v2.5", "claude/haiku"]
+    # D1: implementer orchestra — each specialist a DIFFERENT weak free model,
+    # so the team card + call sequence shows distinct (weak) models and the
+    # ENGINE, not any single model, carries quality.
     team:
       specialists:
-        - {role: architect, model: "mimo/mimo-v2.5-pro", params: {temperature: 0.2}}   # responsible → pro
-        - {role: coder,     model: "mimo/mimo-v2.5",     params: {temperature: 0.4, max_tokens: 4000}}
-        - {role: tester,    model: "mimo/mimo-v2.5"}
-        - {role: fixer,     model: "mimo/mimo-v2.5"}
-  reviewer:                             # responsible role → mimo-v2.5-pro
-    models: ["mimo/mimo-v2.5-pro", "claude/haiku", "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"]
-  verifier:                             # responsible role → mimo-v2.5-pro
-    models: ["mimo/mimo-v2.5-pro", "claude/haiku", "openrouter/qwen/qwen3-coder:free"]
+        - {role: architect, model: "openrouter/qwen/qwen3-next-80b-a3b-instruct:free", params: {temperature: 0.2}}
+        - {role: coder,     model: "openrouter/qwen/qwen3-coder:free",                 params: {temperature: 0.4, max_tokens: 4000}}
+        - {role: tester,    model: "openrouter/deepseek/deepseek-chat-v3.1:free"}
+        - {role: fixer,     model: "openrouter/qwen/qwen3-coder:free"}
+  reviewer:                             # weak free primary; haiku fallback
+    models: ["openrouter/qwen/qwen3-next-80b-a3b-instruct:free", "claude/haiku"]
+  verifier:                             # weak free primary; haiku fallback
+    models: ["openrouter/qwen/qwen3-coder:free", "claude/haiku"]
   #
   # SONNET-PRIMARY (diagnostic — commented): sonnet via claude-cli subscription.
   # defaults:   {models: ["claude/sonnet", "openrouter/qwen/qwen3-coder:free", "claude/haiku"]}
