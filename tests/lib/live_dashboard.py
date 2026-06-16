@@ -2183,7 +2183,12 @@ function idleHTML(){
  // roll-up by cause — where the time structurally goes
  h+='<h4>По причинам (куда уходит время)</h4><div class=cmpscroll style="max-height:none">'+
   '<table class=cmp><thead><tr><th>причина</th><th>суммарно</th><th>операций</th><th>запросов LLM</th><th>доля</th></tr></thead><tbody>';
- (IDLE.by_cause||[]).forEach(r=>{const sh=IDLE.total_s?Math.round(100*r.total/IDLE.total_s):0;
+ // share = each cause's part of the SUM of cause times, so the column adds up
+ // to ~100%. (Dividing by total_s was wrong: LLM causes report real call time
+ // from the llm-log while total_s sums trace-gap wall time — different clocks,
+ // so the biggest row read as 100% and the rest as fractions of it.)
+ const causeSum=(IDLE.by_cause||[]).reduce((s,r)=>s+(r.total||0),0)||1;
+ (IDLE.by_cause||[]).forEach(r=>{const sh=Math.round(100*(r.total||0)/causeSum);
   h+=`<tr><td style="color:${causeColor(r.cause)}">${esc(r.cause)}</td>`+
    `<td>${fmtDur(r.total)}</td><td>${r.count}</td><td>${r.llm||0}</td>`+
    `<td><span style="display:inline-block;height:8px;background:${causeColor(r.cause)};width:${sh}px;max-width:120px"></span> ${sh}%</td></tr>`;});
