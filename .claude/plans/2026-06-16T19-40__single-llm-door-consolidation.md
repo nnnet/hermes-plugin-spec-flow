@@ -217,3 +217,53 @@ checkpoint/verify/product_entry, источник НЕ hitl/requirements, вме
 Шаблон перевода: заменить `monkeypatch.setattr(lb,"_http_post"/"ask"/...)` на
 `fake_openai([(200, ok(json.dumps(reply)))])` (контролируемый ответ) ИЛИ
 `real_bifrost` (живой) ИЛИ `dead_endpoint` (сбой); ассертить по `srv.requests`.
+
+---
+
+## PROGRESS 2026-06-16 (сессия после компакта)
+
+### Снос ЛЛМ-monkeypatch — СДЕЛАНО 7 файлов (+2 ранее)
+test_specialist_config, test_spec_lint, test_memory_learning,
+test_parallel_children, test_pytest_verifier, test_memory_modes,
+test_orchestra_remote — переведены на реальные семы (`fake_openai`/
+`real_bifrost`/`dead_endpoint`). Ранее: test_llm_backend, test_cycle_fallbacks.
+Коммиты: 653b48c, 8beb3fb, 9fdcc54, 755db6f.
+
+`harness_fakeapi.FakeOpenAI` доработан: `ThreadingHTTPServer` + lock + `delay`
++ `peak_concurrency` (реальный замер одновременных вызовов клиента).
+Модель роли в тестах резолвится на `openrouter/x:free` через конфиг-сем
+`_model_for`/`chain_for` (не подмена вызова) — обход free-only гейта.
+
+### Решение юзера по порядку: СНАЧАЛА Фаза 4, потом весь снос claude-плеча разом
+~Половина стабов worker_config(21)+role_workers(20) — claude-плечо
+(_ask_claude/_run_claude/subprocess). Детерминированно «по-настоящему»
+тестируется только после унификации claude-бэкенда (Фаза 4).
+
+### Фаза 2 (#76) — ЗАКРЫТА (727d3a5)
+Провайдер сложен в дверь: `ask(provider=..., provider_call=...)` — адаптер
+первое звено цепочки; при отказе обычный `llm_fallback` (с полем provider) и
+проваливание в локальную цепочку. `_call_model` больше не делает свой
+try/except+`provider_fallback` на chat-пути. Весь набор зелёный (883).
+
+### Фаза 4 (#78) — ЧАСТЬ 1 ЗАКРЫТА (133d14e): claude через HTTP-шлюз
+`workers.claude_gateway {base_url, api_key?, model_map?}` (или env
+`SPEC_FLOW_CLAUDE_GATEWAY`) → `_ask_one` гонит `claude/<m>` по тому же
+реальному HTTP-пути (`_ask_openai` с per-call base_url/api_key) на шлюз
+(bifrost отдаёт `anthropic/claude-haiku-4-5`). По умолчанию выкл → CLI
+(prod не тронут). Это РАЗБЛОКИРУЕТ детерминированный тест claude-плеча
+(реальный 429/200). Тест: `llm/test_claude_gateway.py` (3 шт, вкл. реальный
+chain-fallback). Набор зелёный (511).
+
+ЧАСТЬ 2 Фазы 4 (ОСТАЛОСЬ): перенос АГЕНТСКОГО `_run_claude` (CLI с tools/MCP) в
+llm_backend как claude-бэкенд под дверью. Это CLI-only (агентские tools нельзя
+по plain-HTTP), prod-путь дефолтного non-chat режима — РИСКОВО, нужен реальный
+прогон headroom-haiku для верификации. Отдельный аккуратный шаг.
+
+### Дальше (порядок)
+1. #80 разом: worker_config + role_workers claude-плечо — через
+   `configure_workers({"claude_gateway": {"base_url": srv.base_url}})` +
+   `fake_openai`/`real_bifrost`; openai-плечо — `fake_openai` сразу.
+   role_workers `_run_claude` агентские — после ЧАСТИ 2 Фазы 4 или real headroom.
+2. Фаза 3 (#77): `llm_attempt` на claude-CLI/provider путях + лог ответов.
+3. ЧАСТЬ 2 Фазы 4: агентский `_run_claude` в дверь.
+4. Фаза 5 (#79): дашборд на унифицированные события + значок `⚙️` техн-инъекций.
