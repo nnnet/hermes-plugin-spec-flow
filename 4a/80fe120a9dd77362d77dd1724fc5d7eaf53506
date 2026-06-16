@@ -1,0 +1,47 @@
+tests/workers/test_orchestra.py
+  s_a7f45290e91181::t_6a385417e16075 139
+  s_a7f45290e91181::t_4a810d6732e933 147
+tests/dashboard/test_dashboard_idle.py
+  s_a7f45290e91181::t_09952eae369339 210-233
+  s_a7f45290e91181::t_56081d92544032 89-96
+  s_a7f45290e91181::t_10874450120ba0 133-209,234-249
+tests/lib/live_dashboard.py
+  s_a7f45290e91181::t_7878eb30901acc 1141-1145,1154-1155,1157-1165
+  s_a7f45290e91181::t_00c1c52e818a60 858
+  s_a7f45290e91181::t_ac35dabb6a779d 1086-1091,1101-1104
+  s_a7f45290e91181::t_8d4f9bbdb9e2e7 1132-1140,1146-1153,1156,1166-1168,1177
+  s_a7f45290e91181::t_29f631392f560a 992-1011
+  s_a7f45290e91181::t_b867131b373473 983-988
+  s_a7f45290e91181::t_0971ad20380850 934-943,957-962
+  s_a7f45290e91181::t_67160615d237b0 1068-1069
+  s_a7f45290e91181::t_5d97b93eb30d0f 859-860
+  s_a7f45290e91181::t_a4488e970b64ae 1033-1043,1049-1059,1061-1067,1070-1085
+  s_a7f45290e91181::t_1ca3f34100c84a 1044-1048,1060
+tests/harness/role_worker.py
+  s_a7f45290e91181::t_128505a8e3b337 575,579-580,586,594-595,597-600
+  s_a7f45290e91181::t_613b118d7710b2 757
+  s_a7f45290e91181::t_47baf9b36ba5e6 783
+  s_a7f45290e91181::t_ba528f4e45a36e 732-734,743-744
+  s_a7f45290e91181::t_c9fa43b9b651ef 297
+  s_a7f45290e91181::t_15c281bac1995d 261,268-270,273
+  s_a7f45290e91181::t_a69c3ebb02052e 160-161,166-187
+tests/harness/llm_log.py
+  s_a7f45290e91181::t_1aea516ee1ef3e 79-80,82-100,102-107,111-113,115-117
+  s_a7f45290e91181::t_f28fc6120cc671 29-37,42-43
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "4a80fe120a9dd77362d77dd1724fc5d7eaf53506",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
