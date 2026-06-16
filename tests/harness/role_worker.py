@@ -1177,6 +1177,14 @@ positional arguments (payload, query) and return (status_code, dict) — the
 platform dispatcher calls handler(payload, query); your tests MUST invoke
 handlers through that exact signature, or the assembled app dies at the
 smoke gate while your leaf stays green.
+If you write a RAW WSGI app (def wsgi_app(environ, start_response)): NEVER read
+the request body with a bare environ['wsgi.input'].read() — with no length it
+blocks waiting for an EOF that never comes on a real server, so every POST
+HANGS forever (your unit test passes because its fake BytesIO reaches EOF, but
+the assembled product times out at the boot gate). ALWAYS read exactly the
+declared length:
+    n = int(environ.get('CONTENT_LENGTH') or 0)
+    body = environ['wsgi.input'].read(n)
 Test ONLY your own module in isolation. NEVER author whole-product or
 cross-feature end-to-end tests — the platform smoke suite (tests/smoke/)
 owns the assembled-product check and runs at the root integrate; a copy of

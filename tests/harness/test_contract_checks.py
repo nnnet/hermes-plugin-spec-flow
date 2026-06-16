@@ -249,3 +249,32 @@ def test_realness_violations_filters_by_module(tmp_path):
     only_a = cc.realness_violations(str(tmp_path), modules={"a"})
     assert only_a and all("/a.py" in x for x in only_a)
     assert cc.realness_violations(str(tmp_path), modules={"b"}) == []
+
+
+def test_unbounded_wsgi_body_read_is_flagged(tmp_path):
+    # a raw WSGI handler reading the body with a bare .read() HANGS every POST
+    _src(tmp_path, "api.py",
+         "def wsgi_app(environ, start_response):\n"
+         "    body = environ['wsgi.input'].read()\n"
+         "    return [body]\n")
+    v = cc.wsgi_body_read_violations(str(tmp_path))
+    assert len(v) == 1 and "UNBOUNDED" in v[0] and "api.py:2" in v[0]
+    # and it travels through the leaf realness gate for that module
+    assert cc.realness_violations(str(tmp_path), modules={"api"})
+
+
+def test_bounded_wsgi_body_read_is_clean(tmp_path):
+    # reading exactly CONTENT_LENGTH bytes is correct -> no violation
+    _src(tmp_path, "api.py",
+         "def wsgi_app(environ, start_response):\n"
+         "    n = int(environ.get('CONTENT_LENGTH') or 0)\n"
+         "    body = environ['wsgi.input'].read(n)\n"
+         "    return [body]\n")
+    assert cc.wsgi_body_read_violations(str(tmp_path)) == []
+
+
+def test_non_wsgi_module_is_ignored(tmp_path):
+    # a bare .read() unrelated to wsgi.input is not our concern
+    _src(tmp_path, "io_util.py",
+         "def load(p):\n    return open(p).read()\n")
+    assert cc.wsgi_body_read_violations(str(tmp_path)) == []

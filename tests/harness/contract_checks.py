@@ -23,6 +23,7 @@ than duplicating, and adds the import-but-unbuilt / mock-local / stub-body
 from __future__ import annotations
 
 import ast
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -345,13 +346,53 @@ def smoke_only_tests(root: str) -> list:
     return sorted(set(viol))
 
 
+_WSGI_BARE_READ = re.compile(r"\.read\(\s*\)")
+
+
+def wsgi_body_read_violations(root: str) -> list:
+    """Flag a WSGI handler that reads the request body UNBOUNDED — a real
+    hang-bug, not a style nit.
+
+    Why: ``environ['wsgi.input'].read()`` with no length blocks waiting for an
+    EOF that never comes on a real (keep-alive) server, so every POST HANGS —
+    the leaf's own unit test passes (its fake environ returns a BytesIO that
+    EOFs), but the assembled product times out at the boot gate. A recurring
+    weak-model error class; catch it deterministically, model-independently.
+    What: for each src module that touches ``wsgi.input``, flag a bare
+    ``.read()`` (no length arg) unless that line bounds it via CONTENT_LENGTH.
+    Test: a handler doing ``wsgi.input.read()`` ⇒ one violation; one doing
+    ``read(int(environ['CONTENT_LENGTH']))`` ⇒ none.
+    """
+    out: list = []
+    srcdir = Path(root) / "src"
+    if not srcdir.is_dir():
+        return out
+    for p in sorted(srcdir.glob("*.py")):
+        try:
+            src = p.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if "wsgi.input" not in src:
+            continue
+        for i, line in enumerate(src.splitlines(), 1):
+            if _WSGI_BARE_READ.search(line) and "CONTENT_LENGTH" not in line:
+                out.append(
+                    f"src/{p.name}:{i} reads the WSGI request body UNBOUNDED "
+                    "(wsgi.input.read() with no length) — this HANGS every POST "
+                    "under a real server; read exactly "
+                    "int(environ.get('CONTENT_LENGTH') or 0) bytes")
+    return out
+
+
 def realness_violations(root: str, modules=None) -> list:
     """Combined 'no fake product' check for a LEAF or BRANCH at REVIEW time:
-    stub bodies + mocks of a local module + smoke-only tests. When ``modules``
-    is given (a set of src stems, e.g. the node's own file), only violations in
-    those files are returned — so a per-node review flags ONLY that node's
-    hollow code. Used by the leaf gate; the full set runs at integrate."""
-    v = stub_bodies(root) + mocks_local_module(root) + smoke_only_tests(root)
+    stub bodies + mocks of a local module + smoke-only tests + unbounded WSGI
+    body reads. When ``modules`` is given (a set of src stems, e.g. the node's
+    own file), only violations in those files are returned — so a per-node
+    review flags ONLY that node's hollow code. Used by the leaf gate; the full
+    set runs at integrate."""
+    v = (stub_bodies(root) + mocks_local_module(root) + smoke_only_tests(root)
+         + wsgi_body_read_violations(root))
     if modules:
         keep = []
         for line in v:
@@ -407,6 +448,7 @@ def run_all(root: str) -> list:
     viol += mocks_local_module(root)
     viol += stub_bodies(root)
     viol += smoke_only_tests(root)        # forbid always-green / no-assert tests
+    viol += wsgi_body_read_violations(root)   # forbid POST-hanging body reads
     # reuse existing deterministic detectors (don't duplicate them)
     for f, mod, name in _cross_module_import_violations(root):
         viol.append(f"{f} imports '{name}' from '{mod}' but src/{mod}.py "
