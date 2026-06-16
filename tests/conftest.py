@@ -93,3 +93,31 @@ def plugin(tmp_path, monkeypatch):
     pkg.register(object())  # triggers import of spec_flow_tools + registration
     tools = sys.modules[_PKG + ".spec_flow_tools"]
     return types.SimpleNamespace(pkg=pkg, reg=reg, ts=ts, tools=tools, tmp=tmp_path)
+
+
+@pytest.fixture
+def fake_openai():
+    """Point the REAL backend at a REAL local OpenAI-compatible server (no
+    monkeypatch). ``fake_openai(script, retries=3, backoff=0.01)`` starts a
+    localhost endpoint serving ``script`` ([(status, body), ...]) and sets the
+    backend CONFIG to it; the harness's real HTTP path runs against it. Config
+    is restored on teardown. See tests/harness_fakeapi.py."""
+    from harness import llm_backend as lb
+    from harness_fakeapi import FakeOpenAI
+
+    started = []
+    keys = ("BASE_URL", "API_KEY", "RETRIES", "BACKOFF", "BACKEND")
+    saved = {k: getattr(lb, k) for k in keys}
+
+    def _make(script, *, retries=3, backoff=0.01):
+        srv = FakeOpenAI(script).__enter__()
+        started.append(srv)
+        lb.BASE_URL, lb.API_KEY = srv.base_url, "test-key"
+        lb.RETRIES, lb.BACKOFF, lb.BACKEND = retries, backoff, "openai"
+        return srv
+
+    yield _make
+    for k, v in saved.items():
+        setattr(lb, k, v)
+    for srv in started:
+        srv.__exit__(None, None, None)
