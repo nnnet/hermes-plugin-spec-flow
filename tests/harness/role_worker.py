@@ -1654,7 +1654,11 @@ def make_reviewer() -> Callable[[dict], dict]:
             refusals=_review_refusals(ctx.get("node")))
         raw = _call_model(prompt, system=system, allowed=allowed,
                           disallowed=disallowed, cwd=ctx.get("workspace_root"),
-                          model=model, role="reviewer")
+                          model=model, role="reviewer",
+                          # carry node+title so the live status shows WHICH node
+                          # is being reviewed instead of «None»
+                          meta={"node": ctx.get("node"),
+                                "title": ctx.get("title") or ctx.get("node")})
         out = _extract_json(raw)
         llm_log.log_outcome(role="reviewer", worker=True, node=ctx.get("node", "?"),
                             depth=-1, model=model, prompt=prompt, reply=raw, ok=True)
