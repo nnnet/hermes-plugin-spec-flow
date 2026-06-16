@@ -349,7 +349,97 @@ def _kv_table(d: dict) -> str:
     return "| параметр | значение |\n|---|---|\n" + "\n".join(rows) if rows else ""
 
 
-def _inputs_md(run_dir: pathlib.Path) -> str:
+def _team_card_md(run_dir: pathlib.Path, llm: list[dict]) -> list[str]:
+    """Render the team card for a role whose executor is a TEAM (orchestra).
+
+    Why: a role can be a single worker or a team of specialists; when it is a
+    team the operator must see WHO is in it — each specialist, its function
+    (role), where it runs (provider) and on what model/params — so the run is
+    not an opaque "implementer". A single-worker run shows no card.
+
+    What: returns markdown lines (a `## …` header + a table) listing each
+    specialist → role → provider → model → params. The team config is read
+    DEFENSIVELY from two sources, in order: (1) the run's persisted config
+    (`meta.json` / `inputs.json` ``workers.<role>.team``, accepting both the bare
+    ``[{role}…]`` list and the richer ``team: {specialists: [{role, provider,
+    model, params}…]}`` shape); (2) if the config is absent, the team is
+    reconstructed from the llm-log (``orchestra_start.steps`` for the roster, the
+    per-step ``model`` from the orchestra ``call_start`` records, provider
+    defaulting to "local"). Returns [] when no team is defined (solo run).
+
+    Test: a case whose ``workers.implementer.team.specialists`` lists role +
+    provider + model + params yields a card with those columns; a run with no
+    team config but an orchestra llm-log yields a card derived from the log;
+    a solo run yields [].
+    """
+    def _load(name: str) -> dict:
+        f = run_dir / name
+        if not f.exists():
+            return {}
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+            return d if isinstance(d, dict) else {}
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+    workers = _load("meta.json").get("workers") or _load("inputs.json").get("workers")
+    # per-step models actually seen in the log (fills config gaps / log-only mode)
+    log_models: dict = {}
+    for s in (_orchestra_sequences(llm) or {}).values():
+        for st in s:
+            if st.get("step") and st.get("model"):
+                log_models.setdefault(str(st["step"]), st["model"])
+
+    teams: list[tuple[str, list]] = []          # (role_owner, [specialist dicts])
+    if isinstance(workers, dict):
+        for owner, cfg in workers.items():
+            if not isinstance(cfg, dict):
+                continue
+            team = cfg.get("team")
+            specs = None
+            if isinstance(team, dict):
+                specs = team.get("specialists")
+            elif isinstance(team, list):
+                specs = team
+            if isinstance(specs, list) and specs:
+                norm = [s if isinstance(s, dict) else {"role": s} for s in specs]
+                teams.append((str(owner), norm))
+    if not teams:
+        # no persisted config — reconstruct the roster from the llm-log
+        roster: list = []
+        for e in llm:
+            if e.get("event") == "orchestra_start":
+                for r in (e.get("steps") or []):
+                    if r not in roster:
+                        roster.append(r)
+        if not roster:
+            roster = list(log_models.keys())
+        if roster:
+            teams.append(("implementer", [{"role": r} for r in roster]))
+
+    if not teams:
+        return []
+
+    role_ru = {"implementer": "исполнитель", "decomposer": "декомпозитор",
+               "reviewer": "ревьюер", "verifier": "верификатор"}
+    out = ["## 👥 Команда (специалисты роли)"]
+    for owner, specs in teams:
+        out.append(f"**Роль-владелец:** {role_ru.get(owner, owner)}")
+        rows = ["| специалист | роль (функция) | провайдер | модель | параметры |",
+                "|---|---|---|---|---|"]
+        for s in specs:
+            role = s.get("role") or s.get("specialist") or "—"
+            provider = s.get("provider") or "local"
+            model = s.get("model") or log_models.get(str(role)) or "—"
+            params = s.get("params") or {}
+            ptxt = ", ".join(f"{k}={v}" for k, v in params.items()) \
+                if isinstance(params, dict) and params else "—"
+            rows.append(f"| {role} | {role} | {provider} | {model} | {ptxt} |")
+        out.append("\n".join(rows))
+    return out
+
+
+def _inputs_md(run_dir: pathlib.Path, llm: list[dict] | None = None) -> str:
     ws = run_dir / "workspace"
     inp, meta = {}, {}
     if (run_dir / "inputs.json").exists():
@@ -434,6 +524,9 @@ def _inputs_md(run_dir: pathlib.Path) -> str:
               "implementer": "исполнитель", "verifier": "верификатор"}
         rows = {ru.get(role, role): model for role, model in wm.items()}
         out += ["## 🧠 Карта роль → модель", _kv_table(rows)]
+    # team card: when a role's executor is a team, list its specialists. A
+    # single-worker run adds nothing here.
+    out += _team_card_md(run_dir, llm or [])
     return "\n\n".join(out) if out else "_исходные данные не записаны_"
 
 
@@ -621,6 +714,136 @@ def _flow_timeaxis(events: list[dict], tree: dict | None = None) -> str | None:
                          f'padding:3px 6px;box-sizing:border-box;line-height:1.2">{label}</div>')
     p.append('</div>')
     return "".join(p)
+
+
+# ── orchestra: per-node specialist call sequence (architect→coder→tester→fixer)─
+def _orchestra_sequences(llm: list[dict]) -> dict:
+    """Reconstruct, per implement node, the ORDERED specialist call sequence of
+    an orchestra (D1: architect → coder → tester → fixer, with loops such as
+    tester → fixer → tester).
+
+    Why: the flow tab shows node-level milestones; a team node hides WHICH
+    specialist ran when and for how long. This exposes the real per-specialist
+    sequence so a team run is legible (who, on what model, how long).
+
+    What: returns ``{node_id: [ {step, model, latency_s, wall, t}, ... ]}`` in
+    call order. The data comes from ``llm_log.timed_ask``: the per-step ``model``
+    + ``step`` live on the ``call_start`` request (mode == "orchestra"); the real
+    ``latency_s`` lives on the paired ``call_ok`` (which drops ``step``/``model``
+    by design), so we splice the two in arrival order per node. A node listed in
+    an ``orchestra_start`` event but with no call records yet appears as an empty
+    list (the team is known before any specialist has answered).
+
+    Test: feed an orchestra_start + 4 call_start/call_ok pairs (architect, coder,
+    tester, fixer with one tester→fixer→tester loop); assert the returned list is
+    ordered, carries each step's model + duration, and the loop repeats `tester`.
+    """
+    seqs: dict = {}
+    # seed known orchestra nodes (team is announced before any call returns)
+    for e in llm:
+        if e.get("event") == "orchestra_start":
+            seqs.setdefault(str(e.get("node")), [])
+    # pending call_start per node, paired FIFO with the next call_ok of that node
+    pending: dict = {}
+    for e in llm:
+        ev = e.get("event")
+        if ev == "call_start" and e.get("mode") == "orchestra" and e.get("step"):
+            node = str(e.get("node"))
+            rec = {"step": str(e.get("step")), "model": e.get("model"),
+                   "latency_s": None, "wall": e.get("wall"), "t": e.get("t")}
+            seqs.setdefault(node, []).append(rec)
+            pending.setdefault(node, []).append(rec)
+        elif ev == "call_ok" and e.get("mode") == "orchestra":
+            node = str(e.get("node"))
+            q = pending.get(node)
+            if q:
+                rec = q.pop(0)
+                if isinstance(e.get("latency_s"), (int, float)):
+                    rec["latency_s"] = float(e["latency_s"])
+                # the call_ok carries the authoritative completion wall clock
+                if e.get("wall") is not None:
+                    rec["wall"] = e.get("wall")
+    return seqs
+
+
+def _flow_orchestra_html(llm: list[dict]) -> str | None:
+    """Per-specialist breakdown for the flow tab — ADDED beneath the existing
+    milestone time-axis, never replacing it.
+
+    Why: a solo node already shows one implement milestone; an orchestra node
+    must additionally reveal its specialist call sequence with real durations so
+    the team's work is visible without redesigning the flow form.
+
+    What: for each implement node that ran an orchestra, renders one card with
+    the ordered chain ``architect → coder → tester → fixer`` (loops repeat) on
+    the SAME vertical convention as the milestone axis (call order top→bottom),
+    each box showing the specialist (its function/role), its model, and the real
+    ``latency_s``. Returns None when no orchestra ran (solo run → nothing added).
+
+    Test: a synthetic orchestra llm-log yields a fragment containing each
+    specialist name, its model, and its duration; a solo llm-log yields None.
+    """
+    seqs = _orchestra_sequences(llm)
+    seqs = {n: s for n, s in seqs.items() if s}        # drop announced-but-empty
+    if not seqs:
+        return None
+
+    def esc(s: object) -> str:
+        return (str(s).replace("&", "&amp;").replace("<", "&lt;")
+                .replace(">", "&gt;"))
+
+    # function/role glyph per specialist so the chain reads at a glance
+    glyph = {"architect": "📐", "coder": "💻", "tester": "🧪", "fixer": "🔧"}
+    out = ['<div class=orchestra style="margin-top:14px">',
+           '<h4 style="color:#79c0ff;margin:0 0 6px">🎻 Оркестр: '
+           'последовательность вызовов специалистов</h4>',
+           '<p class=dim style="margin:0 0 8px">для узлов с командой — порядок '
+           'специалистов (роль = функция), модель и реальная длительность; '
+           'циклы (тестер→ремонтник→тестер) повторяются</p>']
+    for node in sorted(seqs):
+        steps = seqs[node]
+        out.append('<div style="margin:0 0 12px;border:1px solid #21262d;'
+                   'border-radius:6px;padding:8px 10px">')
+        out.append(f'<div style="color:#adbac7;font-weight:600;margin-bottom:6px">'
+                   f'{esc(node)}</div>')
+        for i, st in enumerate(steps):
+            role = esc(st.get("step"))
+            ico = glyph.get(str(st.get("step")), "•")
+            model = esc(st.get("model") or "—")
+            lat = st.get("latency_s")
+            dur = f'{lat:.1f}s' if isinstance(lat, (int, float)) else '—'
+            arrow = ('<div style="color:#30363d;margin:1px 0 1px 6px">↓</div>'
+                     if i else '')
+            out.append(arrow)
+            out.append(
+                f'<div style="background:#161b22;border:1px solid #2f5d40;'
+                f'border-radius:6px;padding:4px 8px;line-height:1.3">'
+                f'<b style="color:#adbac7">{ico} {role}</b>'
+                f' <span style="color:#8b949e">· {model}</span>'
+                f' <span style="color:#6e7681">· {dur}</span></div>')
+        out.append('</div>')
+    out.append('</div>')
+    return "".join(out)
+
+
+def _flow_html(events: list[dict], tree: dict | None,
+               llm: list[dict]) -> str | None:
+    """Compose the flow tab: the EXISTING milestone time-axis (unchanged form)
+    plus, when a team ran, the per-specialist orchestra breakdown beneath it.
+
+    Why: keep the established flow representation and ADD the specialist sequence
+    inside the same tab (the user asked to extend, not redesign the flow tab).
+
+    What: returns the time-axis fragment, the orchestra fragment, both, or None.
+
+    Test: a solo run (no orchestra) returns the time-axis only; an orchestra run
+    appends the specialist-sequence fragment after it.
+    """
+    axis = _flow_timeaxis(events, tree) if events else None
+    orch = _flow_orchestra_html(llm) if llm else None
+    if axis and orch:
+        return axis + orch
+    return axis or orch
 
 
 # ── state ────────────────────────────────────────────────────────────────────
@@ -834,8 +1057,8 @@ def _build_state(run_dir: pathlib.Path) -> dict:
         "feed": feed[-60:],
         "timeline": timeline[-250:],
         "reports": {
-            "inputs": _md_to_html(_inputs_md(run_dir)),
-            "flow": _flow_timeaxis(events, tree) if events else None,
+            "inputs": _md_to_html(_inputs_md(run_dir, llm)),
+            "flow": _flow_html(events, tree, llm),
             "report": report_html,
             "oracle": read_md("oracle-report.md"),
             "summary": read_md("SUMMARY.md"),
