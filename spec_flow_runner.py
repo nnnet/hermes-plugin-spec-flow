@@ -27,6 +27,7 @@ Depth ladder (`spec` < `scaffold` < `verify` < `execute` < `product`):
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
@@ -1765,6 +1766,13 @@ class Engine:
         entry = "src/app.py"
         if (Path(self.workspace.root) / entry).is_file():
             return None             # a feature leaf already built the entry
+        # The leaf pipeline derives the output file from the node id unless a
+        # code_target overrides it (code_fn = Path(code_target).stem). Without
+        # this the engine tracked src/product_entry.py while the constitution
+        # and the boot-gate demand src/app.py — a permanent name mismatch that
+        # left the worker writing only a test and the entry never built. Pin
+        # the target so the implementer writes EXACTLY src/app.py.
+        api = self._existing_src_api()
         # The implementer reads the node's SPEC, not a `requirement` field, so
         # the build directive goes into spec_markdown (which lands in the spec
         # body); the title is the short heading.
@@ -1777,21 +1785,57 @@ class Engine:
             "API contract declares to the matching handler/storage already "
             "present. The app must boot in a fresh process and answer "
             "`GET /health` -> 200. Standard library only.\n\n"
-            "### Constitution API contract\n"
+            + (api + "\n\n" if api else "")
+            + "### Constitution API contract\n"
             + "\n".join(f"- {r}" for r in (self._constitution or [])))
         return {"id": "product_entry",
                 "title": "Assemble product entry (" + entry + ")",
                 "spec_markdown": spec_md, "atomic": True,
-                # The assembly leaf has a FIXED, engine-declared target (src/app.py);
-                # it must never be amend-routed into a feature module. Without this
-                # the late-injection router once mis-folded it into src/database_layer
-                # (harmless only because the spec still forces app.py) — an entry
-                # written into a storage module is a real corruption risk.
+                # Pin the output file (see above) AND keep the leaf exempt from
+                # amend-routing: the assembly entry must never be folded into a
+                # feature module (the router once mis-folded it into a storage
+                # module — an entry written there is a real corruption risk).
+                "code_target": entry,
                 "_no_amend": True,
                 "metrics": {"modules": 1, "tasks": 2, "interfaces": 1,
                             "estimated_loc": 60, "open_decisions": 0,
                             "single_concern": True,
                             "testable_criteria": True}}
+
+    def _existing_src_api(self) -> str:
+        """A deterministic, model-independent map of the public callables the
+        assembly leaf must import — top-level functions/classes (with arg
+        names) of every module already built under src/. A weak model fails to
+        wire the entry when it has to guess these names; handing it the real
+        surface makes the import-and-route task mechanical. Pure AST, no import,
+        no execution."""
+        root = Path(self.workspace.root) / "src"
+        if not root.is_dir():
+            return ""
+        lines: list = []
+        for py in sorted(root.glob("*.py")):
+            if py.name in ("app.py", "__init__.py"):
+                continue
+            try:
+                tree = ast.parse(py.read_text(encoding="utf-8", errors="replace"))
+            except (OSError, SyntaxError):
+                continue
+            syms: list = []
+            for n in tree.body:
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if n.name.startswith("_"):
+                        continue
+                    args = ", ".join(a.arg for a in n.args.args)
+                    syms.append(f"`def {n.name}({args})`")
+                elif isinstance(n, ast.ClassDef):
+                    if not n.name.startswith("_"):
+                        syms.append(f"`class {n.name}`")
+            if syms:
+                lines.append(f"- `src/{py.name}`: " + ", ".join(syms))
+        if not lines:
+            return ""
+        return ("### Modules already built under `src/` "
+                "(import these, do NOT reimplement)\n" + "\n".join(lines))
 
     def _node_driver(self, node: dict, kind: str) -> _NodeDriver:
         """Build the lifecycle guard for one node under the active engine."""

@@ -137,6 +137,36 @@ def test_assembly_node_carries_no_amend_marker():
         _os.environ.pop("SPEC_FLOW_PRE_GATE", None)
 
 
+def test_assembly_node_pins_app_target_and_lists_built_api(tmp_path):
+    # Two binding properties of the assembly leaf:
+    #  1. code_target == src/app.py — the leaf pipeline derives the output file
+    #     from the node id unless code_target overrides it; without the pin the
+    #     engine tracked src/product_entry.py while the boot-gate wanted app.py
+    #     (the v024 'wrote a test, never built the entry' miss).
+    #  2. the spec carries the REAL public API of the already-built src modules
+    #     (AST-extracted) so a weak model can import-and-route mechanically.
+    import os as _os
+    _os.environ["SPEC_FLOW_PRE_GATE"] = "1"
+    try:
+        ws = tmp_path / "wk"
+        (ws / "src").mkdir(parents=True)
+        (ws / "src" / "notes_database.py").write_text(
+            "def store(text):\n    return 1\n"
+            "def all_notes():\n    return []\n"
+            "def _private():\n    return 0\n", encoding="utf-8")
+        e = eng.Engine.__new__(eng.Engine)
+        e._constitution = _CONSTITUTION
+        e.workspace = type("W", (), {"root": str(ws)})()
+        node = e._assembly_node()
+        assert node and node["code_target"] == "src/app.py"
+        spec = node["spec_markdown"]
+        assert "src/notes_database.py" in spec
+        assert "def store(text)" in spec and "def all_notes()" in spec
+        assert "_private" not in spec      # private symbols are excluded
+    finally:
+        _os.environ.pop("SPEC_FLOW_PRE_GATE", None)
+
+
 def test_assembly_entry_is_never_amend_routed(tmp_path, monkeypatch):
     # Even with the late-injection matcher armed and FORCED to return a target
     # for any node, the assembly entry must NOT be re-routed — its code stays
