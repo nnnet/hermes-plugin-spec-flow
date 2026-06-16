@@ -189,12 +189,12 @@ workers:
   # remote specialist still carries a `model:` used as a graceful fallback if
   # its service is unreachable (a provider_fallback event records the gap).
   defaults:
-    models: ["openrouter/qwen/qwen3-coder:free", "openrouter/deepseek/deepseek-chat-v3.1:free", "claude/haiku"]
+    models: ["openrouter/qwen/qwen3-coder:free", "claude/haiku"]
   stages:
     decompose:                          # weak free primary; haiku fallback (no mimo)
       models: ["openrouter/qwen/qwen3-next-80b-a3b-instruct:free", "openrouter/qwen/qwen3-coder:free", "claude/haiku"]
     implement:
-      models: ["openrouter/qwen/qwen3-coder:free", "openrouter/deepseek/deepseek-chat-v3.1:free", "xiaomimimo/mimo-v2.5", "claude/haiku"]
+      models: ["openrouter/qwen/qwen3-coder:free", "xiaomimimo/mimo-v2.5", "claude/haiku"]
       # MIXED team: local LLMs + a Hermes agent + a Mission-Control agent. Each
       # remote specialist keeps a local `model:` as the fallback. Secrets
       # (token/api_key) are NEVER in this file — the adapter reads them from the
@@ -204,7 +204,7 @@ workers:
           - {role: architect, model: "openrouter/qwen/qwen3-next-80b-a3b-instruct:free", params: {temperature: 0.2}}
           - {role: coder,     model: "openrouter/qwen/qwen3-coder:free", params: {temperature: 0.4, max_tokens: 4000}}
           - {role: tester,    provider: hermes,          agent: "tester",
-             gateway: "http://127.0.0.1:8642", model: "openrouter/deepseek/deepseek-chat-v3.1:free"}
+             gateway: "http://127.0.0.1:8642", model: "openrouter/qwen/qwen3-coder:free"}
           - {role: fixer,     provider: mission-control, agent_template: "fixer",
              api: "http://127.0.0.1:3000", model: "xiaomimimo/mimo-v2.5"}
     review:                             # weak free primary; haiku fallback (no mimo)

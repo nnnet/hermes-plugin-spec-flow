@@ -475,3 +475,25 @@ def test_ask_logs_token_usage_at_exit(monkeypatch, tmp_path):
     assert real["estimated"] is False and real["prompt_tokens"] == 11
     assert est["estimated"] is True and est["completion_tokens"] > 0
     assert est["step"] == "coder"
+
+
+def test_paid_guard_allows_free_provider_model(monkeypatch):
+    # A model routed to a provider declared with a free daily quota
+    # (requests_per_day) must be allowed even without a ':free' suffix —
+    # e.g. xiaomimimo. A genuine paid model is still rejected.
+    try:
+        lb.configure_workers({
+            "backend": "openai", "base_url": "x",
+            "providers": [
+                {"name": "xiaomimimo", "kind": "openai",
+                 "model_prefix": "xiaomimimo/", "requests_per_day": 1000},
+                {"name": "orf", "kind": "openai", "model_prefix": "openrouter/",
+                 "require_suffix": ":free", "requests_per_day": 1000},
+            ],
+        })
+        assert lb._is_free_model("xiaomimimo/mimo-v2.5") is True
+        assert lb._is_free_model("openrouter/qwen/qwen3-coder:free") is True
+        # a model that matches no free provider and lacks ':free' is not free
+        assert lb._is_free_model("openrouter/qwen/qwen3-coder") is False
+    finally:
+        lb.configure_workers(None)

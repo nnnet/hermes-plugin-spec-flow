@@ -216,6 +216,21 @@ def _provider_for(model: str) -> dict | None:
         + ", ".join(str(p.get("name")) for p in provs))
 
 
+def _is_free_model(model: str) -> bool:
+    """A model is FREE if its id carries the OpenRouter ':free' marker OR it
+    routes to a provider the case declared with a free daily quota
+    (``requests_per_day``). The latter covers providers like ``xiaomimimo``
+    whose account keys are free even though the model id has no ':free' suffix —
+    so 'xiaomimimo/mimo-v2.5' must NOT be rejected by the paid-model guard."""
+    if ":free" in model:
+        return True
+    try:
+        prov = _provider_for(model)
+    except ValueError:
+        return False
+    return bool(prov and prov.get("requests_per_day"))
+
+
 def chain_for(role: str, specialty: str = "") -> list[str]:
     """Ordered model chain for a role: primary first, quota fallbacks after.
     Every entry is validated against the provider registry.
@@ -279,11 +294,12 @@ def _ask_one(prompt: str, model: str, system: str | None,
     if BACKEND != "openai":
         last_call.update(backend="claude", model=model, fallback=fallback)
         return _ask_claude(prompt, model, system=system)
-    if ":free" not in model and not ALLOW_PAID:
+    if not _is_free_model(model) and not ALLOW_PAID:
         raise ValueError(
-            f"paid model '{model}' is forbidden for test runs — only the"
-            " OpenRouter ':free' pool is allowed (SPEC_FLOW_ALLOW_PAID=1"
-            " to override deliberately)")
+            f"paid model '{model}' is forbidden for test runs — only free"
+            " models are allowed: an OpenRouter ':free' id, or one routed to a"
+            " provider declared with a free daily quota (requests_per_day),"
+            " e.g. xiaomimimo. (SPEC_FLOW_ALLOW_PAID=1 to override)")
     if time.time() < _free_down_until:
         raise QuotaExhausted("free pool inside its cooldown window")
     try:
