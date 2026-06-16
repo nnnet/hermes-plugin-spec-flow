@@ -17,6 +17,7 @@ import pytest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from harness import role_worker as rw   # noqa: E402
 from harness import llm_backend as lb    # noqa: E402
+from harness_fakeapi import ok           # noqa: E402
 
 
 @contextlib.contextmanager
@@ -111,28 +112,25 @@ def _stub_orchestra_machinery(monkeypatch):
     monkeypatch.setattr(rw, "_leaf_bar", lambda *a, **k: (True, "green"))
 
 
-def test_specialist_model_and_params_reach_backend(monkeypatch, tmp_path):
+def test_specialist_model_and_params_reach_backend(monkeypatch, tmp_path,
+                                                   fake_openai):
     """A coder specialist with its own model + params: the model used for its
     step is the declared one (not the role chain head), and the params dict is
-    threaded all the way down to llm_backend.ask."""
+    threaded all the way down to the real backend HTTP call. The model door is
+    NOT stubbed — the coder's reply is served by a real local OpenAI server and
+    we read the actual request the harness sent it."""
     monkeypatch.delenv("SPEC_FLOW_IMPLEMENTER_TEAM", raising=False)
     lb.configure_workers(None)
     _stub_orchestra_machinery(monkeypatch)
 
-    captured = {}
-
-    def fake_ask(prompt, *, model, system=None, fallbacks=(), role="",
-                 step="", params=None, meta=None):
-        captured["model"] = model
-        captured["params"] = params
-        return json.dumps({"files": {"src/leaf1.py": "x = 1\n"}})
+    reply = json.dumps({"files": {"src/leaf1.py": "x = 1\n"}})
+    srv = fake_openai([(200, ok(reply))])
 
     # the coder goes through _ensemble_generate -> _dialog_round -> _call_model
-    # -> (chat-only) llm_backend.ask; force the chat path and stub ask.
+    # -> (chat-only) llm_backend.ask -> real HTTP; force the chat path only.
     monkeypatch.setattr(rw, "_chat_only", lambda: True)
     monkeypatch.setattr(rw.llm_backend, "chain_for",
                         lambda role, specialty="": ["chainhead:free"])
-    monkeypatch.setattr(rw.llm_backend, "ask", fake_ask)
 
     team = [{"role": "coder", "model": "free/coder:free",
              "params": {"temperature": 0.4, "max_tokens": 4000}}]
@@ -140,40 +138,40 @@ def test_specialist_model_and_params_reach_backend(monkeypatch, tmp_path):
                       system="SYS", allowed=[], disallowed=[],
                       channel=None, team=team)
 
-    assert captured["model"] == "free/coder:free", \
+    payload = srv.requests[0]["payload"]
+    assert payload["model"] == "free/coder:free", \
         "the specialist's explicit model must be used for its step"
-    assert captured["params"] == {"temperature": 0.4, "max_tokens": 4000}, \
+    assert payload["temperature"] == 0.4 and payload["max_tokens"] == 4000, \
         "the specialist's params must reach the backend call"
 
 
-def test_specialist_without_model_falls_back_to_chain(monkeypatch, tmp_path):
+def test_specialist_without_model_falls_back_to_chain(monkeypatch, tmp_path,
+                                                      fake_openai):
     """A specialist with NO model uses the implementer role's chain head — the
-    same resolver the single-agent path uses (today's behaviour)."""
+    same resolver the single-agent path uses (today's behaviour). The reply is
+    served by the real local server; we read the model the harness really sent
+    and confirm a paramless step carries no sampling knobs."""
     monkeypatch.delenv("SPEC_FLOW_IMPLEMENTER_TEAM", raising=False)
     lb.configure_workers(None)
     _stub_orchestra_machinery(monkeypatch)
 
-    captured = {}
-
-    def fake_ask(prompt, *, model, system=None, fallbacks=(), role="",
-                 step="", params=None, meta=None):
-        captured["model"] = model
-        captured["params"] = params
-        return json.dumps({"files": {"src/leaf1.py": "x = 1\n"}})
+    reply = json.dumps({"files": {"src/leaf1.py": "x = 1\n"}})
+    srv = fake_openai([(200, ok(reply))])
 
     monkeypatch.setattr(rw, "_chat_only", lambda: True)
     monkeypatch.setattr(rw.llm_backend, "chain_for",
                         lambda role, specialty="": ["chainhead:free"])
-    monkeypatch.setattr(rw.llm_backend, "ask", fake_ask)
 
     team = [{"role": "coder"}]            # no model, no params
     rw._orchestra_run(_base_ctx(tmp_path), str(tmp_path), "leaf1", "leaf1",
                       system="SYS", allowed=[], disallowed=[],
                       channel=None, team=team)
 
-    assert captured["model"] == "chainhead:free", \
+    payload = srv.requests[0]["payload"]
+    assert payload["model"] == "chainhead:free", \
         "no specialist model -> the role chain head answers"
-    assert captured["params"] is None, "no params -> backend defaults (no dict)"
+    assert set(payload) == {"model", "messages"}, \
+        "no params -> backend defaults (no sampling knobs in the body)"
 
 
 # ── team-of-one equivalence + ordered multi-step run ──────────────────────
@@ -293,39 +291,27 @@ def test_openai_params_passlist():
     assert lb._openai_params({}) == {}
 
 
-def test_ask_threads_params_into_openai_payload(monkeypatch):
-    """ask(params={...}) must reach the OpenAI payload through the chain."""
-    monkeypatch.setattr(lb, "BACKEND", "openai")
+def test_ask_threads_params_into_openai_payload(monkeypatch, fake_openai):
+    """ask(params={...}) must reach the OpenAI payload through the real chain —
+    a live local server records the body the harness actually sent."""
     monkeypatch.setattr(lb, "_free_down_until", 0.0)
     lb.configure_workers(None)
-    seen = {}
-
-    def fake_post(url, payload, headers):
-        seen["payload"] = payload
-        return 200, json.dumps(
-            {"choices": [{"message": {"content": "ok"}}]})
-
-    monkeypatch.setattr(lb, "_http_post", fake_post)
+    srv = fake_openai([(200, ok("ok"))])
     out = lb.ask("q", model="openrouter/a:free",
-                 params={"temperature": 0.7, "max_tokens": 50}, role="decomposer", step="")
+                 params={"temperature": 0.7, "max_tokens": 50},
+                 role="decomposer", step="")
     assert out == "ok"
-    assert seen["payload"]["temperature"] == 0.7
-    assert seen["payload"]["max_tokens"] == 50
+    payload = srv.requests[0]["payload"]
+    assert payload["temperature"] == 0.7
+    assert payload["max_tokens"] == 50
 
 
-def test_ask_without_params_keeps_legacy_payload(monkeypatch):
-    """No params -> the payload is exactly {model, messages} as before, so a
-    paramless call is byte-for-byte the legacy request."""
-    monkeypatch.setattr(lb, "BACKEND", "openai")
+def test_ask_without_params_keeps_legacy_payload(monkeypatch, fake_openai):
+    """No params -> the body sent to the real server is exactly {model,
+    messages} as before, so a paramless call is byte-for-byte the legacy
+    request."""
     monkeypatch.setattr(lb, "_free_down_until", 0.0)
     lb.configure_workers(None)
-    seen = {}
-
-    def fake_post(url, payload, headers):
-        seen["payload"] = payload
-        return 200, json.dumps(
-            {"choices": [{"message": {"content": "ok"}}]})
-
-    monkeypatch.setattr(lb, "_http_post", fake_post)
+    srv = fake_openai([(200, ok("ok"))])
     lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
-    assert set(seen["payload"]) == {"model", "messages"}
+    assert set(srv.requests[0]["payload"]) == {"model", "messages"}
