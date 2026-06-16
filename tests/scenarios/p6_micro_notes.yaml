@@ -162,12 +162,15 @@ workers:
     models: ["openrouter/qwen/qwen3-next-80b-a3b-instruct:free", "claude/haiku"]
   implementer:
     models: ["openrouter/qwen/qwen3-coder:free", "openrouter/deepseek/deepseek-chat-v3.1:free", "claude/haiku"]
-    # D1: implementer orchestra — architect → coder → tester → fixer (free model).
+    # D1: implementer orchestra — per-specialist model + params (new schema).
+    # Each specialist names its own FREE model so the run exercises the team
+    # card + the specialist call sequence on the dashboard with distinct models.
     team:
-      - {role: architect}
-      - {role: coder}
-      - {role: tester}
-      - {role: fixer}
+      specialists:
+        - {role: architect, model: "openrouter/qwen/qwen3-next-80b-a3b-instruct:free", params: {temperature: 0.2}}
+        - {role: coder,     model: "openrouter/qwen/qwen3-coder:free",                  params: {temperature: 0.4, max_tokens: 4000}}
+        - {role: tester,    model: "openrouter/deepseek/deepseek-chat-v3.1:free"}
+        - {role: fixer,     model: "openrouter/qwen/qwen3-coder:free"}
   reviewer:
     models: ["claude/haiku", "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"]
   verifier:
