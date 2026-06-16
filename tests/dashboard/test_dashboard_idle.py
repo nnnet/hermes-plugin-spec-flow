@@ -55,6 +55,21 @@ def test_cause_classification(tmp_path):
     assert causes[60] == "реализация (LLM)"
 
 
+def test_llm_calls_counted_when_log_is_run_relative(tmp_path):
+    # the trace stamps EPOCH seconds; the llm-log stamps RUN-RELATIVE seconds.
+    # comparing the two bases directly made every per-gap LLM count read 0
+    # (decompose/review/implement showed 0 requests though they ARE LLM calls).
+    epoch0 = 1_781_000_000.0
+    rows = [_ev(epoch0, task="d", phase="decompose"),
+            _ev(epoch0 + 300, task="d", phase="decompose")]
+    # two calls fired inside the gap, logged run-relative (100s, 200s)
+    llm = [{"event": "call_start", "t": 100.0},
+           {"event": "call_start", "t": 200.0}]
+    a = dash._idle_analysis(_run(tmp_path, rows, llm))
+    assert a["top"][0]["llm"] == 2
+    assert sum(r.get("llm", 0) for r in a["by_cause"]) == 2
+
+
 def test_quota_wait_window_is_detected(tmp_path):
     rows = [_ev(0, task="x", phase="implement"),
             _ev(300, task="x", phase="implement")]

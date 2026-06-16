@@ -874,7 +874,19 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
                 trace.append(json.loads(line))
             except json.JSONDecodeError:
                 continue
-    # quota / error wait windows + LLM call timestamps from the llm-log
+    # quota / error wait windows + LLM call timestamps from the llm-log.
+    # The trace stamps events in EPOCH seconds, but the llm-log stamps them
+    # RUN-RELATIVE (0.003, 253.5, ...). Comparing the two bases directly made
+    # every "calls inside this gap" test false → the LLM-request column read 0
+    # for decompose/review/implement even though those ARE LLM calls. Normalise
+    # the llm-log timestamps onto the epoch axis via the run's start epoch.
+    run_start = float(trace[0].get("t") or 0.0) if trace else 0.0
+
+    def _epoch(t: float) -> float:
+        # already epoch (older harness) vs run-relative (current): a value far
+        # below the run start is run-relative seconds → shift onto the axis
+        return t if t >= run_start else run_start + t
+
     waits = []
     calls = []
     lf = run_dir / "llm-log.jsonl"
@@ -888,11 +900,12 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
             if ev_ in ("quota_wait", "error_round"):
                 t = e.get("t")
                 if t is not None:
-                    waits.append((float(t), float(e.get("wait_s", 0) or 0)))
+                    waits.append((_epoch(float(t)),
+                                  float(e.get("wait_s", 0) or 0)))
             elif ev_ == "call_start":
                 t = e.get("t")
                 if t is not None:
-                    calls.append(float(t))
+                    calls.append(_epoch(float(t)))
 
     def _cause(ev: dict, gap: float, t0: float, t1: float) -> str:
         for wt, _ws in waits:
