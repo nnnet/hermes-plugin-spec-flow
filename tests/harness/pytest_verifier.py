@@ -785,6 +785,7 @@ def make_verifier(model: Optional[str] = None,
                 raw = llm_backend.ask(
                     _REPAIR_TASK.format(output=out, files_block=files_block),
                     model=model,
+                    role="verifier", step="integrate-repair",  # tag → stage верификация
                     system=role_worker._with_language(
                         "You are the integration repair worker."))
                 m = re.search(r"\{.*\}", raw, re.S)
