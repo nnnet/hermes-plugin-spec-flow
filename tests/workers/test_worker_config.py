@@ -11,13 +11,29 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from harness import llm_backend as lb        # noqa: E402
+from harness_fakeapi import ok               # noqa: E402
+
+# An OpenRouter-free provider pool entry (most chain tests need it declared).
+_ORF = {"name": "openrouter-free", "kind": "openai",
+        "model_prefix": "openrouter/", "require_suffix": ":free"}
+
+
+def _gw(srv, **extra):
+    """Route claude/ models through the SAME local test server over real HTTP
+    (no CLI), so the claude fallback arm runs for real. ``model_map`` keeps the
+    short id ('haiku') as the wire model unless a test overrides it."""
+    cfg = {"claude_gateway": {"base_url": srv.base_url}, "providers": [_ORF]}
+    cfg.update(extra)
+    return cfg
 
 
 @pytest.fixture(autouse=True)
 def clean_cfg():
     lb.configure_workers(None)
+    lb._free_down_until = 0.0   # a prior test's real 429 must not leak a cooldown
     yield
     lb.configure_workers(None)
+    lb._free_down_until = 0.0
 
 
 CFG = {
@@ -73,39 +89,29 @@ def test_provider_suffix_requirement_enforced():
         lb.chain_for("implementer")
 
 
-def test_ask_walks_chain_on_quota_exhaustion(monkeypatch):
-    monkeypatch.setattr(lb, "BACKEND", "openai")
+def test_ask_walks_chain_on_quota_exhaustion(monkeypatch, fake_openai):
     monkeypatch.setattr(lb, "_free_down_until", 0.0)
-    calls = []
-
-    def fake_openai(prompt, model, system=None):
-        calls.append(("openai", model))
-        raise lb.QuotaExhausted("429")
-
-    def fake_claude(prompt, model, system=None, direct=False, timeout=None):
-        calls.append(("claude", model, direct))
-        return "chain answer"
-
-    monkeypatch.setattr(lb, "_ask_openai", fake_openai)
-    monkeypatch.setattr(lb, "_ask_claude", fake_claude)
+    # real server: the free primary 429s, then the claude fallback (routed over
+    # HTTP through the gateway) answers. Both hops are genuine HTTP calls.
+    srv = fake_openai([(429, "rate"), (200, ok("chain answer"))], retries=1)
+    lb.configure_workers(_gw(srv))
     out = lb.ask("q", model="openrouter/a:free",
                  fallbacks=["claude/haiku"], role="decomposer", step="")
-    monkeypatch.setattr(lb, "_free_down_until", 0.0)
     assert out == "chain answer"
-    assert calls == [("openai", "openrouter/a:free"),
-                     ("claude", "haiku", True)]
-    assert lb.last_call == {"backend": "claude", "model": "haiku",
+    # the wire shows the free primary then the claude fallback, in order
+    assert [r["model"] for r in srv.requests] == ["openrouter/a:free", "haiku"]
+    assert lb.last_call == {"backend": "claude-http", "model": "haiku",
                             "fallback": True}
 
 
-def test_explicit_claude_model_bypasses_free_gate(monkeypatch):
-    monkeypatch.setattr(lb, "BACKEND", "openai")
-
-    def fake_claude(prompt, model, system=None, direct=False, timeout=None):
-        return f"{model} direct={direct}"
-
-    monkeypatch.setattr(lb, "_ask_claude", fake_claude)
-    assert lb.ask("q", model="claude/haiku", role="decomposer", step="") == "haiku direct=True"
+def test_explicit_claude_model_bypasses_free_gate(fake_openai):
+    # a claude/ model spends no API budget, so the ':free' gate must NOT reject
+    # it — it reaches the backend (here the real gateway server) and answers.
+    srv = fake_openai([(200, ok("claude answered"))])
+    lb.configure_workers(_gw(srv))
+    assert lb.ask("q", model="claude/haiku",
+                  role="decomposer", step="") == "claude answered"
+    assert srv.requests[0]["model"] == "haiku"
 
 
 def test_paid_model_still_forbidden(monkeypatch):
@@ -116,22 +122,21 @@ def test_paid_model_still_forbidden(monkeypatch):
 
 # ─── run-wide LLM-call budget (quota limiter, off by default) ─────────
 
-def _stub_ok(monkeypatch):
-    monkeypatch.setattr(lb, "BACKEND", "openai")
-    monkeypatch.setattr(lb, "_free_down_until", 0.0)
-    monkeypatch.setattr(lb, "_ask_openai",
-                        lambda prompt, model, system=None: "ok")
+def _serve_ok(fake_openai):
+    # a real local server that always answers 'ok' — the backend config is
+    # pointed at it by the fixture, so ask() runs its real HTTP path.
+    return fake_openai([(200, ok("ok"))])
 
 
-def test_budget_off_by_default(monkeypatch):
-    _stub_ok(monkeypatch)
+def test_budget_off_by_default(fake_openai):
+    _serve_ok(fake_openai)
     for _ in range(5):
         assert lb.ask("q", model="openrouter/a:free", role="decomposer", step="") == "ok"
     assert lb.calls_made() == 5
 
 
-def test_budget_from_workers_block(monkeypatch):
-    _stub_ok(monkeypatch)
+def test_budget_from_workers_block(fake_openai):
+    _serve_ok(fake_openai)
     lb.configure_workers({"budget": 2})
     lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
     lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
@@ -139,33 +144,26 @@ def test_budget_from_workers_block(monkeypatch):
         lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
 
 
-def test_budget_from_env_without_block(monkeypatch):
-    _stub_ok(monkeypatch)
+def test_budget_from_env_without_block(monkeypatch, fake_openai):
+    _serve_ok(fake_openai)
     monkeypatch.setenv("SPEC_FLOW_LLM_BUDGET", "1")
     lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
     with pytest.raises(lb.BudgetExhausted):
         lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
 
 
-def test_chain_attempts_each_spend_budget(monkeypatch):
-    monkeypatch.setattr(lb, "BACKEND", "openai")
+def test_chain_attempts_each_spend_budget(monkeypatch, fake_openai):
     monkeypatch.setattr(lb, "_free_down_until", 0.0)
-
-    def exhausted(prompt, model, system=None):
-        raise lb.QuotaExhausted("429")
-
-    monkeypatch.setattr(lb, "_ask_openai", exhausted)
-    monkeypatch.setattr(
-        lb, "_ask_claude",
-        lambda prompt, model, system=None, direct=False, timeout=None: "ok")
-    lb.configure_workers({"budget": 10})
+    # free primary 429s, claude fallback (via gateway) answers — two real calls,
+    # so the run-wide budget counter must show two spends.
+    srv = fake_openai([(429, "rate"), (200, ok("ok"))], retries=1)
+    lb.configure_workers(_gw(srv, budget=10))
     lb.ask("q", model="openrouter/a:free", fallbacks=["claude/haiku"], role="decomposer", step="")
-    monkeypatch.setattr(lb, "_free_down_until", 0.0)
     assert lb.calls_made() == 2          # one free attempt + one fallback
 
 
-def test_configure_resets_budget_counter(monkeypatch):
-    _stub_ok(monkeypatch)
+def test_configure_resets_budget_counter(fake_openai):
+    _serve_ok(fake_openai)
     lb.configure_workers({"budget": 3})
     lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
     assert lb.calls_made() == 1
@@ -173,32 +171,22 @@ def test_configure_resets_budget_counter(monkeypatch):
     assert lb.calls_made() == 0
 
 
-def test_mixed_429_raises_quota_for_fallback(monkeypatch):
+def test_mixed_429_raises_quota_for_fallback(fake_openai):
     # one 429 among the retries is a quota signal — the old `all retries
     # throttled` rule let a final 429 surface as RuntimeError and killed
-    # a whole live run with no fallback
-    monkeypatch.setattr(lb, "BACKEND", "openai")
-    monkeypatch.setattr(lb, "_free_down_until", 0.0)
-    monkeypatch.setattr(lb, "BACKOFF", 0.0)
-    answers = [(500, "boom"), (429, '{"retry_after_seconds": 0}'),
-               (502, "bad gateway")]
-    monkeypatch.setattr(lb, "_http_post",
-                        lambda url, payload, headers: answers.pop(0))
+    # a whole live run with no fallback. A real server serves 500/429/502.
+    fake_openai([(500, "boom"), (429, '{"retry_after_seconds": 0}'),
+                 (502, "bad gateway")], retries=3, backoff=0.0)
     with pytest.raises(lb.QuotaExhausted, match="throttled"):
         lb._ask_openai("q", "openrouter/a:free")
 
 
-def test_chain_absorbs_plain_provider_failure(monkeypatch):
-    monkeypatch.setattr(lb, "BACKEND", "openai")
+def test_chain_absorbs_plain_provider_failure(monkeypatch, fake_openai):
     monkeypatch.setattr(lb, "_free_down_until", 0.0)
-
-    def broken(prompt, model, system=None):
-        raise RuntimeError("openai backend failed after 3 tries: HTTP 500")
-
-    monkeypatch.setattr(lb, "_ask_openai", broken)
-    monkeypatch.setattr(
-        lb, "_ask_claude",
-        lambda prompt, model, system=None, direct=False, timeout=None: "fallback answer")
+    # a plain 500 (RuntimeError, not a throttle) on the free primary must still
+    # roll to the claude fallback, which answers over the real gateway path.
+    srv = fake_openai([(500, "boom"), (200, ok("fallback answer"))], retries=1)
+    lb.configure_workers(_gw(srv))
     out = lb.ask("q", model="openrouter/a:free", fallbacks=["claude/haiku"], role="decomposer", step="")
     assert out == "fallback answer"
 
@@ -210,50 +198,27 @@ def test_paid_gate_error_still_aborts_the_chain(monkeypatch):
         lb.ask("q", model="openrouter/gpt-4o", fallbacks=["claude/haiku"], role="decomposer", step="")
 
 
-def test_exhausted_chain_waits_then_recovers(monkeypatch):
+def test_exhausted_chain_waits_then_recovers(monkeypatch, fake_openai):
     # v18 death class: free pool out + terminal fallback capped killed
-    # the RUN. With quota_retries the chain sleeps and tries again.
+    # the RUN. With quota_retries the chain sleeps and tries again — a real
+    # server 429s twice, then answers on the third real call.
+    monkeypatch.setattr(lb, "FALLBACK_MODEL", None)
+    srv = fake_openai([(429, "rate"), (429, "rate"), (200, ok("recovered"))],
+                      retries=1)
     lb.configure_workers({"quota_wait_s": 0.01, "quota_retries": 2,
-                          "providers": [{"name": "openrouter-free",
-                                         "kind": "openai",
-                                         "model_prefix": "openrouter/",
-                                         "require_suffix": ":free"}]})
-    monkeypatch.setattr(lb, "FALLBACK_MODEL", None)
-    calls = {"n": 0}
-
-    def flaky(prompt, m, system, fallback=False):
-        calls["n"] += 1
-        if calls["n"] < 3:
-            raise lb.QuotaExhausted("429")
-        return "recovered"
-
-    monkeypatch.setattr(lb, "_ask_one", flaky)
-    try:
-        assert lb.ask("q", model="openrouter/a:free",
-                      fallbacks=["openrouter/b:free"], role="decomposer", step="") == "recovered"
-        assert calls["n"] == 3, "two failures absorbed by one wait round"
-    finally:
-        lb.configure_workers(None)
+                          "fallback_cooldown_s": 0, "providers": [_ORF]})
+    assert lb.ask("q", model="openrouter/a:free",
+                  fallbacks=["openrouter/b:free"], role="decomposer", step="") == "recovered"
+    assert srv.call_count == 3, "two failures absorbed by one wait round"
 
 
-def test_exhausted_chain_raises_without_optin(monkeypatch):
+def test_exhausted_chain_raises_without_optin(monkeypatch, fake_openai):
     # default stays fail-fast: tests and ad-hoc calls never sleep
-    lb.configure_workers({"providers": [{"name": "openrouter-free",
-                                         "kind": "openai",
-                                         "model_prefix": "openrouter/",
-                                         "require_suffix": ":free"}]})
     monkeypatch.setattr(lb, "FALLBACK_MODEL", None)
-
-    def dead(prompt, m, system, fallback=False):
-        raise lb.QuotaExhausted("429")
-
-    monkeypatch.setattr(lb, "_ask_one", dead)
-    try:
-        import pytest as _pt
-        with _pt.raises(lb.QuotaExhausted):
-            lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
-    finally:
-        lb.configure_workers(None)
+    fake_openai([(429, "rate")], retries=1)
+    lb.configure_workers({"providers": [_ORF]})
+    with pytest.raises(lb.QuotaExhausted):
+        lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
 
 
 def test_hung_claude_cli_is_retriable_not_fatal(monkeypatch):
@@ -443,7 +408,7 @@ def test_flat_key_wins_over_stage_of_same_meaning():
         lb.configure_workers(None)
 
 
-def test_ask_logs_token_usage_at_exit(monkeypatch, tmp_path):
+def test_ask_logs_token_usage_at_exit(monkeypatch, tmp_path, fake_openai):
     # Token accounting is universal at ask()'s exit: real usage when a backend
     # stashed one, tiktoken estimate otherwise — every successful ask logs one
     # token_usage row (regression: the old per-backend log never fired live).
@@ -453,17 +418,13 @@ def test_ask_logs_token_usage_at_exit(monkeypatch, tmp_path):
     monkeypatch.setattr(llm_log, "LOG_PATH", str(logf), raising=False)
     monkeypatch.setenv("SPEC_FLOW_LLM_LOG", str(logf))
 
-    def fake_real(prompt, model, system, params=None, **k):
-        lb._call_ctx.last_usage = {"prompt_tokens": 11, "completion_tokens": 7}
-        return "real"
-    def fake_none(prompt, model, system, params=None, **k):
-        lb._call_ctx.last_usage = None
-        return "estimated body"
+    # the real server carries a usage block on the first reply (so the backend
+    # stashes real counts) and omits it on the second (so ask() estimates).
+    fake_openai([(200, ok("real", usage={"prompt_tokens": 11,
+                                          "completion_tokens": 7})),
+                 (200, ok("estimated body"))], retries=1)
     try:
-        lb.configure_workers({"backend": "openai", "base_url": "x"})
-        monkeypatch.setattr(lb, "_ask_one", fake_real)
         lb.ask("hello", model="openrouter/m:free", role="decomposer", step="")
-        monkeypatch.setattr(lb, "_ask_one", fake_none)
         lb.ask("count me", model="openrouter/m:free", role="coder", step="coder")
     finally:
         lb.configure_workers(None)
@@ -517,17 +478,15 @@ def test_ask_requires_role_and_step():
 
 # ─── full LLM-call outcome logging (Part 1) ──────────────────────────────
 
-def test_ask_openai_logs_every_attempt(monkeypatch):
+def test_ask_openai_logs_every_attempt(monkeypatch, fake_openai):
     # every HTTP attempt is logged so the dashboard can show ALL delay causes:
-    # a 429 (abnormal, with the backoff it slept) and the final 200.
+    # a 429 (abnormal, with the backoff it slept) and the final 200. Driven by
+    # a real server that throttles once, then answers.
     from harness import llm_log
     events = []
     monkeypatch.setattr(llm_log, "log", lambda e: events.append(e))
-    monkeypatch.setattr(lb, "BACKOFF", 0.01)
-    monkeypatch.setattr(lb, "RETRIES", 3)
-    seq = [(429, '{"error":"rate limited"}'),
-           (200, '{"choices":[{"message":{"content":"hi"}}]}')]
-    monkeypatch.setattr(lb, "_http_post", lambda url, p, h: seq.pop(0))
+    fake_openai([(429, '{"error":"rate limited"}'), (200, ok("hi"))],
+                retries=3, backoff=0.01)
     out = lb._ask_openai("q", "openrouter/a:free")
     assert out == "hi"
     att = [e for e in events if e.get("event") == "llm_attempt"]
@@ -536,36 +495,27 @@ def test_ask_openai_logs_every_attempt(monkeypatch):
     assert all(e["provider"] == "openrouter" for e in att)
 
 
-def test_ask_openai_logs_empty_reply_as_abnormal(monkeypatch):
+def test_ask_openai_logs_empty_reply_as_abnormal(monkeypatch, fake_openai):
     from harness import llm_log
     events = []
     monkeypatch.setattr(llm_log, "log", lambda e: events.append(e))
-    monkeypatch.setattr(lb, "BACKOFF", 0.0)
-    monkeypatch.setattr(lb, "RETRIES", 1)
-    # HTTP 200 but no usable content/reasoning → abnormal, error=empty
-    monkeypatch.setattr(lb, "_http_post",
-                        lambda url, p, h: (200, '{"choices":[{"message":{"content":""}}]}'))
+    # real server: HTTP 200 but no usable content → abnormal, error=empty
+    fake_openai([(200, ok(""))], retries=1, backoff=0.0)
     with pytest.raises((lb.QuotaExhausted, RuntimeError)):
         lb._ask_openai("q", "openrouter/a:free")
     att = [e for e in events if e.get("event") == "llm_attempt"]
     assert any(e["status"] == 200 and e["abnormal"] and e["error"] == "empty" for e in att)
 
 
-def test_ask_logs_fallback_transition_and_terminal(monkeypatch):
+def test_ask_logs_fallback_transition_and_terminal(monkeypatch, fake_openai):
     from harness import llm_log
     events = []
     monkeypatch.setattr(llm_log, "log", lambda e: events.append(e))
-    monkeypatch.setattr(lb, "BACKEND", "openai")
     monkeypatch.setattr(lb, "_free_down_until", 0.0)
-
-    def fake_openai(prompt, model, system=None):
-        raise lb.QuotaExhausted("429")
-
-    def fake_claude(prompt, model, system=None, direct=False, timeout=None):
-        return "chain answer"
-
-    monkeypatch.setattr(lb, "_ask_openai", fake_openai)
-    monkeypatch.setattr(lb, "_ask_claude", fake_claude)
+    # free primary 429s, claude fallback (real gateway HTTP) answers — the
+    # transition is logged with the chain's model labels (pre-gateway-mapping).
+    srv = fake_openai([(429, "rate"), (200, ok("chain answer"))], retries=1)
+    lb.configure_workers(_gw(srv))
     out = lb.ask("q", model="openrouter/a:free", fallbacks=["claude/haiku"],
                  role="decomposer", step="")
     assert out == "chain answer"
@@ -575,22 +525,16 @@ def test_ask_logs_fallback_transition_and_terminal(monkeypatch):
                and e["reason"] == "429" and not e["terminal"] for e in fb)
 
 
-def test_ask_logs_terminal_when_all_models_fail(monkeypatch):
+def test_ask_logs_terminal_when_all_models_fail(monkeypatch, fake_openai):
     from harness import llm_log
     events = []
     monkeypatch.setattr(llm_log, "log", lambda e: events.append(e))
-    monkeypatch.setattr(lb, "BACKEND", "openai")
     monkeypatch.setattr(lb, "_free_down_until", 0.0)
     monkeypatch.setattr(lb, "_jittered", lambda w, c: 0.0)
-
-    def boom_openai(prompt, model, system=None):
-        raise lb.QuotaExhausted("429")
-
-    def boom_claude(prompt, model, system=None, direct=False, timeout=None):
-        raise lb.QuotaExhausted("429")
-
-    monkeypatch.setattr(lb, "_ask_openai", boom_openai)
-    monkeypatch.setattr(lb, "_ask_claude", boom_claude)
+    # every model (free primary + claude fallback over the gateway) 429s: the
+    # real server throttles everything, so the chain exhausts and logs terminal.
+    srv = fake_openai([(429, "rate")], retries=1)
+    lb.configure_workers(_gw(srv))
     with pytest.raises(lb.QuotaExhausted):
         lb.ask("q", model="openrouter/a:free", fallbacks=["claude/haiku"],
                role="decomposer", step="")

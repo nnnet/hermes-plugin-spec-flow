@@ -37,13 +37,17 @@ def ok(text: str = "hello", usage: dict | None = None) -> str:
 class FakeOpenAI:
     """A scriptable OpenAI-compatible endpoint on an ephemeral localhost port.
 
-    ``script`` is a list of ``(status, body)`` replies served in order; the last
-    entry repeats once the list is exhausted. Every received request (its parsed
-    JSON payload + path) is recorded in ``requests`` for assertions.
+    ``script`` is EITHER a list of ``(status, body)`` replies served in order
+    (the last entry repeats once exhausted), OR a callable router
+    ``fn(payload) -> (status, body)`` that picks a reply from the request body
+    (e.g. by ``payload["model"]``) — needed to drive per-model chain/rotation
+    behaviour over real HTTP. Every received request (its parsed JSON payload +
+    path) is recorded in ``requests`` for assertions.
     """
 
-    def __init__(self, script: list[tuple[int, str]], *, delay: float = 0.0):
-        self._script = list(script) or [(200, ok())]
+    def __init__(self, script, *, delay: float = 0.0):
+        self._router = script if callable(script) else None
+        self._script = None if self._router else (list(script) or [(200, ok())])
         self._i = 0
         self._delay = delay
         self.requests: list[dict] = []
@@ -76,7 +80,7 @@ class FakeOpenAI:
                          "messages": payload.get("messages"),
                          "payload": payload,
                          "auth": self.headers.get("Authorization")})
-                    status, body = srv._next()
+                    status, body = srv._next(payload)
                 try:
                     if srv._delay:
                         time.sleep(srv._delay)
@@ -96,7 +100,9 @@ class FakeOpenAI:
         self._thread = threading.Thread(target=self._httpd.serve_forever,
                                         daemon=True)
 
-    def _next(self) -> tuple[int, str]:
+    def _next(self, payload: dict) -> tuple[int, str]:
+        if self._router is not None:
+            return self._router(payload)
         item = self._script[min(self._i, len(self._script) - 1)]
         self._i += 1
         return item
