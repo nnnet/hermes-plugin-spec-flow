@@ -657,7 +657,19 @@ def _ask_claude(prompt: str, model: str, system: str | None = None,
         env = {k: v for k, v in os.environ.items()
                if k != "ANTHROPIC_BASE_URL"}
     timeout = timeout or TIMEOUT
-    for _ in range(RETRIES):
+
+    def _attempt(n: int, t0: float, status, abnormal: bool, error: str = "") -> None:
+        # mirror _ask_openai: EVERY claude-CLI attempt is logged so the
+        # dashboard sees all delay/failure causes on the subscription path too.
+        ev = {"event": "llm_attempt", "backend": "claude", "provider": "claude",
+              "model": model, "attempt": n, "status": status,
+              "latency_s": round(time.monotonic() - t0, 2), "abnormal": abnormal}
+        if error:
+            ev["error"] = error
+        _log_event(ev)
+
+    for attempt in range(1, RETRIES + 1):
+        t0 = time.monotonic()
         try:
             proc = subprocess.run(
                 [*claude_cli.claude_cmd(), "-p", "--model", model,
@@ -671,13 +683,18 @@ def _ask_claude(prompt: str, model: str, system: str | None = None,
             # TimeoutExpired slipped past the chain's (QuotaExhausted,
             # RuntimeError) net and killed the run
             last = f"timed out after {timeout}s"
+            _attempt(attempt, t0, "timeout", True, "timeout")
             continue
         except OSError as exc:
             last = f"spawn failed: {exc}"
+            _attempt(attempt, t0, "spawn_error", True, "spawn")
             continue
         if proc.returncode == 0 and proc.stdout.strip():
+            _attempt(attempt, t0, 0, False)
             return claude_cli.strip_headroom_banner(proc.stdout)
         last = (proc.stderr or proc.stdout)[-300:]
+        _attempt(attempt, t0, proc.returncode, True,
+                 "empty" if not proc.stdout.strip() else "error")
     raise RuntimeError(f"claude CLI failed after {RETRIES} tries: {last}")
 
 

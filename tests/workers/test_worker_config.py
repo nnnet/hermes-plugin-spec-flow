@@ -515,3 +515,27 @@ def test_ask_logs_terminal_when_all_models_fail(monkeypatch, fake_openai):
                role="decomposer", step="")
     fb = [e for e in events if e.get("event") == "llm_fallback"]
     assert any(e["terminal"] and e["to_model"] is None for e in fb)
+
+
+def test_ask_claude_cli_logs_every_attempt(monkeypatch):
+    # Phase 3: the subscription CLI path logs llm_attempt like the HTTP path, so
+    # the dashboard sees ALL delay/failure causes on claude too. Driven via the
+    # OS-level subprocess seam (a real-fault injection, NOT an LLM-reply fake):
+    # one failed attempt, then a green one.
+    import subprocess as _sp
+
+    from harness import llm_log
+    events = []
+    monkeypatch.setattr(llm_log, "log", lambda e: events.append(e))
+    monkeypatch.setattr(lb, "RETRIES", 2)
+    seq = [_sp.CompletedProcess([], 1, stdout="", stderr="boom"),
+           _sp.CompletedProcess([], 0, stdout="answer", stderr="")]
+    monkeypatch.setattr(lb.subprocess, "run", lambda *a, **k: seq.pop(0))
+    out = lb._ask_claude("q", "haiku", direct=True, timeout=1)
+    assert out == "answer"
+    att = [e for e in events if e.get("event") == "llm_attempt"
+           and e.get("backend") == "claude"]
+    assert any(e["abnormal"] and e["status"] == 1 and e["error"] == "empty"
+               for e in att)
+    assert any(not e["abnormal"] and e["status"] == 0 for e in att)
+    assert all(e["provider"] == "claude" for e in att)
