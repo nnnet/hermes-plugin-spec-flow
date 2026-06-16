@@ -99,8 +99,10 @@ def test_verifier_failure_is_retained_with_diagnosis(tmp_path, monkeypatch):
     assert notes and "beta" in notes[0] and "assert 1 == 2" in notes[0]
 
 
-def test_verifier_repair_success_is_retained(tmp_path, monkeypatch):
+def test_verifier_repair_success_is_retained(tmp_path, monkeypatch,
+                                             fake_openai):
     from harness import pytest_verifier as pv
+    from harness_fakeapi import ok
     prov, _ = _mgr()
     calls = {"n": 0}
 
@@ -110,9 +112,10 @@ def test_verifier_repair_success_is_retained(tmp_path, monkeypatch):
                 else "all green")
 
     monkeypatch.setattr(pv, "run_suite", suite)
-    monkeypatch.setattr(pv.llm_backend, "ask",
-                        lambda *a, **k: '{"files": {"src/fix.py": "x = 1"}}')
-    verify = pv.make_verifier(model="stub", max_repair=2)
+    # the repair answer comes from a real local server; a free model id keeps
+    # the free-only gate from blocking the genuine request.
+    fake_openai([(200, ok('{"files": {"src/fix.py": "x = 1"}}'))])
+    verify = pv.make_verifier(model="openrouter/x:free", max_repair=2)
     out = verify({"workspace_root": str(tmp_path), "node": "gamma"})
     assert out["status"] == "PASS"
     notes = prov._banks.get(memory.role_bank("verifier"), [])

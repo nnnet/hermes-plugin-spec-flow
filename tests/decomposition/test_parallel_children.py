@@ -183,33 +183,28 @@ def test_max_workers_caps_global_concurrency(tmp_path):
     assert 2 <= probe.peak <= 2, f"global cap must hold, saw {probe.peak}"
 
 
-def test_llm_concurrency_gate(monkeypatch):
+def test_llm_concurrency_gate(monkeypatch, fake_openai):
     import threading as _th
-    import time as _t
+
+    from harness_fakeapi import ok
     lb.configure_workers({"concurrency": 2})
-    monkeypatch.setattr(lb, "BACKEND", "openai")
     monkeypatch.setattr(lb, "_free_down_until", 0.0)
-    state = {"active": 0, "peak": 0}
-    lock = _th.Lock()
-
-    def slow(prompt, model, system=None):
-        with lock:
-            state["active"] += 1
-            state["peak"] = max(state["peak"], state["active"])
-        _t.sleep(0.08)
-        with lock:
-            state["active"] -= 1
-        return "ok"
-
-    monkeypatch.setattr(lb, "_ask_openai", slow)
+    # a REAL slow local server: each request lingers 0.08s, so 6 client calls
+    # fired at once would peak at 6 concurrent on the wire WITHOUT the gate. The
+    # threaded server records its own peak in-flight handler count — the gate
+    # must keep it at 2.
+    srv = fake_openai([(200, ok("ok"))], delay=0.08)
     try:
         threads = [_th.Thread(target=lambda: lb.ask(
-            "q", model="openrouter/a:free", role="decomposer", step="")) for _ in range(6)]
+            "q", model="openrouter/a:free", role="decomposer", step=""))
+            for _ in range(6)]
         for th in threads:
             th.start()
         for th in threads:
             th.join()
-        assert state["peak"] <= 2, f"LLM gate must cap in-flight calls, saw {state['peak']}"
+        assert srv.peak_concurrency <= 2, \
+            f"LLM gate must cap in-flight calls, saw {srv.peak_concurrency}"
+        assert srv.call_count == 6, "all six calls really reached the server"
     finally:
         lb.configure_workers(None)
 

@@ -115,25 +115,28 @@ def test_unfixable_lint_is_bounded_and_run_survives(tmp_path):
 
 # ─── worker prompt: minimal-edit rework carries the previous spec ─────
 
-def test_rework_prompt_contains_previous_spec(monkeypatch):
+def test_rework_prompt_contains_previous_spec(monkeypatch, fake_openai):
     import json as _json
-    from harness import llm_backend as lb
+
     from harness import role_worker as rw
-    monkeypatch.setattr(lb, "BACKEND", "openai")
-    seen = {}
+    from harness_fakeapi import ok
 
-    def fake_ask(prompt, model, system=None, **kw):
-        seen["prompt"] = prompt
-        return _json.dumps({"atomic": True, "metrics": dict(_LEAF),
-                            "spec_markdown": GOOD_MD})
-
-    monkeypatch.setattr(lb, "ask", fake_ask)
+    # a real local server answers the decomposer; we then read the prompt the
+    # harness actually put on the wire (no stubbing of our code). Resolve the
+    # decomposer to a free id (config seam) so the free-only gate lets the real
+    # request reach the local server.
+    monkeypatch.setattr(rw, "_model_for",
+                        lambda role, specialty="": "openrouter/x:free")
+    srv = fake_openai([(200, ok(_json.dumps(
+        {"atomic": True, "metrics": dict(_LEAF), "spec_markdown": GOOD_MD})))])
     dec = rw.make_decomposer()
     dec({"project": {"goal": "g", "target": "t", "constitution": []},
          "node": {"id": "disc", "title": "D"}, "parent": "L0", "depth": 3,
          "ancestors": [], "rework": True,
          "review_feedback": "AC-disc-5 lacks REQ-disc-5",
          "previous_spec": BAD_MD})
-    assert "YOUR PREVIOUS SPEC (verbatim)" in seen["prompt"]
-    assert BAD_MD in seen["prompt"]
-    assert "MINIMAL edit" in seen["prompt"]
+    sent = " ".join(m.get("content", "")
+                    for m in srv.requests[0]["messages"])
+    assert "YOUR PREVIOUS SPEC (verbatim)" in sent
+    assert BAD_MD in sent
+    assert "MINIMAL edit" in sent

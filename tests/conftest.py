@@ -109,8 +109,8 @@ def fake_openai():
     keys = ("BASE_URL", "API_KEY", "RETRIES", "BACKOFF", "BACKEND")
     saved = {k: getattr(lb, k) for k in keys}
 
-    def _make(script, *, retries=3, backoff=0.01):
-        srv = FakeOpenAI(script).__enter__()
+    def _make(script, *, retries=3, backoff=0.01, delay=0.0):
+        srv = FakeOpenAI(script, delay=delay).__enter__()
         started.append(srv)
         lb.BASE_URL, lb.API_KEY = srv.base_url, "test-key"
         lb.RETRIES, lb.BACKOFF, lb.BACKEND = retries, backoff, "openai"
