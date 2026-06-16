@@ -283,10 +283,24 @@ def _ask_one(prompt: str, model: str, system: str | None,
     fields and simply ignores them (no signature churn when new keys appear)."""
     global _free_down_until
     if model.startswith("claude/"):
-        # subscription-CLI provider (e.g. 'claude/haiku') — spends no API
-        # budget, so the ':free' gate does not apply; 'direct' bypasses
-        # the gateway so a broken proxy can't take the pool down
+        # subscription provider (e.g. 'claude/haiku') — spends no API budget, so
+        # the ':free' gate does not apply.
         cli_model = model.split("/", 1)[1]
+        gw = _claude_gateway()
+        if gw:
+            # claude routed through a configured OpenAI-compatible GATEWAY
+            # (e.g. bifrost serving anthropic/claude-haiku-4-5): it joins the
+            # SAME real HTTP path as every other model, so the fallback arm is
+            # deterministically exercisable (a real 429/200) without a CLI. The
+            # model_map renames the short id to the gateway's id when given.
+            mapped = (gw.get("model_map") or {}).get(cli_model, cli_model)
+            last_call.update(backend="claude-http", model=mapped,
+                             fallback=fallback)
+            return _ask_openai(prompt, mapped, system=system, params=params,
+                               base_url=gw["base_url"],
+                               api_key=gw.get("api_key"))
+        # default: the subscription CLI. 'direct' bypasses the gateway override
+        # so a broken proxy can't take the fallback down.
         last_call.update(backend="claude", model=cli_model,
                          fallback=fallback)
         return _ask_claude(prompt, cli_model, system=system, direct=True,
@@ -612,6 +626,23 @@ def _jittered(wait_s: float, cfg: dict) -> float:
     return wait_s * (1.0 + random.uniform(-frac, frac))
 
 
+def _claude_gateway() -> dict | None:
+    """Config for routing the claude subscription model through an OpenAI-
+    compatible HTTP gateway instead of the local CLI. Returns a dict
+    ``{base_url, api_key?, model_map?}`` or None (the default → CLI).
+
+    Source: the case `workers.claude_gateway` block, or the env
+    SPEC_FLOW_CLAUDE_GATEWAY (base_url only). Why: a gateway like bifrost serves
+    anthropic models over the same HTTP path as every other model, so the claude
+    fallback arm shares ONE transport and is deterministically testable — while
+    production keeps the subscription CLI by leaving this unset."""
+    gw = (WORKERS_CFG or {}).get("claude_gateway")
+    if isinstance(gw, dict) and gw.get("base_url"):
+        return gw
+    env_url = os.environ.get("SPEC_FLOW_CLAUDE_GATEWAY")
+    return {"base_url": env_url} if env_url else None
+
+
 # ── claude CLI (fallback; gateway via ANTHROPIC_BASE_URL env) ────────────────
 def _ask_claude(prompt: str, model: str, system: str | None = None,
                 direct: bool = False, timeout: int | None = None) -> str:
@@ -719,9 +750,14 @@ def _log_event(event: dict) -> None:
 
 
 def _ask_openai(prompt: str, model: str, system: str | None = None,
-                params: dict | None = None) -> str:
-    url = BASE_URL.rstrip("/") + "/chat/completions"
-    headers = {"Authorization": f"Bearer {API_KEY}"} if API_KEY else {}
+                params: dict | None = None, base_url: str | None = None,
+                api_key: str | None = None) -> str:
+    # base_url/api_key default to the module config, but a caller (e.g. the
+    # claude-via-gateway route) may point ONE call at a different OpenAI-
+    # compatible endpoint without touching the globals.
+    url = (base_url or BASE_URL).rstrip("/") + "/chat/completions"
+    _key = api_key if api_key is not None else API_KEY
+    headers = {"Authorization": f"Bearer {_key}"} if _key else {}
     messages = ([{"role": "system", "content": system}] if system else []) \
         + [{"role": "user", "content": prompt}]
     payload = {"model": model, "messages": messages, **_openai_params(params)}
