@@ -87,14 +87,18 @@ injections:
       # before nice_ui's worker runs — nice_ui therefore meets an existing
       # web_ui.py and we can see whether it EDITS it or builds a parallel web.
       when: {event: "minimal impl"}
+      # DELIBERATELY worded WITHOUT an easy UI marker — no "/ui", no "web", no
+      # "ui", no filename. It only refers to the notes the reader sees. This
+      # forces the engine's UNIVERSAL surface-overlap detectors (symbol/token
+      # overlap, not a UI keyword list) to find the module that already renders
+      # notes and route this edit INTO it — proving the match is not a /ui cheat.
       statement: |
-        MAKE THE WEB PAGE NICE (added by the human mid-run; binding).
+        MAKE THE NOTES NICE TO READ (added by the human mid-run; binding).
 
-        The existing web page at GET /ui must look clean and friendly: a clear
-        page title, readable note list, the add form laid out tidily. Standard
-        library only — inline CSS in the served HTML is fine, no JS frameworks,
-        no new storage, no API changes, no second page. Improve the page that
-        already serves /ui; do not create a separate one.
+        The notes that a reader sees should be presented in a clean, friendly,
+        easy-to-read layout — a clear heading, a tidy list, a simple way to add
+        one. Standard library only; improve the existing presentation rather
+        than adding a separate one alongside it.
   # Possible HUMAN answers — handed to the plugin ONLY when a worker actually
   # asks a question, and only the one whose `match` is found in that question
   # (else `default`). Never pushed proactively; one reply per real question.

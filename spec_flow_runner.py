@@ -487,6 +487,126 @@ def _snake(s: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in s.lower()).strip("_")
 
 
+# ---- B3: universal surface-overlap detectors (registry) -------------------
+# A late requirement may refine a surface an existing module owns WITHOUT naming
+# a route or a file ("polish the front-end", "tidy the presentation layer").
+# A single signal (a route string) is not enough, and NO detector may be tailored
+# to a domain (a hard-coded ui/web/html list would just help one case pass — that
+# is scaffolding, forbidden). So overlap is decided by a REGISTRY of UNIVERSAL
+# detectors; each scores a (requirement, existing-module) pair on a different,
+# domain-agnostic signal. Extend by registering a function; select/order the
+# active set with SPEC_FLOW_AMEND_METHODS (comma list; default = all, in
+# registration order). The engine keeps the highest-scoring module above
+# _AMEND_MIN_SCORE as the surface owner.
+_AMEND_MIN_SCORE = 0.34
+
+# generic English/Russian-transliteration-safe stop list; deliberately NOT a
+# domain vocabulary — only structural words that carry no surface identity.
+_AMEND_STOP = frozenset((
+    "the a an and or to of for in on at by with into from out over this that "
+    "these those it its is are be was were been being as not no nor but if then "
+    "else when while do does did done must should shall will would can could may "
+    "might add added make makes made human mid run binding new existing must "
+    "should keep without only also use using via per each every any all your you "
+    "page pages it’s let’s").split())
+
+
+def _amend_tokens(text: str) -> set:
+    """Significant tokens of a text — lowercased identifiers/words >=4 chars,
+    minus structural stop-words. Domain-agnostic on purpose."""
+    return {w for w in re.findall(r"[A-Za-z][A-Za-z0-9_]{3,}", text.lower())
+            if w not in _AMEND_STOP}
+
+
+def _amend_routes(text: str) -> set:
+    """HTTP routes a text declares — `GET /x` forms and quoted `/x` path
+    literals. Works for any service, not just web UIs."""
+    out = {r.rstrip("/.,;:)\"'") for r in re.findall(
+        r"\b(?:GET|POST|PUT|DELETE|PATCH)\s+(/[A-Za-z0-9_./-]+)", text, re.I)}
+    out |= {m.rstrip("/") for m in
+            re.findall(r"[\"'](/[A-Za-z0-9_./-]+)[\"']", text)}
+    return {r for r in out if len(r) > 1}
+
+
+def _amend_symbols(body: str) -> set:
+    """Names a module DEFINES (functions/classes) — lowercased + split into
+    sub-tokens so `render_notes_page` contributes {render, notes, page}."""
+    syms = set()
+    for m in re.findall(r"^\s*(?:def|class)\s+([A-Za-z_]\w+)", body, re.M):
+        syms.add(m.lower())
+        syms |= {p for p in m.lower().split("_") if len(p) >= 4}
+    return syms
+
+
+_AMEND_DETECTORS: "dict[str, Any]" = {}
+
+
+def _amend_detector(name: str):
+    def deco(fn):
+        _AMEND_DETECTORS[name] = fn
+        return fn
+    return deco
+
+
+@_amend_detector("explicit_file")
+def _amd_explicit_file(feat: dict, mod: dict) -> float:
+    """The requirement names this module's file (src/<stem>.py or <stem>)."""
+    return 1.0 if mod["stem"] in feat["files"] else 0.0
+
+
+@_amend_detector("shared_route")
+def _amd_shared_route(feat: dict, mod: dict) -> float:
+    """The requirement and the module declare the same HTTP route."""
+    return 1.0 if feat["routes"] & mod["routes"] else 0.0
+
+
+@_amend_detector("symbol_overlap")
+def _amd_symbol_overlap(feat: dict, mod: dict) -> float:
+    """A distinctive requirement token equals a symbol the module DEFINES —
+    e.g. a requirement about 'notes' meets a module defining render_notes()."""
+    hit = feat["tokens"] & mod["symbols"]
+    return min(0.6 + 0.1 * len(hit), 0.95) if hit else 0.0
+
+
+@_amend_detector("token_overlap")
+def _amd_token_overlap(feat: dict, mod: dict) -> float:
+    """Share of the requirement's distinctive tokens that also appear in the
+    module's own text — catches refinements worded with no route/symbol at
+    all ('present the notes nicely' meets the module that renders notes)."""
+    want = feat["tokens"]
+    if not want:
+        return 0.0
+    frac = len(want & mod["tokens"]) / len(want)
+    return frac if frac >= _AMEND_MIN_SCORE else 0.0
+
+
+def _amend_find_owner(statement: str, modules: list, methods=None) -> "Optional[str]":
+    """Run the active detectors over every existing module; return the rel-path
+    of the highest-scoring owner above the threshold, else None.
+
+    ``modules`` is [(rel_path, stem, body)]. ``methods`` selects/orders the
+    detectors (default: SPEC_FLOW_AMEND_METHODS env, else all registered)."""
+    if methods is None:
+        env = os.environ.get("SPEC_FLOW_AMEND_METHODS", "").strip()
+        methods = [m.strip() for m in env.split(",") if m.strip()] or \
+            list(_AMEND_DETECTORS)
+    active = [_AMEND_DETECTORS[m] for m in methods if m in _AMEND_DETECTORS]
+    feat = {"files": {m for m in re.findall(r"src/([A-Za-z_]\w*)\.py",
+                                            statement)}
+            | {m for m in re.findall(r"\b([a-z][a-z0-9_]{3,})\.py", statement)},
+            "routes": _amend_routes(statement),
+            "tokens": _amend_tokens(statement)}
+    feat["files"] = {f for f in feat["files"]}
+    best_score, best_path = 0.0, None
+    for rel, stem, body in modules:
+        mod = {"stem": stem, "routes": _amend_routes(body),
+               "symbols": _amend_symbols(body), "tokens": _amend_tokens(body)}
+        score = max((fn(feat, mod) for fn in active), default=0.0)
+        if score > best_score:
+            best_score, best_path = score, rel
+    return best_path if best_score >= _AMEND_MIN_SCORE else None
+
+
 class Workspace:
     """Optional materialiser for a run. Off by default; enable with a path (or
     SPEC_FLOW_RUN_WORKSPACE env). Writes REAL, inspectable artifacts the run
@@ -1108,6 +1228,35 @@ class Engine:
                                     "single_concern": True,
                                     "testable_criteria": True}})
         return out
+
+    def _amend_target(self, node: dict) -> "Optional[str]":
+        """B3 (deterministic, model-independent): if this requirement refines a
+        surface an EXISTING src module already owns, return that module's
+        rel-path so the engine routes the implementation INTO it (edit-in-place)
+        instead of forking a second module for the same surface.
+
+        The owner is decided in CODE by a registry of universal detectors (see
+        _amend_find_owner) — route match, file mention, symbol overlap, token
+        overlap — not by asking the model to notice and not by a domain-specific
+        keyword list. Returns None when nothing overlaps or the flag is off."""
+        if os.environ.get("SPEC_FLOW_REQ_AMEND", "") in (
+                "", "0", "false", "False", "no"):
+            return None
+        srcdir = Path(self.workspace.root) / "src"
+        if not srcdir.is_dir():
+            return None
+        own = _snake(str(node.get("id", "")))
+        modules = []
+        for p in sorted(srcdir.glob("*.py")):
+            if p.stem in ("__init__", own):
+                continue
+            modules.append((f"src/{p.stem}.py", p.stem,
+                            p.read_text(encoding="utf-8", errors="replace")))
+        if not modules:
+            return None
+        stmt = str(node.get("requirement") or node.get("spec_markdown")
+                   or node.get("title") or "")
+        return _amend_find_owner(stmt, modules)
 
     def _assembly_node(self) -> "Optional[dict]":
         """B2 mechanism 3: an ENGINE-generated assembly leaf.
@@ -2114,10 +2263,37 @@ class Engine:
                 where = ("inside its scoped branch" if extra.pop("_scoped",
                                                                  False)
                          else "at root level")
-                self.emit("decompose", "engine", "", extra["id"],
-                          f"late requirement materialized {where}",
-                          extra["title"], "requirement", "ATTACHED",
-                          level=L_MILESTONE)
+                # B3: deterministically route a same-surface requirement to
+                # EDIT the existing owner module (code_target). The node keeps
+                # its own spec; only its code output goes into the owner file.
+                amend = self._amend_target(extra)
+                if amend:
+                    extra["code_target"] = amend
+                    try:
+                        cur = (Path(self.workspace.root) / amend).read_text(
+                            encoding="utf-8", errors="replace")
+                    except Exception:  # noqa: BLE001
+                        cur = ""
+                    new_req = str(extra.get("requirement")
+                                  or extra.get("title"))
+                    extra["spec_markdown"] = (
+                        "## EDIT AN EXISTING FILE IN PLACE (do not fork a "
+                        "second module)\n\n"
+                        f"`{amend}` already serves this surface. EXTEND that "
+                        "same file to satisfy the requirement below WITHOUT "
+                        "breaking its current behaviour; do not duplicate what "
+                        "is already there.\n\n"
+                        f"### Current `{amend}`\n```python\n{cur}\n```\n\n"
+                        f"### Requirement to fold in\n{new_req}\n")
+                    self.emit("decompose", "engine", "", extra["id"],
+                              "late requirement routed to EDIT existing surface",
+                              f"writes into {amend} (no parallel module)",
+                              "requirement", "AMEND", level=L_MILESTONE)
+                else:
+                    self.emit("decompose", "engine", "", extra["id"],
+                              f"late requirement materialized {where}",
+                              extra["title"], "requirement", "ATTACHED",
+                              level=L_MILESTONE)
                 node.setdefault("children", []).append(extra)
                 self._visit(extra, depth + 1, child_contract_ctx, phase,
                             parent=title,
@@ -2299,7 +2475,13 @@ class Engine:
         code_rel = test_rel = None
         if self.depth >= DEPTH_EXECUTE:
             fn = self._module_for(nid)   # variant A: collision-free module
-            code_rel, test_rel = f"src/{fn}.py", f"tests/test_{fn}.py"
+            # B3: a requirement routed to edit an existing surface keeps its own
+            # spec identity (specs/{fn}.md) but writes its CODE into the owner
+            # module — deterministic edit-in-place, no parallel file, no spec
+            # clobber. code_fn drives only the output paths, not the spec.
+            ctgt = node.get("code_target")
+            code_fn = Path(ctgt).stem if ctgt else fn
+            code_rel, test_rel = f"src/{code_fn}.py", f"tests/test_{code_fn}.py"
             # C4 resume: the journal says this leaf finished and its artifact
             # survived the restart — reuse it, do not re-run the implementer.
             # #7: but only if its SPEC is unchanged — a spec edit since the
@@ -2329,8 +2511,9 @@ class Engine:
                         "workspace": self.workspace, "spec": f"specs/{fn}.md",
                         # variant A: the engine-resolved collision-free
                         # module — the worker must write THIS file, not
-                        # recompute its own name from the node id
-                        "module": fn}
+                        # recompute its own name from the node id. For an
+                        # edit-in-place node code_fn is the owner module.
+                        "module": code_fn}
                 # #10: resolve the node's specialty (explicit → project
                 # default → auto-inferred) so the implementer routes to the
                 # matching model chain
@@ -2340,7 +2523,7 @@ class Engine:
                 if self._leaf_seconds:
                     ictx["deadline"] = time.time() + self._leaf_seconds
                 try:
-                    self._invoke_implementer(ictx, nid, fn)
+                    self._invoke_implementer(ictx, nid, code_fn)
                 except NotImplementedError:
                     raise   # missing agent is a CONFIG error, not a crash
                 except TimeoutError as exc:
@@ -2363,6 +2546,23 @@ class Engine:
                               f"{nid}:impl",
                               "implementer crashed — leaf surrendered red",
                               str(exc)[:200], level=L_MILESTONE)
+                # B3 guard (deterministic): a routed edit-in-place node must
+                # NOT leave a parallel fork. If the worker still wrote its own
+                # src/{fn}.py despite being handed the owner module, drop that
+                # fork — "one surface = one module" is enforced by code, not by
+                # trusting the model. The owner file carries the real edit; if
+                # it stayed empty the node fails its gates honestly.
+                if ctgt and f"src/{fn}.py" != code_rel:
+                    fork = Path(self.workspace.root) / f"src/{fn}.py"
+                    if fork.is_file():
+                        fork.unlink()
+                        (Path(self.workspace.root)
+                         / f"tests/test_{fn}.py").unlink(missing_ok=True)
+                        self.emit("implement", "engine", "spec-implement",
+                                  f"{nid}:impl",
+                                  "edit-in-place guard: dropped a parallel fork",
+                                  f"removed src/{fn}.py — surface owned by {ctgt}",
+                                  "amend_guard", "ENFORCED", level=L_MILESTONE)
                 self._judge_leaf(nid, title, fn, code_rel, test_rel)
         elif self.depth >= DEPTH_SCAFFOLD:
             code_rel = self.workspace.code(nid, title)
