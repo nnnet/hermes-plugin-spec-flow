@@ -373,3 +373,38 @@ OS-сем subprocess.run (hung-CLI + CLI-attempt-лог тесты) + 1 CLI-dire
 ### Итог: Фазы 1,2,3,4(ч1+ч2),5 + #80 — ВСЁ ЗАКРЫТО. Набор 888 зелёный (без live).
 ОСТАЛОСЬ: #81 — снос НЕ-ЛЛМ заглушек оркестра (`_stub_orchestra_machinery`:
 run_suite/_leaf_bar/_write_reply_files/git → реальный pytest+git). Отдельный пласт.
+
+## #81 — ПЛАН ИСПОЛНЕНИЯ (следующая сессия, после компакта)
+
+**Цель:** снести НЕ-ЛЛМ заглушки оркестр-машинерии → реальный pytest+git.
+41 стаб: `setattr(... run_suite|_leaf_bar|_write_reply_files|transaction|_badness)`.
+Файлы: `workers/test_orchestra.py` (23), `workers/test_orchestra_remote.py` (10),
+`workers/test_specialist_config.py` (6 = `_stub_orchestra_machinery`),
+`memory/test_memory_learning.py` (2).
+
+**Природа стабов:** `_leaf_bar`/`run_suite` глушат как СЦЕНАРНЫЕ управляющие
+сигналы (red→fixer бежит; graph-цикл red-потом-green). `_write_reply_files`/
+`transaction` глушат файловую/git-запись. Реальный путь: оркестр пишет файлы →
+`_leaf_bar` гоняет pytest → git transaction коммитит.
+
+**Шаги:**
+1. Helper `_real_ws(tmp_path)` в общем месте (conftest или per-file): `git init`
+   tmp workspace + `specs/` + минимальный конфтест, возвращает root. Уже есть
+   образец реального pytest-прогона в `verification/test_pytest_verifier.py`
+   (`_ws` + реальный `run_suite`) и `memory/test_memory_modes` (реальный
+   green-leaf). ПЕРЕИСПОЛЬЗОВАТЬ их паттерн.
+2. Для control-flow тестов (red→green): `fake_openai` отдаёт ПОСЛЕДОВАТЕЛЬНОСТЬ
+   `{"files":{...}}` где 1-й набор даёт РЕАЛЬНО падающий pytest, 2-й (после
+   fixer) — зелёный. Реальный `_leaf_bar` сам вернёт red→green. Ассертить по
+   srv.requests (порядок ролей) + реальному состоянию файлов/git.
+3. `_stub_orchestra_machinery` (specialist_config): заменить на реальный git-ws +
+   служить запускаемый код. Эти 4 теста — backend-routing: оставить ассерты по
+   srv.requests, но машинерию сделать реальной (или оценить: там изоляция
+   легитимна — РЕШИТЬ по месту, не ломать ради ритуала).
+4. Порядок: начать с specialist_config (6, я их уже трогал) → orchestra_remote
+   (10) → orchestra (23, самый сложный, сценарные сигналы) → memory_learning (2).
+5. Коммит после каждого файла, набор зелёный. Беречь `_free_down_until` autouse.
+
+**Гейты соблюдать:** комменты в коде только English; пути от корня проекта;
+секреты не в трекаемые; рестарт дашборда только по точному PID (живому нужен
+рестарт чтобы показать ⚙️ из Фазы 5).
