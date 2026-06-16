@@ -1,0 +1,21 @@
+tests/nodes/test_cycle_fallbacks.py
+  s_a7f45290e91181::t_3a900557f60835 11
+  s_a7f45290e91181::t_cf8e511bcd6498 7-8
+  s_a7f45290e91181::t_3f0cbf2708c6c4 67,69-74,76-79,81,84,86-88,90-94
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.7",
+  "base_commit_sha": "6ee1a6eaf9b8badd427c7bee20cc0da8d1b2ec5c",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
