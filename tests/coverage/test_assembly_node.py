@@ -168,3 +168,64 @@ def test_assembly_entry_is_never_amend_routed(tmp_path, monkeypatch):
     assert not [e for e in res.events
                 if e.gate == "requirement" and e.verdict == "AMEND"
                 and e.task == "product_entry"]
+
+
+# ── ROOT boot-gate: the final corpus verdict is RED when the assembled product
+#    does not serve its frozen contract, even if every module unit-test is green
+_GOOD_APP = '''
+import json
+_N = []
+def wsgi_app(environ, start_response):
+    m = environ["REQUEST_METHOD"]; p = environ["PATH_INFO"]
+    def reply(code, body, ct="application/json"):
+        data = body if isinstance(body, bytes) else json.dumps(body).encode()
+        start_response(str(code) + " OK", [("Content-Type", ct)]); return [data]
+    if p == "/health": return reply(200, {"ok": True})
+    if p == "/ui": return reply(200, b"<html>notes</html>", "text/html")
+    if p == "/notes" and m == "POST":
+        n = environ["wsgi.input"].read(int(environ.get("CONTENT_LENGTH") or 0))
+        _N.append({"id": len(_N)+1, "text": json.loads(n)["text"]}); return reply(201, _N[-1])
+    if p == "/notes": return reply(200, {"items": list(reversed(_N))})
+    return reply(404, {"error": "no route"})
+'''
+
+# only serves "/" — the live v020 shape that 404'd its whole contract
+_BAD_APP = '''
+def wsgi_app(environ, start_response):
+    if environ["PATH_INFO"] == "/":
+        start_response("200 OK", [("Content-Type", "text/html")]); return [b"<html>hi</html>"]
+    start_response("404 Not Found", [("Content-Type", "text/plain")]); return [b"Not Found"]
+'''
+
+_WSGI_CONST = ["HTTP through a WSGI app (src/app.py exposes `wsgi_app`).",
+               "POST /notes -> {id}; GET /notes -> {items}; GET /health 200."]
+
+
+def _engine_with_ws(tmp_path, app_src, constitution):
+    ws_root = tmp_path / "wk"
+    (ws_root / "src").mkdir(parents=True)
+    (ws_root / "src" / "app.py").write_text(app_src, encoding="utf-8")
+    e = eng.Engine.__new__(eng.Engine)
+    e.workspace = type("W", (), {"enabled": True, "root": str(ws_root)})()
+    e._constitution = list(constitution)
+    e._goal = "notes service POST /notes GET /notes"
+    return e
+
+
+def test_root_boot_gate_red_when_product_404s_its_contract(tmp_path):
+    e = _engine_with_ws(tmp_path, _BAD_APP, _WSGI_CONST)
+    ok, detail = e._assembled_product_boots()
+    assert not ok and "/health" in detail
+
+
+def test_root_boot_gate_green_on_serving_product(tmp_path):
+    e = _engine_with_ws(tmp_path, _GOOD_APP, _WSGI_CONST)
+    ok, detail = e._assembled_product_boots()
+    assert ok, detail
+
+
+def test_root_boot_gate_skipped_without_wsgi_entry(tmp_path):
+    # a non-web product (no wsgi_app in the constitution) is not boot-gated → p4/p5
+    e = _engine_with_ws(tmp_path, _BAD_APP, ["Plain library, no web entry."])
+    ok, _ = e._assembled_product_boots()
+    assert ok

@@ -1188,6 +1188,93 @@ class _NodeDriver:
         self._observe(EV_DONE)
 
 
+# B2 at ROOT — an un-mockable assembly smoke run by the engine itself over the
+# FINAL corpus verify. A green pytest is hollow when the assembled product does
+# not serve its frozen contract (live v020: every contract route 404'd while
+# module unit-tests stayed green). The engine boots the real WSGI entry in a
+# fresh subprocess (no test-harness import — tests/ is not importable in a real
+# run) and drives the contract; a non-200 contract route is a hard root RED.
+# This mirrors serve-product.sh and the harness contract_checks boot-gate.
+_ROOT_BOOT_PROBE = r'''
+import glob, importlib, io, json, os, sys, tempfile
+from pathlib import Path
+ws = Path(sys.argv[1]).resolve()
+want_notes = sys.argv[2] == "1"
+sys.path.insert(0, str(ws / "src"))
+db = os.path.join(tempfile.mkdtemp(prefix="rootboot-"), "boot.db")
+for k in ("MARKETPLACE_DB", "NOTES_DB", "NOTES_DB_PATH", "APP_DB", "DB_PATH"):
+    os.environ.setdefault(k, db)
+
+def fail(msg):
+    print("BOOTGATE_FAIL " + msg)
+    raise SystemExit(0)
+
+cands = []
+if (ws / "src" / "app.py").exists():
+    cands.append("app")
+for f in sorted(glob.glob(str(ws / "src" / "*.py"))):
+    stem = Path(f).stem
+    if stem != "__init__" and stem not in cands:
+        cands.append(stem)
+wsgi, last_err = None, ""
+for name in cands:
+    try:
+        m = importlib.import_module(name)
+    except Exception as exc:  # noqa: BLE001
+        last_err = "import %s: %r" % (name, exc)
+        continue
+    for attr in ("wsgi_app", "application", "app"):
+        c = getattr(m, attr, None)
+        if callable(c):
+            wsgi = c
+            break
+    if wsgi is not None:
+        break
+if wsgi is None:
+    fail("no module under src/ exposes a callable wsgi_app/application/app"
+         + ((" (last import error: " + last_err + ")") if last_err else ""))
+
+def call(method, path, payload=None, query=""):
+    body = json.dumps(payload).encode() if payload is not None else b""
+    environ = {"REQUEST_METHOD": method, "PATH_INFO": path,
+               "QUERY_STRING": query, "CONTENT_LENGTH": str(len(body)),
+               "wsgi.input": io.BytesIO(body), "wsgi.errors": sys.stderr,
+               "SERVER_NAME": "boot", "SERVER_PORT": "0",
+               "wsgi.url_scheme": "http"}
+    cap = {}
+    def start_response(status, headers, exc_info=None):
+        cap["status"] = int(str(status).split()[0])
+    chunks = wsgi(environ, start_response)
+    raw = b"".join(chunks if chunks else [])
+    return cap.get("status", 0), raw
+
+st, _ = call("GET", "/health")
+if st != 200:
+    fail("GET /health -> %s (expected 200)" % st)
+st, raw = call("GET", "/ui")
+text = (raw or b"").decode("utf-8", "replace").lower()
+if st != 200 or ("<" not in text):
+    fail("GET /ui -> %s / not HTML" % st)
+if want_notes:
+    st, raw = call("POST", "/notes", {"text": "rootboot"})
+    if st not in (200, 201):
+        fail("POST /notes -> %s" % st)
+    st, raw = call("GET", "/notes")
+    if st != 200:
+        fail("GET /notes -> %s" % st)
+    try:
+        data = json.loads(raw or b"{}")
+        items = data.get("items", data if isinstance(data, list) else [])
+        texts = " ".join(str(i.get("text", "")) for i in items
+                         if isinstance(i, dict))
+    except Exception as exc:  # noqa: BLE001
+        fail("GET /notes body not JSON: %r" % (exc,))
+    if "rootboot" not in texts:
+        fail("POST then GET /notes did not round-trip the note")
+print("BOOTGATE_OK")
+'''
+
+
 class Engine:
     def __init__(self, tools: Any = None, *, workspace: Any,
                  depth: Any = DEPTH_SPEC, agents: Optional[dict] = None,
@@ -1787,6 +1874,7 @@ class Engine:
         self._goal = project.get("goal", "")
         self._target = project.get("target", "")
         self._constitution = project.get("constitution", [])
+        self._root_id = str((project.get("tree") or {}).get("id", "L0"))
         self._decompose_calls = 0
         # id → title of every node visited so far — context for the
         # decomposer agent and the comparison base for the dedup gate.
@@ -3041,6 +3129,23 @@ class Engine:
             out = (proc.stdout or "") + (proc.stderr or "")
         except Exception as exc:  # noqa: BLE001
             passed, out = False, f"pytest error: {exc}"
+        # B2 ROOT BOOT-GATE: a green corpus is HOLLOW if the assembled product
+        # does not serve its frozen contract. Boot the real WSGI entry and drive
+        # the contract — a non-200 route is a hard RED, even when every module
+        # unit-test passed (live v020: all routes 404'd under a green pytest).
+        if passed:
+            boot_ok, boot_detail = self._assembled_product_boots()
+            if not boot_ok:
+                passed = False
+                out = (out + "\n\n=== ROOT BOOT-GATE (assembled product) ===\n"
+                       + boot_detail + "\n")
+                self.emit("integrate", "verifier", "spec-integrate",
+                          "L0:integrate", "boot-gate over assembled product",
+                          boot_detail, "integrate_verify", "FAIL",
+                          level=L_MILESTONE)
+                self.loops.append({"type": "integrate-fail",
+                                   "task": getattr(self, "_root_id", "L0"),
+                                   "detail": boot_detail})
         depth_name = next((k for k, v in DEPTHS.items() if v == self.depth), str(self.depth))
         ws._write("TEST-RESULTS.md",
                   f"# Test results (depth={depth_name})\n\nStatus: "
@@ -3049,6 +3154,37 @@ class Engine:
         self.emit("integrate", "verifier", "spec-integrate", "verify",
                   "ran test suite (pytest)", "PASS" if passed else "FAIL (scaffolds)",
                   "", "PASS" if passed else "FAIL", level=L_MILESTONE)
+
+    def _assembled_product_boots(self) -> "tuple":
+        """Un-mockable B2 at the ROOT: boot the real assembled WSGI entry in a
+        fresh subprocess and drive its frozen contract. Returns (ok, detail).
+
+        Runs ONLY when the constitution declares a WSGI entry (so p4/p5 and any
+        non-web product are unaffected) — the same gate the per-node verifier
+        applies, repeated here so the FINAL corpus verdict can never be green
+        over a product that 404s its own contract. No test-harness import: the
+        probe is a self-contained subprocess (tests/ is not importable in a
+        real run)."""
+        ws = self.workspace
+        if not (ws.enabled and ws.root):
+            return True, ""
+        blob = " ".join(str(r) for r in (self._constitution or [])).lower()
+        if "wsgi_app" not in blob or not ("app.py" in blob or "src/app" in blob):
+            return True, ""                 # no declared entry → not applicable
+        goalblob = (blob + " " + str(getattr(self, "_goal", "") or "")).lower()
+        want_notes = "1" if "/notes" in goalblob else "0"
+        try:
+            proc = subprocess.run(
+                ["python3", "-c", _ROOT_BOOT_PROBE, str(ws.root), want_notes],
+                capture_output=True, text=True, timeout=60)
+            sout = (proc.stdout or "") + (proc.stderr or "")
+        except Exception as exc:  # noqa: BLE001
+            return False, f"boot-gate could not run the product: {exc}"
+        if "BOOTGATE_OK" in sout:
+            return True, ""
+        marker = "BOOTGATE_FAIL"
+        detail = sout.split(marker, 1)[1].strip() if marker in sout else sout.strip()
+        return False, "assembled product does not serve its contract: " + detail[:300]
 
     def _product_check(self, acceptance: Optional[dict]) -> None:
         """Build+run the materialised product and assert it is READY against an
