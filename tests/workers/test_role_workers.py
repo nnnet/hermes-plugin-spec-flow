@@ -21,6 +21,39 @@ import pytest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from harness import run_engine as eng         # noqa: E402
 from harness import role_worker as rw         # noqa: E402
+from harness_fakeapi import ok                # noqa: E402
+
+
+def _free_model(monkeypatch):
+    """Resolve every role to a free id (config seam, not an LLM-call stub) so a
+    chat worker's REAL ask() passes the free-only gate and hits the test
+    server."""
+    monkeypatch.setattr(rw, "_model_for",
+                        lambda role, specialty="": "openrouter/x:free")
+
+
+def _gw(srv, **extra):
+    """Route claude/ models through the SAME local server over real HTTP (no
+    CLI), with an openrouter-free pool declared. Lets the claude fallback arm
+    run for real."""
+    cfg = {"claude_gateway": {"base_url": srv.base_url},
+           "providers": [{"name": "openrouter-free", "kind": "openai",
+                          "model_prefix": "openrouter/",
+                          "require_suffix": ":free"}]}
+    cfg.update(extra)
+    return cfg
+
+
+@pytest.fixture(autouse=True)
+def _reset_backend_state():
+    # a migrated test may configure a claude_gateway or trip a real 429 cooldown
+    # — neither must leak into the next test.
+    from harness import llm_backend as lb
+    lb.configure_workers(None)
+    lb._free_down_until = 0.0
+    yield
+    lb.configure_workers(None)
+    lb._free_down_until = 0.0
 
 BIG = {"modules": 3, "tasks": 12, "interfaces": 3, "estimated_loc": 900,
        "open_decisions": 0, "single_concern": False, "testable_criteria": True}
@@ -397,29 +430,29 @@ def test_paid_model_is_forbidden_on_openai_backend(monkeypatch):
         lb.ask("hi", model="openrouter/qwen/qwen3-coder", role="decomposer", step="")  # no :free
 
 
-def test_quota_exhaustion_falls_back_to_haiku(monkeypatch):
+def test_quota_exhaustion_falls_back_to_haiku(monkeypatch, fake_openai):
     from harness import llm_backend as lb
-    monkeypatch.setattr(lb, "BACKEND", "openai")
     monkeypatch.setattr(lb, "_free_down_until", 0.0)
     monkeypatch.setattr(lb, "FALLBACK_MODEL", "haiku")
-    calls = []
-
-    def boom(prompt, model, system=None):
-        raise lb.QuotaExhausted("429 x3")
-
-    def claude(prompt, model, system=None, direct=False, timeout=None):
-        calls.append(model)
-        return "fallback reply"
-
-    monkeypatch.setattr(lb, "_ask_openai", boom)
-    monkeypatch.setattr(lb, "_ask_claude", claude)
+    # real model-aware server: every free model 429s, the claude fallback
+    # (gateway, wire model 'haiku') answers.
+    def route(payload):
+        if payload.get("model") == "haiku":
+            return (200, ok("fallback reply"))
+        return (429, "429 x3")
+    srv = fake_openai(route, retries=1)
+    lb.configure_workers(_gw(srv, fallback_cooldown_s=60, quota_wait_s=0.001,
+                             quota_wait_jitter=0))
     out = lb.ask("hi", model="openrouter/qwen/qwen3-coder:free", role="decomposer", step="")
-    assert out == "fallback reply" and calls == ["haiku"]
+    assert out == "fallback reply"
+    assert any(r["model"] == "haiku" for r in srv.requests)
     assert lb.last_call["fallback"] is True
-    # the pool is now in cooldown: the next call skips straight to haiku
-    monkeypatch.setattr(lb, "_ask_openai",
-                        lambda *a, **k: pytest.fail("free pool must be skipped"))
+    # the pool is now in cooldown: the next call skips straight to haiku — no
+    # free-model request reaches the server.
+    before = srv.call_count
     assert lb.ask("hi", model="openrouter/x:free", role="decomposer", step="") == "fallback reply"
+    assert all(r["model"] == "haiku" for r in srv.requests[before:]), \
+        "free pool must be skipped during cooldown"
     monkeypatch.setattr(lb, "_free_down_until", 0.0)
 
 
@@ -450,56 +483,51 @@ def _chat_ctx(tmp_path):
             "spec": "specs/adder.md"}
 
 
-def test_chat_implementer_writes_files_and_runs_pytest(monkeypatch, tmp_path):
+def test_chat_implementer_writes_files_and_runs_pytest(monkeypatch, tmp_path,
+                                                       fake_openai):
     import json as _json
-    from harness import llm_backend as lb
-    monkeypatch.setattr(lb, "BACKEND", "openai")
-    monkeypatch.setattr(lb, "ask", lambda prompt, model, system=None, **kw: _json.dumps(
-        {"files": {"src/adder.py": GOOD_IMPL, "tests/test_adder.py": GOOD_TEST}}))
+    _free_model(monkeypatch)
+    fake_openai([(200, ok(_json.dumps(
+        {"files": {"src/adder.py": GOOD_IMPL,
+                   "tests/test_adder.py": GOOD_TEST}})))])
     impl = rw.make_implementer()
     impl(_chat_ctx(tmp_path))
     assert (tmp_path / "src" / "adder.py").exists()
     assert (tmp_path / "tests" / "test_adder.py").exists()
 
 
-def test_chat_implementer_repairs_after_red_tests(monkeypatch, tmp_path):
+def test_chat_implementer_repairs_after_red_tests(monkeypatch, tmp_path,
+                                                  fake_openai):
     import json as _json
-    from harness import llm_backend as lb
-    monkeypatch.setattr(lb, "BACKEND", "openai")
-    n = {"calls": 0}
-
-    def fake_ask(prompt, model, system=None, **kw):
-        n["calls"] += 1
-        impl_body = BAD_IMPL if n["calls"] == 1 else GOOD_IMPL
-        return _json.dumps({"files": {"src/adder.py": impl_body,
-                                      "tests/test_adder.py": GOOD_TEST}})
-
-    monkeypatch.setattr(lb, "ask", fake_ask)
+    _free_model(monkeypatch)
+    # first reply is broken, the repair round's reply is correct — both served
+    # by the real server, the pytest run between them is real.
+    srv = fake_openai([
+        (200, ok(_json.dumps({"files": {"src/adder.py": BAD_IMPL,
+                                        "tests/test_adder.py": GOOD_TEST}}))),
+        (200, ok(_json.dumps({"files": {"src/adder.py": GOOD_IMPL,
+                                        "tests/test_adder.py": GOOD_TEST}})))])
     impl = rw.make_implementer()
     impl(_chat_ctx(tmp_path))
-    assert n["calls"] == 2, "red tests must trigger exactly one repair round"
+    assert srv.call_count == 2, "red tests must trigger exactly one repair round"
     assert "a + b" in (tmp_path / "src" / "adder.py").read_text(encoding="utf-8")
 
 
-def test_chat_reviewer_inlines_spec_text(monkeypatch, tmp_path):
+def test_chat_reviewer_inlines_spec_text(monkeypatch, tmp_path, fake_openai):
     import json as _json
-    from harness import llm_backend as lb
-    monkeypatch.setattr(lb, "BACKEND", "openai")
+    _free_model(monkeypatch)
     (tmp_path / "specs").mkdir(parents=True)
     (tmp_path / "specs" / "n1.md").write_text("UNIQUE-SPEC-MARKER-42",
                                               encoding="utf-8")
-    seen = {}
-
-    def fake_ask(prompt, model, system=None, **kw):
-        seen["prompt"] = prompt
-        return _json.dumps({"verdict": "PASS", "reasons": []})
-
-    monkeypatch.setattr(lb, "ask", fake_ask)
+    srv = fake_openai([(200, ok(_json.dumps(
+        {"verdict": "PASS", "reasons": []})))])
     rev = rw.make_reviewer()
     out = rev({"node": "n1", "spec": "specs/n1.md",
                "workspace_root": str(tmp_path), "goal": "g"})
     assert out["verdict"] == "PASS"
-    assert "UNIQUE-SPEC-MARKER-42" in seen["prompt"], \
+    sent = " ".join(m.get("content", "")
+                    for m in srv.requests[0]["messages"])
+    assert "UNIQUE-SPEC-MARKER-42" in sent, \
         "chat-only reviewer must receive the spec text inline"
 
 
@@ -546,11 +574,12 @@ def test_extract_json_survives_fences_and_leading_braces():
         rw._extract_json("no json here at all")
 
 
-def test_chat_implementer_survives_garbage_reply(monkeypatch, tmp_path):
-    from harness import llm_backend as lb
-    monkeypatch.setattr(lb, "BACKEND", "openai")
-    monkeypatch.setattr(lb, "ask", lambda prompt, model, system=None, **kw:
-                        "I cannot produce JSON today {broken")
+def test_chat_implementer_survives_garbage_reply(monkeypatch, tmp_path,
+                                                 fake_openai):
+    _free_model(monkeypatch)
+    # the real server returns un-parseable prose — the worker must surrender,
+    # not crash.
+    fake_openai([(200, ok("I cannot produce JSON today {broken"))])
     impl = rw.make_implementer()
     assert impl(_chat_ctx(tmp_path)) is None    # surrendered, not crashed
 
@@ -604,45 +633,38 @@ def test_requirements_sync_into_smoke_and_protect(tmp_path, monkeypatch):
     assert rel in pv.protected_files(), "acceptance must be worker-immutable"
 
 
-def test_branch_decomposer_sees_standing_requirements(tmp_path, monkeypatch):
+def _sent(srv, i=0):
+    """The full text the harness put on the wire for request i."""
+    return " ".join(m.get("content", "") for m in srv.requests[i]["messages"])
+
+
+def test_branch_decomposer_sees_standing_requirements(tmp_path, monkeypatch,
+                                                      fake_openai):
     import json as _json
-    from harness import llm_backend as lb
-    monkeypatch.setattr(lb, "BACKEND", "openai")
+    _free_model(monkeypatch)
     ch = _req_channel(tmp_path)
-    seen = {}
-
-    def fake_ask(prompt, model, system=None, **kw):
-        seen["prompt"] = prompt
-        return _json.dumps({"metrics": dict(SMALL)})
-
-    monkeypatch.setattr(lb, "ask", fake_ask)
+    srv = fake_openai([(200, ok(_json.dumps({"metrics": dict(SMALL)})))])
     dec = rw.make_decomposer(workspace_dir=str(tmp_path), channel=ch)
     dec({"project": {"goal": "g", "target": "t", "constitution": []},
          "node": {"id": "L0", "title": "Root"}, "parent": None, "depth": 0,
          "ancestors": [], "parent_id": None, "existing_nodes": []})
-    assert "STANDING HUMAN REQUIREMENTS" in seen["prompt"]
-    assert "web_ui" in seen["prompt"]
+    assert "STANDING HUMAN REQUIREMENTS" in _sent(srv)
+    assert "web_ui" in _sent(srv)
 
 
 def test_branch_decomposer_never_attaches_requirements(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, fake_openai):
     # placement belongs to the ENGINE (root level / scoped branch) — a
     # branch decomposer must NOT grow requirement children on its own:
     # v11 proved an obedient branch swallows cross-cutting scope into the
     # wrong subtree (web_ui under buyer_discovery)
     import json as _json
-    from harness import llm_backend as lb
-    monkeypatch.setattr(lb, "BACKEND", "openai")
+    _free_model(monkeypatch)
     ch = _req_channel(tmp_path)
-    seen = {}
-
-    def fake_ask(prompt, model, system=None, **kw):
-        seen["prompt"] = prompt
-        return _json.dumps({"atomic": False, "metrics": dict(SMALL),
-                            "children": [{"id": "catalog", "title": "C"}],
-                            "spec_markdown": "## Requirements\n- x"})
-
-    monkeypatch.setattr(lb, "ask", fake_ask)
+    srv = fake_openai([(200, ok(_json.dumps(
+        {"atomic": False, "metrics": dict(SMALL),
+         "children": [{"id": "catalog", "title": "C"}],
+         "spec_markdown": "## Requirements\n- x"})))])
     dec = rw.make_decomposer(workspace_dir=str(tmp_path), channel=ch)
     out = dec({"project": {"goal": "g", "target": "t", "constitution": []},
                "node": {"id": "L0", "title": "Root"}, "parent": None,
@@ -650,23 +672,19 @@ def test_branch_decomposer_never_attaches_requirements(
                "existing_nodes": []})
     assert [c["id"] for c in out["children"]] == ["catalog"]
     # awareness text instructs the branch to stay OUT of the requirement
-    assert "materialized by the ENGINE" in seen["prompt"]
-    assert "do NOT create a child" in seen["prompt"]
+    assert "materialized by the ENGINE" in _sent(srv)
+    assert "do NOT create a child" in _sent(srv)
 
 
 def test_requirement_already_in_tree_not_attached_twice(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, fake_openai):
     import json as _json
-    from harness import llm_backend as lb
-    monkeypatch.setattr(lb, "BACKEND", "openai")
+    _free_model(monkeypatch)
     ch = _req_channel(tmp_path)
-
-    def fake_ask(prompt, model, system=None, **kw):
-        return _json.dumps({"atomic": False, "metrics": dict(SMALL),
-                            "children": [{"id": "payments", "title": "P"}],
-                            "spec_markdown": "## Requirements\n- x"})
-
-    monkeypatch.setattr(lb, "ask", fake_ask)
+    fake_openai([(200, ok(_json.dumps(
+        {"atomic": False, "metrics": dict(SMALL),
+         "children": [{"id": "payments", "title": "P"}],
+         "spec_markdown": "## Requirements\n- x"})))])
     dec = rw.make_decomposer(workspace_dir=str(tmp_path), channel=ch)
     out = dec({"project": {"goal": "g", "target": "t", "constitution": []},
                "node": {"id": "orders", "title": "Orders"}, "parent": "L0",
@@ -677,28 +695,22 @@ def test_requirement_already_in_tree_not_attached_twice(
 
 
 def test_requirement_node_gets_full_statement_in_prompt(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, fake_openai):
     # the attached child's own decompose pass must see the FULL requirement
     # text — its spec is authored from it, not from a 120-char title
     import json as _json
-    from harness import llm_backend as lb
-    monkeypatch.setattr(lb, "BACKEND", "openai")
+    _free_model(monkeypatch)
     ch = _req_channel(tmp_path)
-    seen = {}
-
-    def fake_ask(prompt, model, system=None, **kw):
-        seen["prompt"] = prompt
-        return _json.dumps({"atomic": True, "metrics": dict(SMALL),
-                            "spec_markdown": "## Requirements\n- x"})
-
-    monkeypatch.setattr(lb, "ask", fake_ask)
+    srv = fake_openai([(200, ok(_json.dumps(
+        {"atomic": True, "metrics": dict(SMALL),
+         "spec_markdown": "## Requirements\n- x"})))])
     dec = rw.make_decomposer(workspace_dir=str(tmp_path), channel=ch)
     dec({"project": {"goal": "g", "target": "t", "constitution": []},
          "node": {"id": "web_ui", "title": "Web UI"}, "parent": "L0",
          "depth": 3, "ancestors": ["Root"], "parent_id": None,
          "existing_nodes": []})
-    assert "THIS NODE EXISTS to satisfy" in seen["prompt"]
-    assert "HTML catalog page with search" in seen["prompt"]
+    assert "THIS NODE EXISTS to satisfy" in _sent(srv)
+    assert "HTML catalog page with search" in _sent(srv)
 
 
 def test_branch_addressed_note_not_burned_by_leaf(tmp_path):
@@ -713,13 +725,12 @@ def test_branch_addressed_note_not_burned_by_leaf(tmp_path):
     assert not ch.inbox.read_text(encoding="utf-8").strip()
 
 
-def test_leaf_bar_catches_suite_degradation(monkeypatch, tmp_path):
+def test_leaf_bar_catches_suite_degradation(monkeypatch, tmp_path, fake_openai):
     # the leaf's own tests are green, but it REWRITES a module a sibling
     # relies on — the leaf bar must go red at leaf completion, not at the
     # integrate gate branches later
     import json as _json
-    from harness import llm_backend as lb
-    monkeypatch.setattr(lb, "BACKEND", "openai")
+    _free_model(monkeypatch)
     (tmp_path / "src").mkdir(parents=True)
     (tmp_path / "tests").mkdir(parents=True)
     (tmp_path / "specs").mkdir(parents=True)
@@ -733,43 +744,38 @@ def test_leaf_bar_catches_suite_degradation(monkeypatch, tmp_path):
         encoding="utf-8")
     (tmp_path / "specs" / "shared.md").write_text("## Requirements\n- x\n",
                                                   encoding="utf-8")
-    calls = {"n": 0}
-
-    def fake_ask(prompt, model, system=None, **kw):
-        calls["n"] += 1
-        return _json.dumps({"files": {
-            "src/shared.py": "def val():\n    return 3\n",
-            "tests/test_shared.py": (
-                "import sys\nfrom pathlib import Path\n"
-                "sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'src'))\n"
-                "from shared import val\n"
-                "def test_new():\n    assert val() == 3\n")}})
-
-    monkeypatch.setattr(lb, "ask", fake_ask)
+    _degraded = _json.dumps({"files": {
+        "src/shared.py": "def val():\n    return 3\n",
+        "tests/test_shared.py": (
+            "import sys\nfrom pathlib import Path\n"
+            "sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'src'))\n"
+            "from shared import val\n"
+            "def test_new():\n    assert val() == 3\n")}})
+    # served twice: the degradation is caught by a REAL sibling-suite run, which
+    # triggers exactly one repair round (two real server calls).
+    srv = fake_openai([(200, ok(_degraded)), (200, ok(_degraded))])
     impl = rw.make_implementer()
     ws = _ChatWS(tmp_path)
     impl({"node": "shared", "title": "Shared", "workspace": ws,
           "spec": "specs/shared.md"})
-    assert calls["n"] == 2, "suite degradation must trigger the repair round"
+    assert srv.call_count == 2, "suite degradation must trigger the repair round"
 
 
-def test_garbage_decomposer_reply_gets_one_strict_reask(monkeypatch):
+def test_garbage_decomposer_reply_gets_one_strict_reask(monkeypatch,
+                                                        fake_openai):
     import json as _json
-    from harness import llm_backend as lb
-    monkeypatch.setattr(lb, "BACKEND", "openai")
-    replies = ["вот моя декомпозиция прозой, без JSON",
-               _json.dumps({"atomic": True, "metrics": dict(SMALL),
-                            "spec_markdown": "## Requirements\n- x"})]
-
-    def fake_ask(prompt, model, system=None, **kw):
-        return replies.pop(0)
-
-    monkeypatch.setattr(lb, "ask", fake_ask)
+    _free_model(monkeypatch)
+    # first reply is prose (un-parseable), the strict re-ask gets valid JSON —
+    # both served by the real server.
+    srv = fake_openai([
+        (200, ok("вот моя декомпозиция прозой, без JSON")),
+        (200, ok(_json.dumps({"atomic": True, "metrics": dict(SMALL),
+                              "spec_markdown": "## Requirements\n- x"})))])
     dec = rw.make_decomposer()
     out = dec({"project": {"goal": "g", "target": "t", "constitution": []},
                "node": {"id": "n", "title": "N"}, "parent": "L0",
                "depth": 3, "ancestors": [], "existing_nodes": []})
-    assert out["atomic"] is True and not replies
+    assert out["atomic"] is True and srv.call_count == 2
 
 
 def test_implementer_crash_surrenders_leaf_not_run(plugin, tmp_path):
