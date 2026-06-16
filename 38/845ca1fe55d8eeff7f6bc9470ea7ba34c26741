@@ -1,0 +1,28 @@
+tests/scenarios/p6_micro_notes.yaml
+  s_a7f45290e91181::t_69ad484f9c60d6 199-208,211,213
+  s_a7f45290e91181::t_9b4adad1f0d562 183-198,209,212,214-216,218-219,222-223,225,227-228,230-231
+  s_a7f45290e91181::t_1fe5dff78a3f43 217
+tests/harness/role_worker.py
+  s_a7f45290e91181::t_89e48fb50ec8b3 1029-1031,1033-1034
+tests/lib/live_dashboard.py
+  s_a7f45290e91181::t_f31da7d996d166 854-857,861
+  s_a7f45290e91181::t_852b916f592432 2212,2214
+  s_a7f45290e91181::t_3cd8adaf41ac77 1490,1498-1499,1501-1504
+  s_a7f45290e91181::t_2500ca11ede2d1 1035-1038
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "38845ca1fe55d8eeff7f6bc9470ea7ba34c26741",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
