@@ -333,7 +333,13 @@ DEFAULT_AGENTS = {"implementer": _default_implementer,
 #   halt      — stop the run on the first REJECT (strict CI mode)
 #   ask_human — route to the approver (HITL): approved -> record & continue,
 #               not approved -> halt
-DEFAULT_REVIEW_POLICY = {"on_reject": "rework", "max_rework": 2}
+DEFAULT_REVIEW_POLICY = {"on_reject": "rework", "max_rework": 2,
+                         # A1 review tiering (default OFF — p4/p5 unchanged):
+                         # a SIMPLE leaf that passes the deterministic spec lint
+                         # skips the LLM reviewer + rework loop entirely. Review
+                         # is the largest measured time sink (~47%); a small,
+                         # decision-free leaf does not need an opinion round.
+                         "tiering": False, "simple_max_loc": 60}
 
 # Hard ceiling on decomposer-agent calls per run (runaway-recursion guard).
 MAX_DECOMPOSE_CALLS = 40
@@ -1716,6 +1722,33 @@ class Engine:
                                "detail": reasons})
         return verdict, reasons
 
+    def _is_simple_node(self, node: dict, depth: int) -> bool:
+        """A1: a node simple enough to skip the LLM review round. Deterministic
+        — decided purely by structure/metrics, never the model:
+          * tiering must be enabled (review.tiering);
+          * it is a LEAF (no children — a branch always gets full review);
+          * it carries NO open decisions;
+          * its estimated size is <= review.simple_max_loc;
+          * it is not the root (depth >= 1) — the top node always gets review.
+        Anything failing these falls through to the full reviewer + rework."""
+        pol = self.review_policy
+        if not pol.get("tiering"):
+            return False
+        if node.get("children"):
+            return False
+        if depth < 1:
+            return False
+        m = node.get("metrics") or {}
+        try:
+            if int(m.get("open_decisions", 0) or 0) > 0:
+                return False
+            cap = int(pol.get("simple_max_loc", 60))
+            if int(m.get("estimated_loc", 0) or 0) > cap:
+                return False
+        except (TypeError, ValueError):
+            return False
+        return True
+
     def _review_gate(self, node: dict, nid: str, title: str, depth: int,
                      parent: Optional[str], spec_args: dict,
                      ancestors: tuple) -> None:
@@ -1776,6 +1809,18 @@ class Engine:
                                        str(node.get("spec_markdown") or "")):
             self.emit("review", "engine", "", nid, "spec lint clean", "",
                       "spec_lint", "PASS")
+            # A1 tiering: a SIMPLE leaf that already passed the deterministic
+            # lint needs no LLM opinion round — auto-PASS and skip the reviewer
+            # + rework loop. Deterministic (decided by node metrics), so the
+            # saving does not depend on the model. Default off.
+            if self._is_simple_node(node, depth):
+                cap = int(self.review_policy.get("simple_max_loc", 60))
+                self.emit("review", "engine", "", nid,
+                          "review tiering: simple leaf — deterministic check "
+                          "only, LLM reviewer skipped",
+                          f"leaf, open_decisions=0, est_loc<={cap}",
+                          "spec_review", "PASS", level=L_MILESTONE)
+                return
         verdict, reasons = self._consult_reviewer(nid, title, spec_rel,
                                                   depth)
         if verdict != "REJECT":
