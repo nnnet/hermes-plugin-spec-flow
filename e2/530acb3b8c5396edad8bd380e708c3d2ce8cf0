@@ -1,0 +1,24 @@
+tests/dashboard/test_flow_checkpoints.py
+  s_a7f45290e91181::t_27792399ca2e54 1-36
+tests/lib/live_dashboard.py
+  s_a7f45290e91181::t_28ecd7303c8fcd 697-707
+  s_a7f45290e91181::t_9ca9f18de2f67b 751-753
+  s_a7f45290e91181::t_6f48e15cc57ae1 731-736,738
+  s_a7f45290e91181::t_0c9aeff4135af2 812-823
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.7",
+  "base_commit_sha": "e2530acb3b8c5396edad8bd380e708c3d2ce8cf0",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
