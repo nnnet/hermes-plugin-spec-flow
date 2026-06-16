@@ -28,6 +28,7 @@ import os
 import re
 import subprocess
 import time as _time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -38,6 +39,11 @@ from . import claims, claude_cli, config, llm_backend, llm_log, memory
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 SKILLS_DIR = PLUGIN_ROOT / "skills"
 PROFILES_DIR = PLUGIN_ROOT / "profiles"
+
+# Phase-1 provider seam: a specialist names WHERE it runs. Only `local` (the
+# built-in role_worker LLM call) is wired this phase; the others (hermes / a2a /
+# mission-control) are forward-declared in the YAML schema and land later.
+LOCAL_PROVIDER = "local"
 
 TIMEOUT = config.env("WORKER_TIMEOUT", int)
 RETRIES = config.env("WORKER_RETRIES", int)
@@ -158,12 +164,18 @@ def _granular_commit(ws_root: str, fn: str, stage: str) -> None:
 def _call_model(prompt: str, *, system: str, allowed: list[str],
                 disallowed: list[str], cwd: Optional[str], model: str,
                 role: Optional[str] = None, specialty: str = "",
-                meta: Optional[dict] = None) -> str:
+                meta: Optional[dict] = None,
+                params: Optional[dict] = None) -> str:
     """ONE door to the model for every role worker (free-pool rule lives in
     llm_backend). ``role`` resolves the case-configured model CHAIN — the
     tail entries answer when the primary's quota is exhausted. #10: a node's
     ``specialty`` routes the role to a specialty-specific chain. The
     claude-CLI path keeps the real tool-policy flags.
+
+    ``params`` is a specialist's open-schema sampling config (temperature,
+    max_tokens, …); it is forwarded to llm_backend.ask so the chat-backend
+    request carries it. The claude-CLI path has no flag for these and ignores
+    them — same as a solo worker with no params (today's behaviour).
 
     Every call is logged universally through llm_log.timed_ask with an
     open-schema ``meta`` (role, model, specialty + whatever the caller adds:
@@ -175,9 +187,10 @@ def _call_model(prompt: str, *, system: str, allowed: list[str],
             fallbacks = llm_backend.chain_for(role, specialty)[1:] if role else ()
             if fallbacks:
                 return llm_backend.ask(p, model=model, system=system,
-                                       fallbacks=fallbacks, role=role or "")
+                                       fallbacks=fallbacks, role=role or "",
+                                       params=params)
             return llm_backend.ask(p, model=model, system=system,
-                                   role=role or "")
+                                   role=role or "", params=params)
         return _run_claude(p, system=system, allowed=allowed,
                            disallowed=disallowed, cwd=cwd, model=model)
 
@@ -258,7 +271,8 @@ output as specified above."""
 def _dialog_round(prompt: str, *, role: str, node: str, system: str,
                   allowed: list[str], disallowed: list[str],
                   cwd: Optional[str], model: str, channel: Any,
-                  specialty: str = "", meta: Optional[dict] = None) -> str:
+                  specialty: str = "", meta: Optional[dict] = None,
+                  params: Optional[dict] = None) -> str:
     """One worker session + at most one human Q&A round.
 
     A reply consisting of {"question": ...} pauses the work, asks the human
@@ -266,11 +280,13 @@ def _dialog_round(prompt: str, *, role: str, node: str, system: str,
     No channel / no answer → the worker is told to proceed on its own
     judgement and state its assumption. #10: ``specialty`` routes the call's
     fallback chain to a specialty-specific one. ``meta`` carries extra call
-    descriptors (step, mode, attempt) for the universal call log."""
+    descriptors (step, mode, attempt) for the universal call log. ``params``
+    threads a specialist's sampling config through to the backend on both the
+    first round and the post-question follow-up."""
     _m = dict(meta or {}); _m.setdefault("node", node)
     raw = _call_model(prompt, system=system, allowed=allowed,
                       disallowed=disallowed, cwd=cwd, model=model, role=role,
-                      specialty=specialty, meta=_m)
+                      specialty=specialty, meta=_m, params=params)
     try:
         probe = _extract_json(raw)
     except ValueError:
@@ -294,7 +310,8 @@ def _dialog_round(prompt: str, *, role: str, node: str, system: str,
                     "the normal output now (no more questions).")
     return _call_model(followup, role=role, system=system, allowed=allowed,
                        disallowed=disallowed, cwd=cwd, model=model,
-                       specialty=specialty, meta={**_m, "followup": True})
+                       specialty=specialty, meta={**_m, "followup": True},
+                       params=params)
 
 
 def _handle_operator_reply(out: dict, *, role: str, node: str,
@@ -572,18 +589,21 @@ def _candidate_compiles(raw: str) -> "tuple[bool, int, str]":
 
 def _ensemble_generate(prompt: str, *, node: str, system: str, allowed: list,
                        disallowed: list, cwd: str, model: str, channel: Any,
-                       specialty: str, meta: Optional[dict] = None) -> str:
+                       specialty: str, meta: Optional[dict] = None,
+                       params: Optional[dict] = None) -> str:
     """Generate up to N candidate implementations from different free models
     and return the reply of the first that compiles clean (else the best by
     (compiles, n_files)). Stops early on the first clean candidate to spare
     the free-pool quota. N==1 is exactly the legacy single call. ``meta`` is
-    forwarded to the universal call log (step/mode/...)."""
+    forwarded to the universal call log (step/mode/...). ``params`` carries a
+    specialist's sampling config to every candidate call."""
     n = _ensemble_size()
     if n <= 1:
         return _dialog_round(prompt, role="implementer", node=node,
                              system=system, allowed=allowed,
                              disallowed=disallowed, cwd=cwd, model=model,
-                             channel=channel, specialty=specialty, meta=meta)
+                             channel=channel, specialty=specialty, meta=meta,
+                             params=params)
     chain = llm_backend.chain_for("implementer", specialty) or [model]
     best = None     # (score_tuple, raw)
     for i in range(n):
@@ -592,7 +612,8 @@ def _ensemble_generate(prompt: str, *, node: str, system: str, allowed: list,
                             system=system, allowed=allowed,
                             disallowed=disallowed, cwd=cwd, model=m,
                             channel=channel, specialty=specialty,
-                            meta={**(meta or {}), "candidate": i})
+                            meta={**(meta or {}), "candidate": i},
+                            params=params)
         clean, nfiles, why = _candidate_compiles(raw)
         # candidate EVALUATION marker (engine decision), not a call log — the
         # call itself was logged once by timed_ask. No `model` here so it is
@@ -612,6 +633,75 @@ def _ensemble_generate(prompt: str, *, node: str, system: str, allowed: list,
     return best[1]
 
 
+# ── RoleTask / RoleResult contract (doc §3) ─────────────────────────────
+# The uniform seam every executor speaks: the engine hands a specialist a
+# RoleTask and gets back a RoleResult — provider-independent, so the same
+# observability and workspace write-back work whether the work ran locally
+# (this phase) or, later, on a remote Hermes/A2A/MC agent. stdlib only (NO
+# `from tests.harness import` at plugin import — these dataclasses are the
+# layering-safe runtime contract). Phase 1 routes the IMPLEMENTER orchestra
+# through it internally, with NO observable change.
+# TODO(phase 2+): route the decomposer / reviewer / verifier through the same
+# contract; they still take their legacy ctx dict for now.
+
+
+@dataclass
+class RoleTask:
+    """Engine → executor: one unit of role work, transport-agnostic.
+
+    Why: a single shape lets a Team compose child tasks and (later) a remote
+    adapter serialise/deserialise without the engine branching on provider.
+    What: carries the role, the node identity, free-form context/handoff, the
+    workspace path (local) and constraints.
+    Test: build one for a specialist and assert role/node/specialty/params
+    round-trip (tests/workers/test_specialist_config.py)."""
+    role: str
+    node: str
+    title: str = ""
+    spec: str = ""
+    workspace: Optional[str] = None
+    specialty: str = ""
+    provider: str = LOCAL_PROVIDER
+    model: str = ""
+    params: Optional[dict] = None
+    skill: Optional[str] = None
+    context: dict = field(default_factory=dict)
+    constraints: dict = field(default_factory=dict)
+
+
+@dataclass
+class RoleResult:
+    """Executor → engine: the uniform outcome of a RoleTask.
+
+    Why: every adapter returns this same record, so write-back and the call
+    log are provider-independent.
+    What: `kind` (files|spec|verdict), the produced `artifacts`, an optional
+    `verdict`, and open-schema `meta` (provider, model, step, …).
+    Test: assert an orchestra step builds a RoleResult whose meta names the
+    provider+step it ran."""
+    kind: str
+    artifacts: dict = field(default_factory=dict)
+    verdict: Optional[dict] = None
+    meta: dict = field(default_factory=dict)
+
+
+def _specialist_task(step: dict, ctx: dict, nid: str, fn: str,
+                     ws_root: str) -> RoleTask:
+    """Build the RoleTask for one orchestra specialist from its config + the
+    leaf ctx. Resolves the provider (phase-1 gate) and the step's model/params
+    so the call path reads them off ONE record.
+    Test: a {role:'coder', params:{...}} step yields a RoleTask with provider
+    'local', the resolved model and those params."""
+    specialty = str(ctx.get("specialty", "") or "")
+    provider = _resolve_provider(step)          # raises for non-local (phase 3)
+    return RoleTask(
+        role=str(step["role"]), node=nid, title=ctx.get("title", ""),
+        spec=ctx.get("spec", ""), workspace=ws_root, specialty=specialty,
+        provider=provider, model=_step_model(step, specialty),
+        params=_step_params(step), skill=step.get("skill"),
+        context={"module": fn})
+
+
 # ── implementer orchestra (D1) ──────────────────────────────────────────
 # Off by default: with no `team` config the implementer is the SINGLE-agent
 # path, byte-for-byte unchanged. When a `team` list IS configured the leaf is
@@ -619,15 +709,47 @@ def _ensemble_generate(prompt: str, *, node: str, system: str, allowed: list,
 # coder → tester → fixer — each step's structured output fed to the next. The
 # orchestra ORCHESTRATES the same building blocks (_ensemble_generate,
 # _write_reply_files, _leaf_bar, _apply_diff_repair, ws_tx); it never
-# duplicates them. Config: workers.implementer.team (list of {role, skill?,
-# model?}) or env SPEC_FLOW_IMPLEMENTER_TEAM (JSON), consistent with the other
-# knobs (mirrors _ensemble_size's WORKERS_CFG access pattern).
+# duplicates them. Config: workers.implementer.team.specialists (canonical) or
+# the legacy bare list workers.implementer.team, or env
+# SPEC_FLOW_IMPLEMENTER_TEAM (JSON). Each specialist routes through a RoleTask
+# (the §3 contract) so a future provider adapter slots in without touching the
+# orchestra loop.
+
+
+def _normalise_specialist(item: Any) -> Optional[dict]:
+    """One team entry → the canonical specialist record, or None if it has no
+    role. The schema is `{role, provider='local', model?, params?, skill?}`.
+
+    Why: phase 1 forward-declares the provider seam — every specialist carries
+    a provider (default 'local'); a non-local provider is PARSED here but the
+    orchestra raises NotImplementedError when it tries to run it, so a case YAML
+    can already name `provider: hermes` and fail with a clear phase-3 message
+    rather than silently ignoring it.
+    Test: a bare {role} yields provider 'local'; {role, params:{...}} round-trips
+    the params; an item with no role yields None."""
+    if not isinstance(item, dict) or not item.get("role"):
+        return None
+    params = item.get("params")
+    return {"role": str(item["role"]),
+            "provider": str(item.get("provider") or LOCAL_PROVIDER),
+            "skill": item.get("skill"),
+            "model": item.get("model"),
+            "params": dict(params) if isinstance(params, dict) else None}
 
 
 def _implementer_team() -> list[dict]:
     """The configured implementer team (orchestra), or [] for the default
-    single-agent path. Env SPEC_FLOW_IMPLEMENTER_TEAM (JSON list) overrides the
-    case YAML for testability, mirroring how the other knobs read env first."""
+    single-agent path. Env SPEC_FLOW_IMPLEMENTER_TEAM (JSON) overrides the case
+    YAML for testability, mirroring how the other knobs read env first.
+
+    Two shapes are accepted (the new one is canonical, the old one an alias):
+      * NEW:  implementer.team.specialists: [ {role, provider?, model?,
+              params?, skill?}, ... ]   — each specialist carries its own model
+              and open-schema params (temperature/max_tokens/…).
+      * OLD:  implementer.team: [ {role, model?, skill?}, ... ]   — the bare
+              list form keeps working unchanged (provider defaults to local).
+    Test: a `specialists:` block and the old list form both yield the same role
+    sequence; per-specialist model/params survive the round-trip."""
     env = os.environ.get("SPEC_FLOW_IMPLEMENTER_TEAM")
     raw: Any = None
     if env is not None and env.strip():
@@ -638,21 +760,44 @@ def _implementer_team() -> list[dict]:
     if raw is None:
         cfg = getattr(llm_backend, "WORKERS_CFG", None) or {}
         raw = (cfg.get("implementer") or {}).get("team")
+    # canonical {team: {specialists: [...]}} (a dict) OR the alias bare list.
+    # A JSON env value may carry either shape, so unwrap dict here too.
+    if isinstance(raw, dict):
+        raw = raw.get("specialists")
     if not isinstance(raw, list):
         return []
     team = []
     for item in raw:
-        if isinstance(item, dict) and item.get("role"):
-            team.append({"role": str(item["role"]),
-                         "skill": item.get("skill"),
-                         "model": item.get("model")})
+        spec = _normalise_specialist(item)
+        if spec is not None:
+            team.append(spec)
     return team
+
+
+def _resolve_provider(step: dict) -> str:
+    """A step's provider, after asserting phase-1 support. Only `local` runs
+    this phase; any other provider is a forward-declared schema that needs an
+    adapter (phases 2-3) and must fail LOUDLY, not be silently skipped.
+    Test: provider 'hermes' raises NotImplementedError mentioning phase 3."""
+    provider = str(step.get("provider") or LOCAL_PROVIDER)
+    if provider != LOCAL_PROVIDER:
+        raise NotImplementedError(
+            f"provider {provider} not available until phase 3")
+    return provider
 
 
 def _step_model(step: dict, specialty: str) -> str:
     """A team step's model: its declared `model`, else the implementer chain
     head for this specialty (the same resolver the single path uses)."""
     return str(step.get("model") or llm_backend.model_for("implementer", specialty))
+
+
+def _step_params(step: dict) -> Optional[dict]:
+    """A team step's open-schema sampling params (temperature/max_tokens/…),
+    or None when the specialist declares none (then the backend uses its
+    defaults, byte-for-byte today's behaviour)."""
+    params = step.get("params")
+    return dict(params) if isinstance(params, dict) and params else None
 
 
 def _step_system(step: dict, default_system: str) -> str:
@@ -722,16 +867,25 @@ def _orchestra_run(ctx: dict, ws_root: str, nid: str, fn: str, *,
     handoff: dict[str, Any] = {"architect_plan": "", "test_output": ""}
     passed, test_out, wrote = False, "(no files written)", False
     baseline = 0
+    # Resolve every specialist into a RoleTask BEFORE any LLM call (doc §3).
+    # This validates the team up front — a non-local provider raises
+    # NotImplementedError here, OUT of the per-step try/except, so an
+    # unsupported provider fails loudly (phase-3 message) instead of being
+    # logged-and-skipped like a transient step error.
+    tasks = [_specialist_task(step, ctx, nid, fn, ws_root) for step in team]
     llm_log.log({"event": "orchestra_start", "node": nid,
-                 "steps": [s["role"] for s in team]})
+                 "steps": [t.role for t in tasks],
+                 "providers": [t.provider for t in tasks]})
 
-    for step in team:
-        role = step["role"]
-        s_model = _step_model(step, specialty)
-        s_system = _step_system(step, system)
+    for task in tasks:
+        role = task.role
+        s_model = task.model
+        s_params = task.params
+        s_system = _step_system({"skill": task.skill, "role": role}, system)
         # the call is logged once by timed_ask; the step/mode travel as call
         # meta so usage is sliceable by orchestra step without a second log.
-        step_meta = {"step": role, "mode": "orchestra"}
+        step_meta = {"step": role, "mode": "orchestra",
+                     "provider": task.provider}
         try:
             if role == "architect":
                 prompt = _ARCHITECT_TASK.format(
@@ -741,7 +895,7 @@ def _orchestra_run(ctx: dict, ws_root: str, nid: str, fn: str, *,
                     prompt, role="implementer", node=nid, system=s_system,
                     allowed=allowed, disallowed=disallowed, cwd=ws_root,
                     model=s_model, channel=channel, specialty=specialty,
-                    meta=step_meta)
+                    meta=step_meta, params=s_params)
 
             elif role in ("coder", "tester"):
                 prompt = base_prompt
@@ -754,7 +908,8 @@ def _orchestra_run(ctx: dict, ws_root: str, nid: str, fn: str, *,
                 raw = _ensemble_generate(
                     prompt, node=nid, system=s_system, allowed=allowed,
                     disallowed=disallowed, cwd=ws_root, model=s_model,
-                    channel=channel, specialty=specialty, meta=step_meta)
+                    channel=channel, specialty=specialty, meta=step_meta,
+                    params=s_params)
                 try:
                     out = _extract_json(raw)
                 except ValueError:
@@ -780,7 +935,8 @@ def _orchestra_run(ctx: dict, ws_root: str, nid: str, fn: str, *,
                 raw2 = _call_model(
                     repair, system=s_system, allowed=allowed,
                     disallowed=disallowed, cwd=ws_root, model=s_model,
-                    role="implementer", specialty=specialty, meta=step_meta)
+                    role="implementer", specialty=specialty, meta=step_meta,
+                    params=s_params)
                 with ws_tx.transaction(ws_root, f"leaf:{nid}",
                                        "orchestra repair"):
                     if _apply_diff_repair(ws, ws_root, fn, raw2):

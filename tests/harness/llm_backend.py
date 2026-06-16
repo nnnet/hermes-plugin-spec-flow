@@ -242,9 +242,15 @@ class QuotaExhausted(RuntimeError):
 
 
 def _ask_one(prompt: str, model: str, system: str | None,
-             fallback: bool, timeout: int | None = None) -> str:
+             fallback: bool, timeout: int | None = None,
+             params: dict | None = None) -> str:
     """Route ONE model of a chain to its provider; QuotaExhausted bubbles
-    up so the caller can walk the rest of the chain."""
+    up so the caller can walk the rest of the chain.
+
+    ``params`` is an OPEN-schema dict of sampling/generation knobs
+    (temperature, max_tokens, top_p, stop, …). It is forwarded to the
+    OpenAI-protocol payload as-is; the claude-CLI path has no flag for these
+    fields and simply ignores them (no signature churn when new keys appear)."""
     global _free_down_until
     if model.startswith("claude/"):
         # subscription-CLI provider (e.g. 'claude/haiku') — spends no API
@@ -267,6 +273,10 @@ def _ask_one(prompt: str, model: str, system: str | None,
         raise QuotaExhausted("free pool inside its cooldown window")
     try:
         last_call.update(backend="openai", model=model, fallback=fallback)
+        # forward params only when present: a paramless call keeps the legacy
+        # _ask_openai(prompt, model, system=…) signature its test stubs expect.
+        if params:
+            return _ask_openai(prompt, model, system=system, params=params)
         return _ask_openai(prompt, model, system=system)
     except QuotaExhausted:
         _free_down_until = time.time() + FALLBACK_COOLDOWN
@@ -300,14 +310,22 @@ def _log_token_usage(model: str, usage: dict) -> None:
 
 
 def ask(prompt: str, *, model: str, system: str | None = None,
-        fallbacks: tuple | list = (), role: str = "") -> str:
+        fallbacks: tuple | list = (), role: str = "",
+        params: dict | None = None) -> str:
     """Send one prompt, return the reply text.
 
     ``model`` + ``fallbacks`` form an ordered chain (the case YAML
     `workers:` block supplies it via chain_for); on QuotaExhausted the
     next entry answers. When the whole chain is exhausted the legacy
     terminal fallback (subscription CLI, FALLBACK_MODEL) still applies
-    unless the chain already contains a 'claude/' entry."""
+    unless the chain already contains a 'claude/' entry.
+
+    ``params`` (open schema: temperature/max_tokens/top_p/stop/…) rides every
+    attempt in the chain and the terminal rotation, so a specialist's sampling
+    config is honoured no matter which model in its chain ends up answering.
+
+    Test: assert a fake `_ask_one`/`_ask_openai` receives the exact params dict
+    passed here (see tests/workers/test_specialist_config.py)."""
     cfg = WORKERS_CFG or {}
     _call_ctx.role = role          # #6: tag token usage with the calling role
     # cyclic primary rotation (#40): spread successive calls across the free
@@ -342,6 +360,11 @@ def ask(prompt: str, *, model: str, system: str | None = None,
     #     erroring model would spin all `rounds` (~55 min) for nothing.
     max_error_rounds = max(1, int(cfg.get("max_error_rounds", 3)))
     consecutive_error_rounds = 0
+    # params ride as a kwarg ONLY when present, so a plain call (and the many
+    # tests that stub _ask_one with the legacy signature) behaves byte-for-byte
+    # as before. Hoisted here so both the chain loop and the terminal-fallback
+    # rotation below see it.
+    extra = {"params": params} if params else {}
     for attempt in range(rounds):
         if attempt:
             from . import llm_log
@@ -371,8 +394,9 @@ def ask(prompt: str, *, model: str, system: str | None = None,
             try:
                 if gate is not None:
                     with gate:
-                        return _ask_one(prompt, m, system, fallback=i > 0)
-                return _ask_one(prompt, m, system, fallback=i > 0)
+                        return _ask_one(prompt, m, system, fallback=i > 0,
+                                        **extra)
+                return _ask_one(prompt, m, system, fallback=i > 0, **extra)
             except (QuotaExhausted, RuntimeError,
                     subprocess.SubprocessError) as exc:
                 # the chain exists to absorb PROVIDER failure of any
@@ -399,7 +423,7 @@ def ask(prompt: str, *, model: str, system: str | None = None,
                     # short leash: a hung CLI fallback must not burn the
                     # full 300s before the rotation rolls to the next one
                     return _ask_one(prompt, fb, system, fallback=True,
-                                    timeout=leash)
+                                    timeout=leash, **extra)
                 except (QuotaExhausted, RuntimeError,
                         subprocess.SubprocessError) as exc:
                     last_exc = exc
@@ -484,12 +508,34 @@ def _http_post(url: str, payload: dict, headers: dict) -> tuple[int, str]:
         return e.code, e.read().decode("utf-8", "replace")
 
 
-def _ask_openai(prompt: str, model: str, system: str | None = None) -> str:
+# OpenAI chat-completions sampling/generation fields we forward from a
+# specialist's open-schema `params`. Kept as a passlist (not a hard-pinned
+# signature) so a new key is enabled by one edit here, never a code change at
+# the call sites — and an unknown key never reaches the wire to 400 the call.
+_OPENAI_PARAM_KEYS = frozenset({
+    "temperature", "max_tokens", "top_p", "top_k", "stop",
+    "frequency_penalty", "presence_penalty", "seed", "response_format",
+})
+
+
+def _openai_params(params: dict | None) -> dict:
+    """The subset of an open-schema params dict the OpenAI protocol accepts.
+    Why: a specialist may carry arbitrary knobs; only the recognised sampling
+    fields belong in the request body. Test: pass {temperature, bogus} and
+    assert only temperature survives."""
+    if not params:
+        return {}
+    return {k: v for k, v in params.items()
+            if k in _OPENAI_PARAM_KEYS and v is not None}
+
+
+def _ask_openai(prompt: str, model: str, system: str | None = None,
+                params: dict | None = None) -> str:
     url = BASE_URL.rstrip("/") + "/chat/completions"
     headers = {"Authorization": f"Bearer {API_KEY}"} if API_KEY else {}
     messages = ([{"role": "system", "content": system}] if system else []) \
         + [{"role": "user", "content": prompt}]
-    payload = {"model": model, "messages": messages}
+    payload = {"model": model, "messages": messages, **_openai_params(params)}
     last = ""
     throttled = 0
     for attempt in range(1, RETRIES + 1):
