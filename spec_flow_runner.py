@@ -160,6 +160,16 @@ _EVENT_GATE = {
     EV_BRANCH_INTEGRATE: ("integrate",),
 } if _NODE_FSM_OK else {}
 
+# A3/A4 cycle-control decisions (escalation + lifecycle no-op pruning). Optional
+# — when the harness module is absent the engine keeps today's behaviour.
+try:
+    from tests.harness import cycle_control as _cycle      # type: ignore
+except Exception:  # noqa: BLE001
+    try:
+        from harness import cycle_control as _cycle        # type: ignore
+    except Exception:  # noqa: BLE001
+        _cycle = None
+
 NODE_ENGINES = ("inline", "fsm")
 
 
@@ -577,7 +587,12 @@ DEFAULT_REVIEW_POLICY = {"on_reject": "rework", "max_rework": 2,
                          # skips the LLM reviewer + rework loop entirely. Review
                          # is the largest measured time sink (~47%); a small,
                          # decision-free leaf does not need an opinion round.
-                         "tiering": False, "simple_max_loc": 60}
+                         "tiering": False, "simple_max_loc": 60,
+                         # A3 escalation (default OFF): the model to use for ONE
+                         # final review attempt after the rework budget is spent
+                         # on REJECTs — a stronger opinion instead of an endless
+                         # same-model grind. '' = no escalation (today).
+                         "escalate_model": ""}
 
 # Hard ceiling on decomposer-agent calls per run (runaway-recursion guard).
 MAX_DECOMPOSE_CALLS = 40
@@ -1232,11 +1247,15 @@ class _NodeDriver:
     """
 
     def __init__(self, kind: str, *, fsm_mode: bool, skip_gate: Optional[str] = None,
-                 on_event: Optional[Any] = None, node: str = ""):
+                 on_event: Optional[Any] = None, node: str = "",
+                 prune: bool = False):
         self.kind = kind
         self.active = _NODE_FSM_OK
         self._skip = skip_gate
         self._fired: set[str] = set()
+        # A4: when on, a transition that neither changes state nor fires a new
+        # gate is dropped from the trace (cycle_control.is_noop_transition).
+        self._prune = bool(prune) and _cycle is not None
         self._lc = None
         # lifecycle observer — makes the state machine VISIBLE in run
         # reports (without it an fsm run is indistinguishable from inline
@@ -1257,10 +1276,18 @@ class _NodeDriver:
         """Advance the lifecycle by one event, recording any gate it satisfies."""
         if not self.active:
             return
+        prev_state = getattr(self._lc, "phase", None) if self._lc is not None else None
+        fired_before = set(self._fired)
         if self._lc is not None:
             self._lc.advance(event)
         for gate in _EVENT_GATE.get(event, ()):
             self._fired.add(gate)
+        new_state = getattr(self._lc, "phase", None) if self._lc is not None else None
+        # A4: suppress a pure-bookkeeping transition (no state change, no new
+        # gate) from the trace when pruning is on; real transitions are kept.
+        if self._prune and _cycle is not None and _cycle.is_noop_transition(
+                prev_state, new_state, fired_before, self._fired):
+            return
         self._observe(event)
 
     def clarify(self) -> None:
@@ -1451,6 +1478,8 @@ class Engine:
         # switch; set in run() from the project + worker config
         self._executors_cfg: dict = {}
         self._auto_domain = False
+        # A4: drop no-op lifecycle transitions from the trace (opt-in per run)
+        self._prune_noops = False
         # П1: set True when a run ends via a cooperative STOP (partial result)
         self._stopped = False
         self._checkpoint_lock = threading.Lock()
@@ -1869,7 +1898,8 @@ class Engine:
 
         return _NodeDriver(kind, fsm_mode=(self.node_engine == "fsm"),
                            skip_gate=node.get("_skip_gate"),
-                           on_event=observe, node=nid)
+                           on_event=observe, node=nid,
+                           prune=self._prune_noops)
 
     # -- run ---------------------------------------------------------------
     def run(self, project: dict) -> RunResult:
@@ -1906,7 +1936,12 @@ class Engine:
         if g_rev:
             self.review_policy = {**self.review_policy,
                                   "on_reject": "rework",
-                                  "max_rework": int(g_rev.get("rework", 2))}
+                                  "max_rework": int(g_rev.get("rework", 2)),
+                                  # A3: a case may name the escalation model
+                                  "escalate_model": str(
+                                      g_rev.get("escalate_model")
+                                      or self.review_policy.get(
+                                          "escalate_model", ""))}
         self._review_exhausted = str(
             (g_rev.get("exhausted")
              or project.get("on_review_exhausted", "record"))).lower()
@@ -1971,6 +2006,8 @@ class Engine:
                 self._executors_cfg = {}
         self._auto_domain = bool(project.get("auto_executor",
                                              project.get("auto_specialty")))
+        # A4: opt-in trace pruning of no-op lifecycle transitions
+        self._prune_noops = bool(project.get("prune_noops"))
         if self._isolation == "worktree":
             self.workspace.git_provenance = True
         try:
@@ -2609,6 +2646,16 @@ class Engine:
         domain = _ex.resolve_domain(node, self._project_meta, self._auto_domain)
         spec = _ex.resolve_executor(domain, self._executors_cfg)
         return domain, _ex.team_of(spec)
+
+    def _review_escalation(self, rejects: int) -> str:
+        """A3: the STRONG model for a one-shot escalation after the rework budget
+        is spent on `rejects` REJECTs, or '' (no escalation — today's grind).
+        Reads the review policy's escalate_model + max_rework budget."""
+        if _cycle is None:
+            return ""
+        return _cycle.escalation_model(
+            rejects, int(self.review_policy.get("max_rework", 2) or 0),
+            _cycle.review_escalate_model(self.review_policy))
 
     def _has_sibling_deps(self, kids: list) -> bool:
         """True when some child declares a depends_on on ANOTHER sibling —
