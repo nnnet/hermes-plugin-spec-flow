@@ -153,8 +153,11 @@ workers:
   max_decompose_calls: 40
   creator_ensemble: 2
   concurrency: 3
-  # cycle_models: false                 # ← SONNET diagnostic (restore with SONNET block)
-  cycle_models: true                    # FREE-PRIMARY: round-robin across free models
+  # cycle_models: false  → STRICT primary-first: each chain's first model
+  # (xiaomimimo/mimo-v2.5) is tried on every call, fallbacks only on failure. We
+  # want mimo to carry the run so Xiaomi traffic is consistently visible IN
+  # Bifrost (round-robin would spread ~1/3 of calls to haiku, which bypasses it).
+  cycle_models: false
   quota_wait_s: 300
   quota_retries: 11
   fallback_models: [claude/haiku]
@@ -178,41 +181,42 @@ workers:
   # work; this `stages:` grouping is the clean, standard-aligned shape.
   #
   # MODELS — chain ORDER (primary first, fallbacks after):
-  # The OpenRouter free pool is currently answering 429 ("too many requests")
-  # and several ':free' slugs are gone (404), so leading with them just burns
-  # time before a fallback. Per the operator's call, every chain now LEADS with
-  # the models that actually answer — claude/haiku and the lighter
-  # xiaomimimo/mimo-v2.5 — and keeps the OpenRouter ':free' models LAST, used
-  # only if/when the free pool recovers. mimo here is the lighter v2.5 (not -pro).
+  # xiaomimimo/mimo-v2.5 is the PRIMARY everywhere: it is free (its own provider
+  # keys, not the throttled OpenRouter pool), it answers, and it goes THROUGH
+  # Bifrost (:8080 openai backend) — so the run actually exercises Xiaomi and
+  # its traffic is visible in Bifrost. claude/haiku is the FALLBACK (note: the
+  # claude path goes via the CLI/Meridian, NOT Bifrost — so when haiku runs it
+  # does not appear in Bifrost). The OpenRouter ':free' models stay LAST (the
+  # pool currently answers 429); they re-enter only when it recovers.
   #
   # PROVIDERS: a specialist need not be a raw LLM. The implement team is a MIX —
-  # architect/coder run as local LLMs, `tester` runs on a HERMES agent and
-  # `fixer` on a MISSION-CONTROL agent (the provider seam, doc §3/§4). Each
-  # remote specialist still carries a `model:` used as a graceful fallback if
-  # its service is unreachable (a provider_fallback event records the gap).
+  # architect/coder run as local LLMs on mimo, `tester` runs on a HERMES agent
+  # and `fixer` on a MISSION-CONTROL agent (the provider seam, doc §3/§4). Each
+  # remote specialist carries a `model:` used as a graceful fallback if its
+  # service is unreachable (a provider_fallback event records the gap).
   defaults:
-    models: ["claude/haiku", "xiaomimimo/mimo-v2.5", "openrouter/qwen/qwen3-coder:free"]
+    models: ["xiaomimimo/mimo-v2.5", "claude/haiku", "openrouter/qwen/qwen3-coder:free"]
   stages:
-    decompose:                          # haiku + light mimo first; OpenRouter free last
-      models: ["claude/haiku", "xiaomimimo/mimo-v2.5", "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"]
+    decompose:                          # mimo (via Bifrost) primary; haiku fallback; OR free last
+      models: ["xiaomimimo/mimo-v2.5", "claude/haiku", "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"]
     implement:
-      models: ["claude/haiku", "xiaomimimo/mimo-v2.5", "openrouter/qwen/qwen3-coder:free"]
-      # MIXED team: local LLMs + a Hermes agent + a Mission-Control agent. Models
-      # follow the same order policy (working models first). Secrets
-      # (token/api_key) are NEVER in this file — the adapter reads them from the
-      # environment; without them the remote call degrades to the local model.
+      models: ["xiaomimimo/mimo-v2.5", "claude/haiku", "openrouter/qwen/qwen3-coder:free"]
+      # MIXED team: local LLMs (on mimo, so they flow through Bifrost) + a Hermes
+      # agent + a Mission-Control agent. Secrets (token/api_key) are NEVER in
+      # this file — the adapter reads them from the environment; without them the
+      # remote call degrades to the local model.
       team:
         specialists:
-          - {role: architect, model: "claude/haiku", params: {temperature: 0.2}}
+          - {role: architect, model: "xiaomimimo/mimo-v2.5", params: {temperature: 0.2}}
           - {role: coder,     model: "xiaomimimo/mimo-v2.5", params: {temperature: 0.4, max_tokens: 4000}}
           - {role: tester,    provider: hermes,          agent: "tester",
-             gateway: "http://127.0.0.1:8642", model: "claude/haiku"}
+             gateway: "http://127.0.0.1:8642", model: "xiaomimimo/mimo-v2.5"}
           - {role: fixer,     provider: mission-control, agent_template: "fixer",
              api: "http://127.0.0.1:3000", model: "xiaomimimo/mimo-v2.5"}
-    review:                             # haiku + light mimo first; OpenRouter free last
-      models: ["claude/haiku", "xiaomimimo/mimo-v2.5", "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"]
-    verify:                             # haiku + light mimo first; OpenRouter free last
-      models: ["claude/haiku", "xiaomimimo/mimo-v2.5", "openrouter/qwen/qwen3-coder:free"]
+    review:                             # mimo (via Bifrost) primary; haiku fallback; OR free last
+      models: ["xiaomimimo/mimo-v2.5", "claude/haiku", "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"]
+    verify:                             # mimo (via Bifrost) primary; haiku fallback; OR free last
+      models: ["xiaomimimo/mimo-v2.5", "claude/haiku", "openrouter/qwen/qwen3-coder:free"]
   #
   # SONNET-PRIMARY (diagnostic — commented): sonnet via claude-cli subscription.
   # defaults: {models: ["claude/sonnet", "openrouter/qwen/qwen3-coder:free", "claude/haiku"]}
