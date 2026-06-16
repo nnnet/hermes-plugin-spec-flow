@@ -122,7 +122,7 @@ def test_specialist_model_and_params_reach_backend(monkeypatch, tmp_path):
     captured = {}
 
     def fake_ask(prompt, *, model, system=None, fallbacks=(), role="",
-                 params=None):
+                 step="", params=None):
         captured["model"] = model
         captured["params"] = params
         return json.dumps({"files": {"src/leaf1.py": "x = 1\n"}})
@@ -156,7 +156,7 @@ def test_specialist_without_model_falls_back_to_chain(monkeypatch, tmp_path):
     captured = {}
 
     def fake_ask(prompt, *, model, system=None, fallbacks=(), role="",
-                 params=None):
+                 step="", params=None):
         captured["model"] = model
         captured["params"] = params
         return json.dumps({"files": {"src/leaf1.py": "x = 1\n"}})

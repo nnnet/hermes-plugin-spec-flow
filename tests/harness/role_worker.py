@@ -268,13 +268,14 @@ def _call_model(prompt: str, *, system: str, allowed: list[str],
             return _remote_call(provider, prompt=p, model=model, role=role,
                                 specialty=specialty, cwd=cwd, meta=meta)
         if _chat_only():
+            step = (meta or {}).get("step", "")    # orchestra specialist tag
             fallbacks = llm_backend.chain_for(role, specialty)[1:] if role else ()
             if fallbacks:
                 return llm_backend.ask(p, model=model, system=system,
                                        fallbacks=fallbacks, role=role or "",
-                                       params=params)
+                                       step=step, params=params)
             return llm_backend.ask(p, model=model, system=system,
-                                   role=role or "", params=params)
+                                   role=role or "", step=step, params=params)
         return _run_claude(p, system=system, allowed=allowed,
                            disallowed=disallowed, cwd=cwd, model=model)
 

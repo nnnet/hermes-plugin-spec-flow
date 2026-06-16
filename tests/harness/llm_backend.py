@@ -289,28 +289,63 @@ def _ask_one(prompt: str, model: str, system: str | None,
 _call_ctx = threading.local()
 
 
-def _log_token_usage(model: str, usage: dict) -> None:
-    """#6: record REAL token counts (from the API usage field) tagged by the
-    in-flight role + model, so a run's true economics — not just call counts —
-    can be rolled up. Best effort: a missing usage block logs nothing."""
-    if not usage:
-        return
-    pt = int(usage.get("prompt_tokens", 0) or 0)
-    ct = int(usage.get("completion_tokens", 0) or 0)
+_ENC = None
+_ENC_TRIED = False
+
+
+def _count_tokens(text: str) -> int:
+    """Count tokens with a real tokenizer (tiktoken). Most free models return
+    NO API ``usage`` block, so without this the economics table is near-empty;
+    tiktoken's o200k_base is a close, model-agnostic counter (qwen/mimo/deepseek
+    differ slightly but it is far better than a char heuristic). Falls back to
+    ~chars/4 only if tiktoken is unavailable."""
+    global _ENC, _ENC_TRIED
+    if not text:
+        return 0
+    if _ENC is None and not _ENC_TRIED:
+        _ENC_TRIED = True
+        try:
+            import tiktoken
+            _ENC = tiktoken.get_encoding("o200k_base")
+        except Exception:          # noqa: BLE001 — degrade, never block
+            _ENC = None
+    if _ENC is not None:
+        try:
+            return len(_ENC.encode(text))
+        except Exception:          # noqa: BLE001
+            pass
+    return (len(text) + 3) // 4
+
+
+def _log_token_usage(model: str, usage: dict,
+                     prompt: str = "", reply: str = "") -> None:
+    """#6: record token counts tagged by the in-flight role+specialist+model.
+    Prefer the REAL API usage field; when the model returns none (the common
+    case on the free pool) COUNT the tokens locally with a real tokenizer so
+    every call still contributes. ``estimated`` marks which rows are counted
+    vs reported. Best effort: never blocks the run."""
+    pt = int((usage or {}).get("prompt_tokens", 0) or 0)
+    ct = int((usage or {}).get("completion_tokens", 0) or 0)
+    estimated = False
     if pt == 0 and ct == 0:
-        return
+        if not (prompt or reply):
+            return
+        pt, ct, estimated = _count_tokens(prompt), _count_tokens(reply), True
+        if pt == 0 and ct == 0:
+            return
     try:
         from . import llm_log
         llm_log.log({"event": "token_usage",
                      "role": getattr(_call_ctx, "role", "") or "",
+                     "step": getattr(_call_ctx, "step", "") or "",
                      "model": model, "prompt_tokens": pt,
-                     "completion_tokens": ct})
+                     "completion_tokens": ct, "estimated": estimated})
     except Exception:              # noqa: BLE001 — accounting never blocks work
         pass
 
 
 def ask(prompt: str, *, model: str, system: str | None = None,
-        fallbacks: tuple | list = (), role: str = "",
+        fallbacks: tuple | list = (), role: str = "", step: str = "",
         params: dict | None = None) -> str:
     """Send one prompt, return the reply text.
 
@@ -328,6 +363,7 @@ def ask(prompt: str, *, model: str, system: str | None = None,
     passed here (see tests/workers/test_specialist_config.py)."""
     cfg = WORKERS_CFG or {}
     _call_ctx.role = role          # #6: tag token usage with the calling role
+    _call_ctx.step = step          # specialist (orchestra step) for per-member split
     # cyclic primary rotation (#40): spread successive calls across the free
     # chain so one capped model isn't every call's first hit. No-op unless
     # the case sets workers.cycle_models; the model SET is unchanged.
@@ -545,7 +581,8 @@ def _ask_openai(prompt: str, model: str, system: str | None = None,
                 out = json.loads(body)
                 text = out["choices"][0]["message"]["content"]
                 if text and text.strip():
-                    _log_token_usage(model, out.get("usage") or {})
+                    _log_token_usage(model, out.get("usage") or {},
+                                     prompt=prompt, reply=text)
                     return text
                 last = "empty completion"
             except (KeyError, IndexError, json.JSONDecodeError) as exc:

@@ -1424,17 +1424,26 @@ def _token_economics(run_dir: "pathlib.Path | None") -> dict:
             continue
         if e.get("event") != "token_usage":
             continue
-        key = (e.get("role") or "—", e.get("model") or "—")
-        a = agg.setdefault(key, {"calls": 0, "prompt": 0, "completion": 0})
+        # split by the orchestra SPECIALIST (step) when present, else the role —
+        # so "реализация" breaks down into architect/coder/tester/fixer, each
+        # with its own model. estimated=True rows were token-counted locally
+        # (the model returned no usage); measured rows came from the API.
+        who = e.get("step") or e.get("role") or "—"
+        key = (who, e.get("model") or "—")
+        a = agg.setdefault(key, {"calls": 0, "prompt": 0, "completion": 0,
+                                 "estimated": False})
         pt = int(e.get("prompt_tokens", 0) or 0)
         ct = int(e.get("completion_tokens", 0) or 0)
         a["calls"] += 1
         a["prompt"] += pt
         a["completion"] += ct
+        if e.get("estimated"):
+            a["estimated"] = True
         grand += pt + ct
     rows = [{"role": r, "model": m, "calls": v["calls"],
              "prompt": v["prompt"], "completion": v["completion"],
-             "total": v["prompt"] + v["completion"]}
+             "total": v["prompt"] + v["completion"],
+             "estimated": v["estimated"]}
             for (r, m), v in agg.items()]
     rows.sort(key=lambda x: x["total"], reverse=True)
     return {"rows": rows, "total": grand}
@@ -2133,10 +2142,10 @@ function idleHTML(){
  // token economics by role+model (#6) — real spend, not call counts
  const tok=IDLE.tokens||{rows:[],total:0};
  if(tok.rows.length){
-  h+='<h4>Токены по роли+модели (реальный расход)</h4><div class=cmpscroll style="max-height:240px">'+
-   '<table class=cmp><thead><tr><th>роль</th><th>модель</th><th>вызовов</th><th>prompt</th><th>completion</th><th>всего</th><th>доля</th></tr></thead><tbody>';
+  h+='<h4>Токены по роли/специалисту+модели <span class=dim>(≈ = посчитано токенайзером, API не вернул usage)</span></h4><div class=cmpscroll style="max-height:240px">'+
+   '<table class=cmp><thead><tr><th>роль/специалист</th><th>модель</th><th>вызовов</th><th>prompt</th><th>completion</th><th>всего</th><th>доля</th></tr></thead><tbody>';
   tok.rows.forEach(r=>{const sh=tok.total?Math.round(100*r.total/tok.total):0;
-   h+=`<tr><td>${esc(r.role)}</td><td>${esc(r.model)}</td><td>${r.calls}</td>`+
+   h+=`<tr><td>${esc(r.role)}${r.estimated?' <span class=dim>≈</span>':''}</td><td>${esc(r.model)}</td><td>${r.calls}</td>`+
     `<td>${r.prompt}</td><td>${r.completion}</td><td><b>${r.total}</b></td>`+
     `<td><span style="display:inline-block;height:8px;background:#58a6ff;width:${sh}px;max-width:120px"></span> ${sh}%</td></tr>`;});
   h+=`</tbody></table></div><p class=dim>всего токенов: <b>${tok.total}</b></p>`;

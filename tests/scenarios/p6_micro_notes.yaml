@@ -79,7 +79,7 @@ injections:
     # subtree integrate, so the web page already exists). The point of the
     # experiment: does the worker DISCOVER the existing /ui page and EDIT it in
     # place to satisfy this, or does it spawn a SECOND parallel web? Prose only.
-    - name: nice_ui
+    - name: красивый_вид
       # Same early trigger as web_ui: both must arrive BEFORE the root places
       # its children (a requirement injected after that phase is orphaned —
       # the engine reads standing requirements once). Within the placement
@@ -149,6 +149,12 @@ workers:
   quota_retries: 11
   fallback_models: [claude/haiku]
   providers:
+    # Xiaomi MiMo — its OWN Bifrost provider "mimo" (custom OpenAI-compatible,
+    # base_url xiaomimimo.com, keys XIAOMIMIMO_API_KEY), NOT OpenRouter. Bifrost
+    # routes by the "mimo/" model prefix to that provider; free under the account
+    # keys. mimo/mimo-v2.5 = general, mimo/mimo-v2.5-pro = the responsible roles
+    # (decomposer/reviewer/verifier/architect).
+    - {name: xiaomimimo, kind: openai, model_prefix: "mimo/", requests_per_day: 1000}
     - {name: openrouter-free, kind: openai, model_prefix: "openrouter/", require_suffix: ":free", requests_per_day: 1000}
     - {name: claude-cli, kind: claude, model_prefix: "claude/"}
   # ── MODEL CHAINS ───────────────────────────────────────────────────────
@@ -157,24 +163,24 @@ workers:
   #
   # FREE-PRIMARY (ACTIVE — free OpenRouter primary, haiku fallback):
   defaults:
-    models: ["openrouter/qwen/qwen3-coder:free", "claude/haiku"]
-  decomposer:
-    models: ["openrouter/qwen/qwen3-next-80b-a3b-instruct:free", "claude/haiku"]
+    models: ["mimo/mimo-v2.5", "openrouter/qwen/qwen3-coder:free", "claude/haiku"]
+  decomposer:                           # responsible role → mimo-v2.5-pro
+    models: ["mimo/mimo-v2.5-pro", "openrouter/qwen/qwen3-next-80b-a3b-instruct:free", "claude/haiku"]
   implementer:
-    models: ["openrouter/qwen/qwen3-coder:free", "openrouter/deepseek/deepseek-chat-v3.1:free", "claude/haiku"]
+    models: ["mimo/mimo-v2.5", "openrouter/qwen/qwen3-coder:free", "openrouter/deepseek/deepseek-chat-v3.1:free", "claude/haiku"]
     # D1: implementer orchestra — per-specialist model + params (new schema).
     # Each specialist names its own FREE model so the run exercises the team
     # card + the specialist call sequence on the dashboard with distinct models.
     team:
       specialists:
-        - {role: architect, model: "openrouter/qwen/qwen3-next-80b-a3b-instruct:free", params: {temperature: 0.2}}
-        - {role: coder,     model: "openrouter/qwen/qwen3-coder:free",                  params: {temperature: 0.4, max_tokens: 4000}}
-        - {role: tester,    model: "openrouter/deepseek/deepseek-chat-v3.1:free"}
-        - {role: fixer,     model: "openrouter/qwen/qwen3-coder:free"}
-  reviewer:
-    models: ["claude/haiku", "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"]
-  verifier:
-    models: ["claude/haiku", "openrouter/qwen/qwen3-coder:free"]
+        - {role: architect, model: "mimo/mimo-v2.5-pro", params: {temperature: 0.2}}   # responsible → pro
+        - {role: coder,     model: "mimo/mimo-v2.5",     params: {temperature: 0.4, max_tokens: 4000}}
+        - {role: tester,    model: "mimo/mimo-v2.5"}
+        - {role: fixer,     model: "mimo/mimo-v2.5"}
+  reviewer:                             # responsible role → mimo-v2.5-pro
+    models: ["mimo/mimo-v2.5-pro", "claude/haiku", "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"]
+  verifier:                             # responsible role → mimo-v2.5-pro
+    models: ["mimo/mimo-v2.5-pro", "claude/haiku", "openrouter/qwen/qwen3-coder:free"]
   #
   # SONNET-PRIMARY (diagnostic — commented): sonnet via claude-cli subscription.
   # defaults:   {models: ["claude/sonnet", "openrouter/qwen/qwen3-coder:free", "claude/haiku"]}
