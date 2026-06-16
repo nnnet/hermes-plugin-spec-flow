@@ -30,7 +30,8 @@ def _stub(monkeypatch, payload: dict) -> None:
     # Stub the role delegate (_ask), the single seam the decomposer uses to
     # reach the backend — call_start/ok/error now live INSIDE llm_backend.ask,
     # so there is no timed_ask wrapper to patch any more.
-    monkeypatch.setattr(ld, "_ask", lambda prompt, meta=None: json.dumps(payload))
+    monkeypatch.setattr(ld, "_ask",
+                        lambda prompt, meta=None, **kw: json.dumps(payload))
     monkeypatch.setattr(ld.llm_log, "log_outcome", lambda **kw: None)
 
 

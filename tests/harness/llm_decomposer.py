@@ -103,12 +103,101 @@ def _max_children() -> int:
                or config.env("LLM_MAX_CHILDREN", int))
 
 
-def _ask(prompt: str, meta: dict | None = None) -> str:
+def _ask(prompt: str, meta: dict | None = None, *, model: str = "",
+         step: str = "") -> str:
     """Delegate to the unified backend (provider/model = config). The backend
     is the SINGLE door: it logs call_start/call_ok/call_error itself, so no
-    timed_ask wrapper here — `meta` carries node/depth into that logging."""
-    return llm_backend.ask(prompt, model=MODEL, role="decomposer", step="",
-                           meta=meta)
+    timed_ask wrapper here — `meta` carries node/depth into that logging.
+    ``model``/``step`` let a D2 orchestra role use its own model + tag its call."""
+    return llm_backend.ask(prompt, model=model or MODEL, role="decomposer",
+                           step=step, meta=meta)
+
+
+# ── D2: decomposer orchestra (drafter → critic → reconciler) ──────────────
+# Symmetric to D1 (the implementer orchestra): with NO team configured the
+# decomposer is the single agent above, byte-for-byte. A configured team turns
+# one node's decomposition into a drafter that proposes the split, a critic that
+# challenges it (over-split, duplicates, missing contract coverage, wrong
+# atomicity), and a reconciler that returns the FINAL decomposition — every call
+# still through the single door.
+
+CRITIC_PROMPT = """You are the CRITIC of a Spec-Driven Development decomposer
+team. A drafter proposed the decomposition below for ONE node; find what is
+WRONG with it before it becomes the tree.
+
+Project goal: {goal}
+Measurable target: {target}
+Constitution (non-negotiable): {constitution}
+Node: "{title}" (id: {id}, depth: {depth})
+Nodes ALREADY created elsewhere: {existing}
+
+Drafter's proposal (JSON):
+{draft}
+
+Judge it on:
+- ATOMICITY: is the atomic flag honest? Over-split (a one-concern node cut into
+  tiny children) and under-split (a sprawling node called atomic) are both bugs.
+- DUPLICATES: does any child repeat work already created elsewhere? It must
+  depends_on it instead.
+- COVERAGE: if the constitution freezes an API contract, is every endpoint owned
+  by exactly one child? A missing endpoint fails the assembled product.
+- FRUGALITY: is the fan-out minimal (prefer fewer, larger leaves)?
+Reply with SHORT prose (no JSON): the concrete defects and the fix for each, or
+"NO DEFECTS" if the draft is already correct."""
+
+RECONCILE_PROMPT = """You are the RECONCILER of a Spec-Driven Development
+decomposer team. Produce the FINAL decomposition for this node by applying the
+critic's findings to the drafter's proposal — keep what is right, fix what the
+critic flagged. Do NOT over-correct: an empty critique ("NO DEFECTS") means
+return the draft unchanged.
+
+Drafter's proposal (JSON):
+{draft}
+
+Critic's findings:
+{critique}
+
+Return ONLY the corrected JSON object in the SAME shape as the draft (atomic,
+metrics, children[], depends_on, spike) — no prose, no markdown fence."""
+
+
+def _decomposer_team() -> list[dict]:
+    """The configured decomposer team (D2), or [] for the single-agent path.
+    Env SPEC_FLOW_DECOMPOSER_TEAM (JSON) overrides the case YAML, mirroring the
+    implementer team. Shapes: {specialists: [{role, model?}, ...]} or a bare
+    list. Roles drive the flow; a role's `model` overrides the decomposer model
+    for its step."""
+    env = os.environ.get("SPEC_FLOW_DECOMPOSER_TEAM")
+    raw = None
+    if env is not None and env.strip():
+        try:
+            raw = json.loads(env)
+        except (ValueError, TypeError):
+            raw = None
+    if raw is None:
+        cfg = getattr(llm_backend, "WORKERS_CFG", None) or {}
+        raw = (cfg.get("decomposer") or {}).get("team")
+    if isinstance(raw, dict):
+        raw = raw.get("specialists")
+    if not isinstance(raw, list):
+        return []
+    team = []
+    for item in raw:
+        if isinstance(item, dict) and item.get("role"):
+            team.append({"role": str(item["role"]),
+                         "model": str(item.get("model") or "")})
+        elif isinstance(item, str) and item:
+            team.append({"role": item, "model": ""})
+    return team
+
+
+def _role_model(team: list[dict], role: str) -> str:
+    """The model a team role declares for its step, or '' (the decomposer
+    default model)."""
+    for s in team:
+        if s.get("role") == role:
+            return s.get("model") or ""
+    return ""
 
 
 def _extract_json(text: str) -> dict:
@@ -116,6 +205,73 @@ def _extract_json(text: str) -> dict:
     if not m:
         raise ValueError(f"no JSON in LLM reply: {text[-300:]}")
     return json.loads(m.group(0))
+
+
+def _solicit(prompt: str, nid: str, depth: int, *, model: str = "",
+             step: str = "") -> dict:
+    """One robust decomposition reply, parsed to a dict. A weak free model often
+    returns malformed JSON on the first try; re-prompt with the exact failure
+    instead of crashing the run on one bad node. Persistent failure is fatal."""
+    attempts = config.env("DECOMPOSE_ATTEMPTS", int)
+    last = None
+    for i in range(attempts):
+        p = prompt if i == 0 else (
+            prompt + f"\n\nYour previous answer could not be parsed: {last}. "
+            "Return ONLY a single valid JSON object, no prose, no markdown fence.")
+        reply = _ask(p, meta={"node": nid, "depth": depth}, model=model,
+                     step=step)
+        try:
+            return _extract_json(reply)
+        except (ValueError, json.JSONDecodeError) as exc:
+            last = repr(exc)[:160]
+            llm_log.log_outcome(role="decomposer", node=nid, depth=depth,
+                                parse="retry", attempt=i + 1, error=last)
+    llm_log.log_outcome(role="decomposer", node=nid, depth=depth,
+                        parse="fail", error=last)
+    raise ValueError(f"decomposer failed after {attempts} attempts: {last}")
+
+
+def _orchestra_decompose(ctx: dict, base_prompt: str, nid: str,
+                         team: list[dict]) -> dict:
+    """D2: drafter proposes, critic challenges, reconciler finalises — all via
+    the single door. The canonical flow is drafter→critic→reconciler (driven by
+    the declared roles). A critic that finds nothing, or a reconciler that fails
+    to produce usable JSON, degrades to the draft, so the run never loses a
+    valid decomposition to the refinement step."""
+    p = ctx["project"]
+    depth = ctx["depth"]
+    roles = [s["role"] for s in team]
+    llm_log.log({"event": "decompose_orchestra_start", "node": nid,
+                 "steps": roles})
+    # drafter: the same single-agent decomposition, robustly parsed
+    draft = _solicit(base_prompt, nid, depth,
+                     model=_role_model(team, "drafter"), step="drafter")
+    if "critic" not in roles:
+        return draft
+    draft_json = json.dumps(draft, ensure_ascii=False)
+    existing = "; ".join(f"{n['id']} ({n['title']})"
+                         for n in (ctx.get("existing_nodes") or [])) or "—"
+    critique = _ask(
+        CRITIC_PROMPT.format(
+            goal=p.get("goal", ""), target=p.get("target", ""),
+            constitution="; ".join(p.get("constitution", [])),
+            title=ctx["node"]["title"], id=nid, depth=depth,
+            existing=existing, draft=draft_json),
+        meta={"node": nid, "depth": depth},
+        model=_role_model(team, "critic"), step="critic").strip()
+    if ("reconciler" not in roles or not critique
+            or "NO DEFECTS" in critique.upper()):
+        return draft
+    try:
+        final = _solicit(
+            RECONCILE_PROMPT.format(draft=draft_json, critique=critique),
+            nid, depth, model=_role_model(team, "reconciler"),
+            step="reconciler")
+    except ValueError:
+        return draft        # reconciler botched JSON -> keep the valid draft
+    llm_log.log({"event": "decompose_orchestra_done", "node": nid,
+                 "revised": final != draft})
+    return final
 
 
 def decompose(ctx: dict) -> dict:
@@ -136,27 +292,16 @@ def decompose(ctx: dict) -> dict:
     if ctx["depth"] >= _leaf_depth():
         prompt += LEAF_RULE.format(depth=ctx["depth"], leaf_depth=_leaf_depth())
     nid = ctx["node"]["id"]
-    # a weaker free model often returns malformed/partial JSON on the first try;
-    # re-prompt with the exact failure instead of crashing the whole run on one
-    # bad node. Only a persistent failure is fatal. Mirrors llm_implementer.
-    attempts = config.env("DECOMPOSE_ATTEMPTS", int)
-    out, last = None, None
-    for i in range(attempts):
-        p = prompt if i == 0 else (
-            prompt + f"\n\nYour previous answer could not be parsed: {last}. "
-            "Return ONLY a single valid JSON object, no prose, no markdown fence.")
-        reply = _ask(p, meta={"node": nid, "depth": ctx["depth"]})
-        try:
-            out = _extract_json(reply)
-            break
-        except (ValueError, json.JSONDecodeError) as exc:
-            last = repr(exc)[:160]
-            llm_log.log_outcome(role="decomposer", node=nid, depth=ctx["depth"],
-                                parse="retry", attempt=i + 1, error=last)
-    if out is None:
-        llm_log.log_outcome(role="decomposer", node=nid, depth=ctx["depth"],
-                            parse="fail", error=last)
-        raise ValueError(f"decomposer failed after {attempts} attempts: {last}")
+    # D2: a configured decomposer team runs the drafter→critic→reconciler
+    # orchestra; with NO team (the default) it is the single agent, unchanged.
+    # A weak free model often returns malformed JSON on the first try; _solicit
+    # re-prompts with the exact failure instead of crashing the run on one bad
+    # node. Only a persistent failure is fatal. Mirrors llm_implementer.
+    team = _decomposer_team()
+    if team:
+        out = _orchestra_decompose(ctx, prompt, nid, team)
+    else:
+        out = _solicit(prompt, nid, ctx["depth"])
     # keep only the keys the engine understands (incl. the atomicity judgment)
     keep = {k: out[k] for k in ("atomic", "metrics", "children", "spike", "clarify") if k in out}
     if ctx["depth"] >= _leaf_depth():
