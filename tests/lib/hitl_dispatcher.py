@@ -95,7 +95,7 @@ class Dispatcher:
             time.sleep(_POLL_SEC)
 
     def _tick(self) -> None:
-        passes, actions = self._scan_trace()
+        passes, actions, done = self._scan_trace()
         for req in self.requirements:
             name = str(req.get("name") or "")
             if not name or name in self._fired:
@@ -105,15 +105,24 @@ class Dispatcher:
                 self._fire_requirement(req)
             elif when.get("event") and any(when["event"] in a for a in actions):
                 self._fire_requirement(req)
+            elif when.get("after_node_done") and \
+                    str(when["after_node_done"]) in done:
+                # deterministic sequencing: fire only once the named node has
+                # reached DONE — lets a second injection land AFTER a specific
+                # earlier one is fully built (e.g. nice_ui after web_ui), so it
+                # can react to the existing artifact instead of racing it
+                self._fire_requirement(req)
         self._answer_pending()
 
     # -- trace reading ----------------------------------------------------
-    def _scan_trace(self) -> tuple[int, list[str]]:
-        """Return (#integrate_verify PASS, [action+detail strings])."""
+    def _scan_trace(self) -> tuple[int, list[str], set]:
+        """Return (#integrate_verify PASS, [action+detail strings],
+        {task names that reached DONE})."""
         if not self.trace.is_file():
-            return 0, []
+            return 0, [], set()
         passes = 0
         actions: list[str] = []
+        done: set = set()
         for ln in self.trace.read_text(encoding="utf-8", errors="replace").splitlines():
             try:
                 e = json.loads(ln)
@@ -121,8 +130,12 @@ class Dispatcher:
                 continue
             if e.get("gate") == "integrate_verify" and str(e.get("verdict")).upper() == "PASS":
                 passes += 1
+            if str(e.get("action", "")).startswith("to_done") or \
+                    "state=DONE" in str(e.get("detail", "")):
+                if e.get("task"):
+                    done.add(str(e.get("task")))
             actions.append(f"{e.get('action', '')} {e.get('detail', '')}")
-        return passes, actions
+        return passes, actions, done
 
     # -- actions ----------------------------------------------------------
     def _fire_requirement(self, req: dict) -> None:

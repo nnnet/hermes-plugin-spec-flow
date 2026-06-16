@@ -854,7 +854,18 @@ tests — clearing the schema registry once destroyed every sibling's tables
 for the whole session. Test isolation = a fresh MARKETPLACE_DB path per
 test, nothing else. Such writes are REFUSED by the platform.
 
-Reply with ONLY a JSON object (no prose, no fence):
+SURFACE ALREADY BUILT — EDIT IN PLACE, DO NOT FORK A SECOND ONE: if your spec
+refines or extends a surface (an HTTP route, an HTML page like GET /ui) that the
+REPOSITORY MAP shows an EXISTING sibling module already serves, do NOT create a
+new src/{fn}.py for it. Return THAT existing module's path with its FULL
+extended content (and update its test file), preserving the behaviour already
+there. One surface = one module — a second module for the same page/route is a
+duplicate, even if the spec arrived later. Create src/{fn}.py ONLY when the
+surface is genuinely new.
+
+Reply with ONLY a JSON object (no prose, no fence). Default to the new-file
+keys below; when EDITING an existing surface in place, use that module's
+existing path instead (e.g. "src/web_ui.py") and its test path:
 {{"files": {{"src/{fn}.py": "<full file text>",
             "tests/test_{fn}.py": "<full file text>"}}}}
 Escape newlines as \\n inside the JSON strings."""

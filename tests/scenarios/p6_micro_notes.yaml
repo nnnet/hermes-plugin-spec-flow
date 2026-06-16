@@ -75,6 +75,26 @@ injections:
 
         Build it AND prove it works as part of the product — a page that serves
         HTML at /ui, shows the add form, and lists a note created through it.
+    # SECOND human injection about the SAME web surface — fires LATER (after a
+    # subtree integrate, so the web page already exists). The point of the
+    # experiment: does the worker DISCOVER the existing /ui page and EDIT it in
+    # place to satisfy this, or does it spawn a SECOND parallel web? Prose only.
+    - name: nice_ui
+      # Same early trigger as web_ui: both must arrive BEFORE the root places
+      # its children (a requirement injected after that phase is orphaned —
+      # the engine reads standing requirements once). Within the placement
+      # loop they are visited in injection order, so web_ui is fully built
+      # before nice_ui's worker runs — nice_ui therefore meets an existing
+      # web_ui.py and we can see whether it EDITS it or builds a parallel web.
+      when: {event: "minimal impl"}
+      statement: |
+        MAKE THE WEB PAGE NICE (added by the human mid-run; binding).
+
+        The existing web page at GET /ui must look clean and friendly: a clear
+        page title, readable note list, the add form laid out tidily. Standard
+        library only — inline CSS in the served HTML is fine, no JS frameworks,
+        no new storage, no API changes, no second page. Improve the page that
+        already serves /ui; do not create a separate one.
   # Possible HUMAN answers — handed to the plugin ONLY when a worker actually
   # asks a question, and only the one whose `match` is found in that question
   # (else `default`). Never pushed proactively; one reply per real question.
