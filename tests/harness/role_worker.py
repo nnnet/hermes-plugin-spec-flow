@@ -282,19 +282,19 @@ def _call_model(prompt: str, *, system: str, allowed: list[str],
         if _chat_only():
             step = (meta or {}).get("step", "")    # orchestra specialist tag
             fallbacks = llm_backend.chain_for(role, specialty)[1:] if role else ()
-            if fallbacks:
-                return llm_backend.ask(p, model=model, system=system,
-                                       fallbacks=fallbacks, role=role or "",
-                                       step=step, params=params)
+            # node/specialty ride into the SINGLE door's call_start logging.
+            ask_meta = {"node": (meta or {}).get("node", ""),
+                        "specialty": specialty}
             return llm_backend.ask(p, model=model, system=system,
-                                   role=role or "", step=step, params=params)
+                                   fallbacks=fallbacks or (), role=role or "",
+                                   step=step, params=params, meta=ask_meta)
         return _run_claude(p, system=system, allowed=allowed,
                            disallowed=disallowed, cwd=cwd, model=model)
 
-    call_meta = {"role": role or "", "model": model, "specialty": specialty}
-    if meta:
-        call_meta.update(meta)
-    return llm_log.timed_ask(_do, prompt=prompt, meta=call_meta)
+    # The SINGLE door (llm_backend.ask) logs call_start/ok/error itself, so the
+    # chat path needs no wrapper. The remote-provider and claude-CLI branches are
+    # consolidated into the door in later phases; for now they run un-wrapped.
+    return _do(prompt)
 
 
 def _inline_file(root: Optional[str], rel: str) -> str:

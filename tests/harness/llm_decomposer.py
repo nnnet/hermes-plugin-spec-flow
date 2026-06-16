@@ -103,9 +103,12 @@ def _max_children() -> int:
                or config.env("LLM_MAX_CHILDREN", int))
 
 
-def _ask(prompt: str) -> str:
-    """Delegate to the unified backend (provider/model = config)."""
-    return llm_backend.ask(prompt, model=MODEL, role="decomposer", step="")
+def _ask(prompt: str, meta: dict | None = None) -> str:
+    """Delegate to the unified backend (provider/model = config). The backend
+    is the SINGLE door: it logs call_start/call_ok/call_error itself, so no
+    timed_ask wrapper here — `meta` carries node/depth into that logging."""
+    return llm_backend.ask(prompt, model=MODEL, role="decomposer", step="",
+                           meta=meta)
 
 
 def _extract_json(text: str) -> dict:
@@ -142,8 +145,7 @@ def decompose(ctx: dict) -> dict:
         p = prompt if i == 0 else (
             prompt + f"\n\nYour previous answer could not be parsed: {last}. "
             "Return ONLY a single valid JSON object, no prose, no markdown fence.")
-        reply = llm_log.timed_ask(_ask, role="decomposer", node=nid,
-                                  depth=ctx["depth"], model=MODEL, prompt=p)
+        reply = _ask(p, meta={"node": nid, "depth": ctx["depth"]})
         try:
             out = _extract_json(reply)
             break

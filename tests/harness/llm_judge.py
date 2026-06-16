@@ -64,8 +64,9 @@ def make_judge(ask=_ask):
                                spec=ctx.get("spec", ""),
                                code=ctx.get("code", "")[:4000],
                                test=ctx.get("test", "")[:4000])
-        reply = llm_log.timed_ask(ask, role="judge", node=node, depth="-",
-                                  model=MODEL, prompt=prompt)
+        # SINGLE door: the backend (default _ask -> llm_backend.ask) logs
+        # call_start/ok/error itself, so call it directly (no timed_ask).
+        reply = ask(prompt)
         out = _parse(reply)
         llm_log.log_outcome(role="judge", node=node, verdict=out["verdict"])
         return out

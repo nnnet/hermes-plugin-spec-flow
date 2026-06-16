@@ -377,7 +377,7 @@ def _log_token_usage(model: str, usage: dict,
 
 def ask(prompt: str, *, model: str, role: str, step: str,
         system: str | None = None, fallbacks: tuple | list = (),
-        params: dict | None = None) -> str:
+        params: dict | None = None, meta: dict | None = None) -> str:
     """Send one prompt, return the reply text.
 
     ``role`` (the pipeline STAGE: decomposer/implementer/reviewer/verifier) and
@@ -409,6 +409,26 @@ def ask(prompt: str, *, model: str, role: str, step: str,
     _call_ctx.step = step          # specialist (orchestra step) for per-member split
     _call_ctx.last_usage = None    # cleared each call; _ask_openai stashes real usage here
 
+    # SINGLE-DOOR call-boundary logging (folded in from the old llm_log.timed_ask
+    # wrapper): every ask() — whatever backend or chain it ends up using — emits
+    # exactly one call_start now and one call_ok / call_error at its exit, so no
+    # caller needs its own wrapper and there is ONE place all LLM logging lives.
+    # `meta` is the open-schema descriptive context (node/depth/purpose/mode/…)
+    # the callers used to pass to timed_ask.
+    from . import llm_log as _llm_log
+    _bctx = {k: v for k, v in (meta or {}).items()
+             if k not in ("prompt", "system", "text", "reply")}
+    _bctx.setdefault("role", role)
+    _bctx.setdefault("model", model)
+    if step:
+        _bctx.setdefault("step", step)
+    _b_t0 = time.monotonic()
+    _llm_log.log({"event": "call_start", **_bctx, "prompt_chars": len(prompt)})
+    # the outcome echoes the identity keys but NOT `model`, so a start/result
+    # pair counts the request exactly once (model lives on call_start).
+    _bident = {k: _bctx[k] for k in ("role", "node", "depth", "purpose", "mode",
+                                     "step") if k in _bctx}
+
     def _ret(reply: str, used_model: str) -> str:
         # UNIVERSAL token accounting at ask()'s SINGLE exit point: use the
         # model's real usage when a backend captured one (stashed in
@@ -418,6 +438,9 @@ def ask(prompt: str, *, model: str, role: str, step: str,
         usage = getattr(_call_ctx, "last_usage", None) or {}
         _call_ctx.last_usage = None
         _log_token_usage(used_model, usage, prompt=prompt, reply=reply)
+        _llm_log.log({"event": "call_ok", **_bident,
+                      "latency_s": round(time.monotonic() - _b_t0, 2),
+                      "reply_chars": len(reply)})
         return reply
     # cyclic primary rotation (#40): spread successive calls across the free
     # chain so one capped model isn't every call's first hit. No-op unless
@@ -536,6 +559,10 @@ def ask(prompt: str, *, model: str, role: str, step: str,
                 "to_model": None,
                 "reason": _failure_reason(last_exc) if last_exc else "error",
                 "terminal": True})
+    _llm_log.log({"event": "call_error", **_bident,
+                  "latency_s": round(time.monotonic() - _b_t0, 2),
+                  "error": (repr(last_exc)[:300] if last_exc
+                            else "no model in the chain answered")})
     raise last_exc or QuotaExhausted("no model in the chain answered")
 
 

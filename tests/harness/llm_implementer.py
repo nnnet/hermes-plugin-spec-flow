@@ -64,9 +64,12 @@ def _snake(s: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in s.lower()).strip("_")
 
 
-def _ask(prompt: str) -> str:
-    """Delegate to the unified backend (provider/model = config)."""
-    return llm_backend.ask(prompt, model=MODEL, role="implementer", step="")
+def _ask(prompt: str, meta: dict | None = None) -> str:
+    """Delegate to the unified backend (provider/model = config). The backend
+    is the SINGLE door and logs call_start/call_ok/call_error itself; `meta`
+    carries node/depth into that logging (no timed_ask wrapper here)."""
+    return llm_backend.ask(prompt, model=MODEL, role="implementer", step="",
+                           meta=meta)
 
 
 def _parse(text: str) -> dict:
@@ -130,8 +133,9 @@ def make_implementer(ask=_ask):
                 prompt + f"\n\nYour previous answer was REJECTED: {last}. "
                 "Return REAL working code + real assertions, no placeholders, "
                 "no TODO/FIXME, no the word 'placeholder'. Output ONLY the JSON.")
-            reply = llm_log.timed_ask(ask, role="implementer", node=node,
-                                      depth="-", model=MODEL, prompt=p)
+            # SINGLE door: the backend (default _ask -> llm_backend.ask) logs
+            # call_start/ok/error itself, so call it directly (no timed_ask).
+            reply = ask(p)
             try:
                 out = _parse(reply)
                 _reject_stub(out["code"], out["test"])  # enforce 'no stubs'

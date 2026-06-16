@@ -759,10 +759,9 @@ def make_verifier(model: Optional[str] = None,
         rounds = 0
         while not passed and rounds < max_repair:
             rounds += 1
-            llm_log.log({"event": "call_start", "role": "verifier",
-                         "worker": True, "node": str(ctx.get("node")),
-                         "depth": int(ctx.get("depth", -1)),
-                         "model": model})
+            # No manual call_start here: the SINGLE door (llm_backend.ask below)
+            # emits call_start/call_ok/call_error itself; node/depth ride in via
+            # its `meta` so the boundary log keeps full context.
             files = _implicated_files(root, out)
             files_block = "\n".join(
                 f"--- {rel} ---\n{text}" for rel, text in files.items()) \
@@ -786,6 +785,8 @@ def make_verifier(model: Optional[str] = None,
                     _REPAIR_TASK.format(output=out, files_block=files_block),
                     model=model,
                     role="verifier", step="integrate-repair",  # tag → stage верификация
+                    meta={"node": str(ctx.get("node")),
+                          "depth": int(ctx.get("depth", -1)), "worker": True},
                     system=role_worker._with_language(
                         "You are the integration repair worker."))
                 m = re.search(r"\{.*\}", raw, re.S)
