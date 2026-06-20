@@ -3034,9 +3034,21 @@ class Engine:
                 self._completed += 1
                 child_contract_ctx = contract_here
 
-            self._review_gate(node, nid, title, depth, parent,
-                              {"verdict": verdict, "reasons": "; ".join(reasons),
-                               "plan": plan}, ancestors)
+            # resume: a branch whose decomposition was restored from the
+            # checkpoint was already specced+reviewed in the original run — its
+            # children drive the continuation. Re-running its review gate here is
+            # pure waste (and on a flaky provider it grinds for minutes), so skip
+            # it for a restored branch (replan opts out). The child descent below
+            # still runs, so the walk continues from the checkpoint.
+            if (self.resume and not self.replan
+                    and nid in self._decomp_index):
+                self.emit("review", "engine", "", nid,
+                          "resume: review kept from checkpoint (branch already reviewed)",
+                          "", "", "", level=L_DETAIL)
+            else:
+                self._review_gate(node, nid, title, depth, parent,
+                                  {"verdict": verdict, "reasons": "; ".join(reasons),
+                                   "plan": plan}, ancestors)
             child_ids = []
             # #2: order siblings so a child's depends_on siblings run FIRST —
             # a leaf that consumes another's module sees it already present at
