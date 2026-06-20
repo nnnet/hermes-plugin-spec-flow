@@ -1487,6 +1487,11 @@ class Engine:
         # boundaries when set (a run/engine parameter, like the decomposer type)
         self._nodes_since_ckpt = 0
         self.agents = {**DEFAULT_AGENTS, **(agents or {})}
+        # resume revalidation: an INJECTED deterministic realness checker
+        # (root, modules)->[violations]. Injected (not imported) because the
+        # plugin must not import the harness — in a real run tests/ is off
+        # sys.path. Pulled out of agents so it is never treated as a role.
+        self._realness_check = self.agents.pop("_realness_check", None)
         self.contracts_dir = Path(contracts_dir) if contracts_dir else None
         self.events: list[Event] = []
         self.tasks: dict[str, Task] = {}
@@ -2657,6 +2662,29 @@ class Engine:
             rejects, int(self.review_policy.get("max_rework", 2) or 0),
             _cycle.review_escalate_model(self.review_policy))
 
+    def _cached_artifact_stale(self, module: str) -> str:
+        """On resume, validate a cached leaf's artifact against the CURRENT
+        deterministic realness gate via the INJECTED checker (the plugin must
+        not import tests.harness — in a real run tests/ is off sys.path). Returns
+        the first violation (the cache-miss reason) or '' when the cached code
+        still passes today's gates, or when no checker was injected.
+
+        Why: the resume cache reuses a leaf when its SPEC hash is unchanged — but
+        a tightened PLUGIN GATE (a new deterministic check, not a spec edit) would
+        otherwise be skipped on the cached code, so an old bug survives a resumed
+        run. Re-checking re-runs ONLY the now-failing leaf, not the whole tree:
+        the fast 'fix the plugin, resume the checkpoint' loop."""
+        ws = self.workspace
+        check = self._realness_check
+        if check is None or not (getattr(ws, "enabled", False)
+                                 and getattr(ws, "root", None)):
+            return ""
+        try:
+            viol = check(ws.root, {module})
+        except Exception:  # noqa: BLE001
+            return ""
+        return viol[0] if viol else ""
+
     def _has_sibling_deps(self, kids: list) -> bool:
         """True when some child declares a depends_on on ANOTHER sibling —
         the signal that forces sequential (topo) execution for correctness."""
@@ -3234,6 +3262,18 @@ class Engine:
                          and spec_unchanged
                          and self.workspace.enabled and self.workspace.root
                          and (Path(self.workspace.root) / code_rel).is_file())
+            if persisted:
+                # iterate-loop: a deterministic PLUGIN GATE may have tightened
+                # since the journal was written (a new check, not a spec edit).
+                # Re-validate the cached artifact; if it now fails, treat it as a
+                # cache MISS and re-implement ONLY this leaf.
+                _stale = self._cached_artifact_stale(code_fn)
+                if _stale:
+                    persisted = False
+                    self.emit("implement", "implementer", "spec-implement",
+                              f"{nid}:impl", "resume: cached artifact fails a "
+                              "current gate — re-running", str(_stale)[:200],
+                              "", "", level=L_MILESTONE)
             if persisted:
                 self.emit("implement", "implementer", "spec-implement", f"{nid}:impl",
                           "resume: reuse persisted artifact (run journal)", code_rel,

@@ -331,6 +331,14 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
         except Exception as exc:  # noqa: BLE001 — dispatcher never blocks a run
             print(f"  HITL dispatcher failed to start: {exc}")
             dispatcher = None
+    # resume revalidation: inject the deterministic realness gate so a resumed
+    # run re-checks each cached leaf against the CURRENT gates — a tightened
+    # plugin gate re-runs ONLY the now-failing leaf, not the whole tree.
+    try:
+        from harness import contract_checks as _ccheck
+        agents["_realness_check"] = _ccheck.realness_violations
+    except Exception:  # noqa: BLE001
+        pass
     try:
         res = eng.run_project(exec_case, workspace=str(case_dir / "workspace"), depth=depth,
                               tools=tools, agents=agents or None,
