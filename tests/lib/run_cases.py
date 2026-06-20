@@ -601,7 +601,52 @@ def main() -> int:
                          "itself every N node boundaries (0=off). A run/engine "
                          "parameter, like --decomposer; a case may also set "
                          "`checkpoint: {every: N}`")
+    ap.add_argument("--from-run", default="", metavar="N",
+                    help="clone run NUMBER N (the vNNN in a run dir) from a "
+                         "checkpoint into a FRESH numbered run and resume. "
+                         "Operator-friendly alias for --from <path>; pair with "
+                         "--from-checkpoint M (default: the run's LAST checkpoint)")
+    ap.add_argument("--from-checkpoint", default="", metavar="M",
+                    help="checkpoint NUMBER M (the NNN in checkpoints/NNN__*) "
+                         "within --from-run to start from")
     args = ap.parse_args()
+    # resolve the operator-friendly --from-run N [--from-checkpoint M] to the
+    # checkpoint DIR that --from replays: clone run N's checkpoint M into a fresh
+    # numbered run and resume. Numbers, not paths — the run sequence the operator
+    # already sees (v028, v029, ...) and the checkpoint sequence from
+    # --list-checkpoints.
+    if args.from_run:
+        try:
+            _rn = int(args.from_run)
+        except ValueError:
+            ap.error(f"--from-run must be a number, got {args.from_run!r}")
+        _runs = sorted(OUT_DIR.glob(f"*__v{_rn:03d}__*"))
+        if not _runs:
+            ap.error(f"--from-run {_rn}: no run v{_rn:03d} under {OUT_DIR}")
+        _src = _runs[-1]
+        _ckdir = _src / "checkpoints"
+        _cks = sorted(_ckdir.glob("[0-9]*__*")) if _ckdir.is_dir() else []
+        if not _cks:
+            ap.error(f"--from-run {_rn}: run {_src.name} has no checkpoints "
+                     f"(run it with --checkpoint-every N)")
+        if args.from_checkpoint:
+            try:
+                _cn = int(args.from_checkpoint)
+            except ValueError:
+                ap.error("--from-checkpoint must be a number, got "
+                         f"{args.from_checkpoint!r}")
+            _match = sorted(_ckdir.glob(f"{_cn:03d}__*"))
+            if not _match:
+                _avail = ", ".join(p.name.split("__")[0] for p in _cks)
+                ap.error(f"--from-checkpoint {_cn}: not in {_src.name}/"
+                         f"checkpoints (have: {_avail})")
+            args.from_ckpt = str(_match[0])
+        else:
+            args.from_ckpt = str(_cks[-1])   # default: the latest checkpoint
+        print(f"[from-run] v{_rn:03d} checkpoint "
+              f"{Path(args.from_ckpt).name} -> cloning into a fresh run")
+    elif args.from_checkpoint:
+        ap.error("--from-checkpoint requires --from-run")
     # one-shot control commands: act, then exit
     if args.stop:
         _stop_run(Path(args.stop))
