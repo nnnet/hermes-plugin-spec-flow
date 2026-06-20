@@ -1047,6 +1047,43 @@ class Workspace:
                 continue
         return idx
 
+    # -- decomposition journal (resume rebuilds the same tree) --------------
+    def _decomp_path(self) -> Optional[Path]:
+        if not (self.enabled and self.root):
+            return None
+        return Path(self.root) / ".spec-flow" / "decomp.jsonl"
+
+    def decomp_mark(self, node: str, payload: dict) -> None:
+        """Persist a node's decomposition (size metrics + proposed children +
+        flags) so a resume reproduces the SAME tree deterministically instead
+        of re-asking the non-deterministic decomposer agent. Without this a
+        resume re-decomposes from the root, the node ids drift, and the leaf
+        cache never hits — the run silently restarts from L0."""
+        path = self._decomp_path()
+        if path is None:
+            return
+        try:
+            rec = json.dumps({"node": node, "payload": payload})
+        except (TypeError, ValueError):
+            return  # a non-serialisable payload is not fatal — just not cached
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(rec + "\n")
+
+    def decomp_index(self) -> dict:
+        """node id → last persisted decomposition payload (later record wins)."""
+        path = self._decomp_path()
+        if path is None or not path.is_file():
+            return {}
+        idx: dict = {}
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                rec = json.loads(line)
+                idx[rec["node"]] = rec.get("payload") or {}
+            except Exception:  # noqa: BLE001 — a torn line is not fatal
+                continue
+        return idx
+
     def _write(self, rel: str, content: str, kind: str) -> str:
         if not self.enabled:
             return rel
@@ -1413,7 +1450,8 @@ class Engine:
                  sink: Optional[Any] = None, verbosity: int = DEFAULT_VERBOSITY,
                  max_decompose_calls: int = MAX_DECOMPOSE_CALLS,
                  node_engine: str = "inline", runtime_guard: bool = False,
-                 resume: bool = False, git_provenance: bool = False,
+                 resume: bool = False, replan: bool = False,
+                 git_provenance: bool = False,
                  review_policy: Optional[dict] = None,
                  seed_files: Optional[dict] = None,
                  standing_requirements: Optional[Any] = None,
@@ -1455,8 +1493,19 @@ class Engine:
         # C4: resume a restarted run from the workspace journal — completed
         # leaves keep their persisted artifacts, the implementer is not re-run.
         self.resume = resume
+        # replan: a resume that RE-RUNS the decomposer (the operator changed the
+        # goal/spec and wants a fresh plan). Default off: a plain resume reuses
+        # the persisted decomposition (#7 spec-hash cache still re-runs a leaf
+        # whose regenerated spec differs). Without replan a resume continues the
+        # SAME tree from the checkpoint instead of re-decomposing from L0.
+        self.replan = replan
         self._journal_done: set = set()
         self._journal_index: dict = {}   # #7: node → {version, spec_hash}
+        # resume: node id → the decomposer's persisted output for that node, so
+        # a resume rebuilds the SAME tree instead of re-asking the (non-
+        # deterministic) decomposer — keeps node ids stable so the leaf cache
+        # hits and the run continues from the checkpoint, not from L0.
+        self._decomp_index: dict = {}
         # П2: wave journal — a single-writer, append-only trail of node
         # commits (one wave per committed node). Opened in run() when the
         # workspace has a root; None means the trail is off (optional).
@@ -2025,6 +2074,10 @@ class Engine:
                 # so a node whose spec changed is re-run rather than reused
                 self._journal_index = self.workspace.journal_index()
                 self._journal_done = set(self._journal_index.keys())
+                # rebuild the tree from the persisted decomposition so the walk
+                # reproduces the SAME node ids (a re-decompose would drift them
+                # and the leaf cache would never hit — the run would restart)
+                self._decomp_index = self.workspace.decomp_index()
             # П1: a STOP sentinel only governs the run that was live when it
             # was dropped — clear any stale one so a resume never self-halts.
             if getattr(self.workspace, "root", None):
@@ -2318,6 +2371,21 @@ class Engine:
         deep branches re-invent work that already exists (the L1/L6
         duplicate-spec bug). The dedup gate downstream is the deterministic
         backstop; this context is the first line of defence."""
+        # resume: rebuild this level from the persisted decomposition instead of
+        # re-asking the (non-deterministic) decomposer. This keeps node ids
+        # stable so the leaf cache hits and the run continues from the
+        # checkpoint — without it a resume re-decomposes from L0 and restarts.
+        if self.resume and not self.replan:
+            saved = self._decomp_index.get(node["id"])
+            if saved:
+                node.update(saved)
+                self.emit("decompose", "spec-decomposer", "spec-flow-decompose",
+                          node["id"],
+                          "resume: restored this level from the run journal "
+                          "(decomposer not re-run)",
+                          f"{len(node.get('children', []))} children restored",
+                          level=L_MILESTONE)
+                return node
         self._decompose_calls += 1
         if self._decompose_calls > self.max_decompose_calls:
             raise RuntimeError(
@@ -2329,6 +2397,9 @@ class Engine:
         # live tree — this is how project["tree"] ends up holding the full tree
         # the decomposer built (needed for the reports in llm mode).
         node.update(out or {})
+        # persist this level so a later resume rebuilds the same tree (above)
+        if out:
+            self.workspace.decomp_mark(node["id"], out)
         self.emit("decompose", "spec-decomposer", "spec-flow-decompose", node["id"],
                   "decomposer agent built this level from the goal",
                   f"{len(node.get('children', []))} children proposed", level=L_MILESTONE)
@@ -3797,6 +3868,7 @@ def run_project(project: dict, *, workspace, depth: Any = DEPTH_SPEC,
                 max_decompose_calls: int = MAX_DECOMPOSE_CALLS,
                 node_engine: str = "inline",
                 runtime_guard: bool = False, resume: bool = False,
+                replan: bool = False,
                 git_provenance: bool = False,
                 review_policy: Optional[dict] = None,
                 seed_files: Optional[dict] = None,
@@ -3824,7 +3896,7 @@ def run_project(project: dict, *, workspace, depth: Any = DEPTH_SPEC,
                   max_decompose_calls=max_decompose_calls,
                   review_policy=review_policy, seed_files=seed_files,
                   node_engine=node_engine, runtime_guard=runtime_guard,
-                  resume=resume, git_provenance=git_provenance,
+                  resume=resume, replan=replan, git_provenance=git_provenance,
                   standing_requirements=standing_requirements,
                   human_ask=human_ask).run(project)
 

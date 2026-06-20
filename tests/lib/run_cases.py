@@ -140,7 +140,8 @@ def _load_tools():
 def _run_full(case: dict, case_dir: Path, depth: str, tools,
               decomposer: str = "llm", implementer: str = "auto",
               meter=None, model: str = "", workers: str = "sim",
-              hitl: str = "auto", resume: bool = False) -> dict:
+              hitl: str = "auto", resume: bool = False,
+              replan: bool = False) -> dict:
     """The real production run: mandatory workspace inside the case folder,
     disk sink at full detail, the plugin's own report built from the trace.
 
@@ -345,6 +346,7 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
                               contracts_dir=str(eng.CONTRACTS), sink=sink,
                               max_decompose_calls=max_calls, node_engine=node_engine,
                               review_policy=review_policy, resume=resume,
+                              replan=replan,
                               standing_requirements=getattr(
                                   channel, "standing_requirements", None),
                               human_ask=getattr(channel, "ask", None))
@@ -584,6 +586,11 @@ def main() -> int:
                     help="continue a stopped/crashed run: reuse RUN_DIR, "
                          "restore its journal + claim board, re-run only the "
                          "leaves that hadn't committed")
+    ap.add_argument("--replan", action="store_true",
+                    help="on resume, RE-RUN the decomposer (operator changed the "
+                         "goal/spec → fresh plan). Default off: a resume reuses "
+                         "the persisted decomposition and continues the SAME tree "
+                         "from the checkpoint instead of re-decomposing from L0")
     ap.add_argument("--stop", default="", metavar="RUN_DIR",
                     help="ask a live run rooted at RUN_DIR to stop at the next "
                          "node boundary (drops a STOP sentinel + signals its pid)")
@@ -755,7 +762,8 @@ def main() -> int:
             meter = _cost.Meter()
         full = (_run_full(case, case_dir, args.depth, tools, args.decomposer,
                           implementer=args.implementer, meter=meter, model=args.model,
-                          workers=args.workers, hitl=args.hitl, resume=resuming)
+                          workers=args.workers, hitl=args.hitl, resume=resuming,
+                          replan=args.replan)
                 if runnable else None)
 
         (case_dir / "SUMMARY.md").write_text(

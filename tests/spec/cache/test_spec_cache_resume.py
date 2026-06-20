@@ -84,14 +84,14 @@ def _make_decomp(cart_spec_text):
     return _decomp
 
 
-def _run(root, resume, impl_log, cart_spec_text):
+def _run(root, resume, impl_log, cart_spec_text, replan=False):
     def impl(ctx):
         impl_log.append(ctx["node"])
         ws = ctx["workspace"]
         fn = ctx["module"]
         ws._write(f"src/{fn}.py", f"X = '{fn}'\n", "code")
         ws._write(f"tests/test_{fn}.py", "def test_x():\n    assert True\n", "test")
-    e = eng.Engine(workspace=root, depth="execute", resume=resume,
+    e = eng.Engine(workspace=root, depth="execute", resume=resume, replan=replan,
                    agents={"decomposer": _make_decomp(cart_spec_text),
                            "implementer": impl})
     e.run({"name": "c", "goal": "g", "target": "x", "policy": _POLICY})
@@ -104,19 +104,35 @@ def test_resume_reuses_unchanged_reruns_changed(tmp_path):
     _run(root, False, first, "cart v1")
     assert set(first) >= {"cart_feature", "pay_feature"}
 
-    # resume with a CHANGED cart spec (different decomposer output) but the
-    # SAME pay spec → cart's regenerated hash differs, pay's matches
+    # REPLAN with a CHANGED cart spec (operator edited the goal → re-decompose)
+    # but the SAME pay spec → cart's regenerated hash differs, pay's matches
     second = []
-    _run(root, True, second, "cart v2 CHANGED")
+    _run(root, True, second, "cart v2 CHANGED", replan=True)
     assert "cart_feature" in second        # spec changed → re-run
     assert "pay_feature" not in second      # spec unchanged → reused
 
 
-def test_resume_reuses_all_when_specs_identical(tmp_path):
+def test_replan_reuses_all_when_specs_identical(tmp_path):
     root = str(tmp_path / "wk")
     first = []
     _run(root, False, first, "cart v1")
     second = []
-    _run(root, True, second, "cart v1")    # identical decomposer output
+    _run(root, True, second, "cart v1", replan=True)   # identical decomposer output
     # nothing changed → both reused, neither re-implemented
+    assert second == []
+
+
+def test_resume_default_reuses_decomposition_and_continues(tmp_path):
+    # the operator changed NOTHING and just wants to continue from the
+    # checkpoint: a plain resume must REUSE the persisted decomposition (not
+    # re-ask the decomposer) so node ids stay stable and the leaf cache hits.
+    root = str(tmp_path / "wk")
+    first = []
+    e1 = _run(root, False, first, "cart v1")
+    assert e1._decompose_calls > 0          # first run built the tree
+
+    second = []
+    e2 = _run(root, True, second, "cart v1")
+    # decomposer NOT re-run; every leaf reused from the journal
+    assert e2._decompose_calls == 0
     assert second == []

@@ -56,15 +56,20 @@ python3 lib/run_cases.py --from-run 28 --case p6 --depth product --workers real
   `python3 lib/run_cases.py --list-checkpoints runs-out/<run dir>`.
 - Equivalent low-level form: `--from <checkpoints/NNN__hash dir>`.
 
+A resume CONTINUES from the checkpoint instead of restarting: the decomposition
+tree is restored from the checkpoint (the engine does NOT re-run the decomposer),
+so node ids stay stable and the leaf cache actually hits. Nodes that were never
+reached before the checkpoint are decomposed fresh — that is the continuation.
+
 On resume each cached leaf is re-validated against the CURRENT deterministic
 gates: a leaf that passed when journaled but now fails a tightened plugin gate
 is a cache MISS and is re-implemented — only it, not the whole tree. So the loop
 is: **improve a plugin gate → clone the checkpoint → only the now-failing leaf
 re-runs → boot-gate verifies.**
 
-Caveat: the decomposer is re-run on resume (it is non-deterministic), so a
-different tree can yield different node ids and miss leaf cache-hits; leaf reuse
-is reliable when the re-decomposition reproduces the same node ids.
+`--replan` — re-run the decomposer on resume (use only when you changed the
+GOAL/spec and want a fresh plan). Off by default: a plain resume reuses the
+saved decomposition and continues the same tree from the checkpoint.
 
 ## Live control of a running run
 
