@@ -105,6 +105,56 @@ injections:
         easy-to-read layout — a clear heading, a tidy list, a simple way to add
         one. Standard library only; improve the existing presentation rather
         than adding a separate one alongside it.
+  # Randomised EXTRA requirements ON TOP of the baseline above. Each run draws a
+  # different subset of `pool` (1-2 items) so late-requirement routing is tested
+  # in the GENERAL case, not one fixed combination — some items OVERLAP a module
+  # already built (must be routed INTO it), some are FRESH surfaces (a new file).
+  # The draw is persisted to hitl/selection.json so a --resume replays the same
+  # set. Set SPEC_FLOW_INJECT_SEED=<int> to reproduce a specific combination.
+  select:
+    enabled: true
+    min: 1
+    max: 2
+  pool:
+    - name: delete_note
+      overlap: true            # extends the EXISTING notes API — route into it
+      when: {event: "minimal impl"}
+      statement: |
+        ALLOW REMOVING A NOTE (added by the human mid-run; binding).
+
+        A reader must be able to delete a single note by its id. Extend the
+        existing notes capability — do not add a separate store. Deleting a note
+        then listing must no longer show it. Build it AND prove it with a test
+        through the public surface. Standard library only.
+    - name: note_search
+      overlap: true            # refines the EXISTING /notes listing
+      when: {event: "minimal impl"}
+      statement: |
+        FIND NOTES BY WORD (added by the human mid-run; binding).
+
+        When listing notes, a reader should be able to narrow the list to those
+        containing a given word. Build on the existing notes listing rather than
+        a new one; prove it with a test that adds a few notes and filters them.
+        Standard library only.
+    - name: about_page
+      overlap: false           # a brand-new static surface, no storage
+      when: {event: "minimal impl"}
+      statement: |
+        ADD AN ABOUT PAGE (added by the human mid-run; binding).
+
+        Serve GET /about as a small server-rendered HTML page describing what
+        this little notes service is. No storage, no API change — a standalone
+        page. Standard library only (return 200 + an HTML string). Build it AND
+        prove GET /about returns HTML.
+    - name: ping_text
+      overlap: false           # a brand-new tiny surface, no storage
+      when: {event: "minimal impl"}
+      statement: |
+        ADD A LIVENESS PING (added by the human mid-run; binding).
+
+        Serve GET /ping returning the plain text "pong" (content-type
+        text/plain, status 200). It touches nothing else. Build it AND prove
+        GET /ping returns exactly "pong". Standard library only.
   # Possible HUMAN answers — handed to the plugin ONLY when a worker actually
   # asks a question, and only the one whose `match` is found in that question
   # (else `default`). Never pushed proactively; one reply per real question.

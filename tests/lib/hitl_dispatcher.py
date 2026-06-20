@@ -35,6 +35,8 @@ into ``<run>/hitl/``, identical to manual operation.
 from __future__ import annotations
 
 import json
+import os
+import random
 import threading
 import time
 from pathlib import Path
@@ -54,7 +56,19 @@ class Dispatcher:
         self.answer = self.hitl / "answer.md"
         self.questions = self.hitl / "questions.md"
         inj = injections or {}
-        self.requirements = list(inj.get("requirements") or [])
+        reqs = list(inj.get("requirements") or [])
+        sel = inj.get("select") or {}
+        pool = list(inj.get("pool") or [])
+        # Randomised EXTRA injections on top of the always-on baseline: each run
+        # draws a different subset of `pool` (some OVERLAP a module already built,
+        # some are FRESH surfaces) so we exercise late-requirement routing in the
+        # general case, not one fixed combination. The choice is persisted to
+        # hitl/selection.json so a --resume run replays the SAME set (the tree
+        # must match). Baseline `requirements` (e.g. web_ui) stay mandatory —
+        # the boot-gate hard-requires /ui.
+        if sel.get("enabled") and pool:
+            reqs = reqs + self._select_injections(pool, sel)
+        self.requirements = reqs
         ans = inj.get("answers") or {}
         self.answer_default = ans.get("default")
         self.answer_faq = list(ans.get("faq") or [])
@@ -62,6 +76,58 @@ class Dispatcher:
         self._answered = 0
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
+
+    def _select_injections(self, pool: list, sel: dict) -> list:
+        """Draw a random subset of the EXTRA-requirement pool for this run.
+
+        Why: robustness in the general case needs a different late-requirement
+        mix each run — some OVERLAPPING an existing module (``overlap: true``),
+        some FRESH. What: pick ``randint(min, max)`` items, guaranteeing a
+        mix of both classes when the count allows; persist the chosen names to
+        ``hitl/selection.json`` so a --resume run replays the same set; preserve
+        the pool's declaration order (sequencing between requirements matters).
+        Entropy comes from ``SPEC_FLOW_INJECT_SEED`` when set (reproducible),
+        else from ``os.urandom`` (a fresh combination every run).
+        Test: a 4-item pool with min=max=2 yields exactly 2 names, and a second
+        Dispatcher over the same run dir reads back the identical pair.
+        """
+        by_name = {str(r.get("name")): r for r in pool if r.get("name")}
+        sel_file = self.hitl / "selection.json"
+        if sel_file.is_file():                       # resume: replay the choice
+            try:
+                names = json.loads(sel_file.read_text(encoding="utf-8"))
+                chosen = [by_name[n] for n in names if n in by_name]
+                if chosen:
+                    return chosen
+            except (OSError, ValueError):
+                pass
+        seed = os.environ.get("SPEC_FLOW_INJECT_SEED")
+        rnd = random.Random(int(seed) if (seed or "").lstrip("-").isdigit()
+                            else os.urandom(16))
+        lo = max(0, int(sel.get("min", 1)))
+        hi = min(int(sel.get("max", len(pool))), len(pool))
+        hi = max(hi, lo)
+        k = rnd.randint(lo, hi)
+        overlap = [r for r in pool if r.get("overlap")]
+        fresh = [r for r in pool if not r.get("overlap")]
+        rnd.shuffle(overlap)
+        rnd.shuffle(fresh)
+        chosen: list = []
+        if k >= 2 and overlap and fresh:             # guarantee a mix
+            chosen += [overlap.pop(), fresh.pop()]
+        rest = overlap + fresh
+        rnd.shuffle(rest)
+        while len(chosen) < k and rest:
+            chosen.append(rest.pop())
+        order = {r.get("name"): i for i, r in enumerate(pool)}
+        chosen.sort(key=lambda r: order.get(r.get("name"), 0))
+        try:
+            self.hitl.mkdir(parents=True, exist_ok=True)
+            sel_file.write_text(
+                json.dumps([r.get("name") for r in chosen]), encoding="utf-8")
+        except OSError:
+            pass
+        return chosen
 
     # -- public lifecycle -------------------------------------------------
     def enabled(self) -> bool:
