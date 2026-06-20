@@ -142,6 +142,48 @@ def _tree_from_llm(llm: list[dict]) -> dict:
     return build(roots[0])
 
 
+def _tree_from_decomp(run_dir: pathlib.Path) -> dict | None:
+    """Rebuild the tree from the engine's decomposition journal
+    (workspace/.spec-flow/decomp.jsonl: node -> proposed children). This is the
+    AUTHORITATIVE source — it covers nodes whose decomposition was RESTORED on a
+    resume (those never re-ask the decomposer, so they leave no outcome in the
+    llm-log; reconstructing from the llm-log alone then loses the real root and a
+    late node like product_entry wrongly floats to the top)."""
+    f = run_dir / "workspace" / ".spec-flow" / "decomp.jsonl"
+    if not f.is_file():
+        return None
+    kids: dict[str, list[str]] = {}
+    seen_child: set[str] = set()
+    for line in f.read_text(encoding="utf-8").splitlines():
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        nid = rec.get("node")
+        if not nid:
+            continue
+        ch = [c.get("id") for c in ((rec.get("payload") or {}).get("children") or [])
+              if c.get("id")]
+        if ch or nid not in kids:
+            kids[nid] = ch
+        seen_child.update(ch)
+    if not kids:
+        return None
+    # L0 is the canonical goal root; otherwise the first node nobody parents
+    roots = [n for n in kids if n not in seen_child]
+    root = "L0" if "L0" in kids else (roots[0] if roots else None)
+    if root is None:
+        return None
+
+    def build(nid: str, guard: frozenset) -> dict:
+        if nid in guard:                       # cycle guard (never trust input)
+            return {"id": nid, "children": []}
+        g = guard | {nid}
+        return {"id": nid, "children": [build(c, g) for c in kids.get(nid, [])]}
+
+    return build(root, frozenset())
+
+
 def _node_ids(tree: dict) -> set:
     out: set = set()
 
@@ -1009,7 +1051,8 @@ def _build_state(run_dir: pathlib.Path) -> dict:
     ws = run_dir / "workspace"
     done = (run_dir / "SUMMARY.md").exists()
 
-    tree = _tree_from_file(run_dir) or _tree_from_llm(llm)
+    tree = (_tree_from_file(run_dir) or _tree_from_decomp(run_dir)
+            or _tree_from_llm(llm))
     # surface late-injected requirement nodes (web_ui, seller_directory) that
     # the decompose tree never knew — otherwise they run but stay invisible
     _attach_orphan_nodes(tree, events)
