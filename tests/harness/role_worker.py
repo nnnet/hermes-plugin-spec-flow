@@ -1185,6 +1185,14 @@ the assembled product times out at the boot gate). ALWAYS read exactly the
 declared length:
     n = int(environ.get('CONTENT_LENGTH') or 0)
     body = environ['wsgi.input'].read(n)
+If the leaf opens a database from an env var (e.g. NOTES_DB / MARKETPLACE_DB):
+RE-READ the env var and open a FRESH connection on EVERY call. NEVER cache the
+handle in a module global (`_conn = None; if _conn is None: _conn = connect(...)`)
+and NEVER open it at import time — each sibling test sets its OWN db path, so a
+cached handle points at the FIRST db and every later test dies with
+'no such table'. Read the path INSIDE the function and connect each time:
+    def _db():
+        return sqlite3.connect(os.environ['NOTES_DB'])
 Test ONLY your own module in isolation. NEVER author whole-product or
 cross-feature end-to-end tests — the platform smoke suite (tests/smoke/)
 owns the assembled-product check and runs at the root integrate; a copy of

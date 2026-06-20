@@ -278,3 +278,68 @@ def test_non_wsgi_module_is_ignored(tmp_path):
     _src(tmp_path, "io_util.py",
          "def load(p):\n    return open(p).read()\n")
     assert cc.wsgi_body_read_violations(str(tmp_path)) == []
+
+
+# --- db_connection_singleton_violations -----------------------------------
+
+def test_db_singleton_fires_on_cached_global_connection(tmp_path):
+    # the classic weak-model bug: read NOTES_DB once, cache the handle
+    _src(tmp_path, "notes_db.py",
+         "import os, sqlite3\n"
+         "_conn = None\n"
+         "def connect():\n"
+         "    global _conn\n"
+         "    if _conn is None:\n"
+         "        _conn = sqlite3.connect(os.environ['NOTES_DB'])\n"
+         "    return _conn\n")
+    v = cc.db_connection_singleton_violations(str(tmp_path))
+    assert any("notes_db.py" in x and "_conn" in x for x in v), v
+
+
+def test_db_singleton_fires_on_import_time_open(tmp_path):
+    _src(tmp_path, "store.py",
+         "import os, sqlite3\n"
+         "DB = sqlite3.connect(os.environ.get('APP_DB'))\n"
+         "def all_rows():\n"
+         "    return DB.execute('select 1').fetchall()\n")
+    v = cc.db_connection_singleton_violations(str(tmp_path))
+    assert any("store.py" in x and "import time" in x for x in v), v
+
+
+def test_db_singleton_clean_on_fresh_connection_per_call(tmp_path):
+    _src(tmp_path, "notes_db.py",
+         "import os, sqlite3\n"
+         "def connect():\n"
+         "    return sqlite3.connect(os.environ['NOTES_DB'])\n"
+         "def add(t):\n"
+         "    c = connect()\n"
+         "    c.execute('insert into notes values (?)', (t,))\n")
+    assert cc.db_connection_singleton_violations(str(tmp_path)) == []
+
+
+def test_db_singleton_ignores_non_db_modules(tmp_path):
+    # caches a global, but no db-path env var read -> not our concern
+    _src(tmp_path, "cache.py",
+         "_x = None\n"
+         "def get():\n"
+         "    global _x\n"
+         "    if _x is None:\n"
+         "        _x = compute_connect()\n"
+         "    return _x\n"
+         "def compute_connect():\n    return 1\n")
+    assert cc.db_connection_singleton_violations(str(tmp_path)) == []
+
+
+def test_db_singleton_flows_through_realness_and_run_all(tmp_path):
+    _src(tmp_path, "notes_db.py",
+         "import os, sqlite3\n"
+         "_conn = None\n"
+         "def connect():\n"
+         "    global _conn\n"
+         "    if _conn is None:\n"
+         "        _conn = sqlite3.connect(os.getenv('NOTES_DB'))\n"
+         "    return _conn\n")
+    assert any("notes_db.py" in x for x in cc.run_all(str(tmp_path)))
+    # per-node review filter keeps it when its module is in scope
+    scoped = cc.realness_violations(str(tmp_path), modules={"notes_db"})
+    assert any("notes_db.py" in x for x in scoped), scoped

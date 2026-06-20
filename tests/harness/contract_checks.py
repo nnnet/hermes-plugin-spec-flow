@@ -384,15 +384,166 @@ def wsgi_body_read_violations(root: str) -> list:
     return out
 
 
+# --- env-resource cached in a module global (per-call contract) -------------
+# Known db-path env keys + a generic *_DB / *_DB_PATH suffix rule so the check
+# is not hardcoded to one product's variable name.
+_DB_ENV_KEYS = ("NOTES_DB", "NOTES_DB_PATH", "MARKETPLACE_DB", "APP_DB",
+                "DB_PATH")
+
+
+def _const_str(node) -> Optional[str]:
+    """The string value of a Constant (unwrapping a py<3.9 Index), else None."""
+    if isinstance(node, ast.Index):  # pragma: no cover - legacy py
+        node = node.value
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _is_db_key(key: str) -> bool:
+    """True for a db-path env var: a known key, or any *_DB / *DB_PATH name."""
+    k = key.upper()
+    return k in _DB_ENV_KEYS or k.endswith("_DB") or k.endswith("DB_PATH")
+
+
+def _reads_db_env(tree) -> bool:
+    """True if a subtree reads a db-path from the environment:
+    ``os.environ['NOTES_DB']`` / ``os.environ.get('NOTES_DB')`` /
+    ``os.getenv('NOTES_DB')`` (key matched by :func:`_is_db_key`)."""
+    for n in ast.walk(tree):
+        key = None
+        if isinstance(n, ast.Subscript):
+            v = n.value
+            if isinstance(v, ast.Attribute) and v.attr == "environ":
+                key = _const_str(n.slice)
+        elif isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute):
+            f = n.func
+            is_env = (
+                (f.attr == "getenv" and isinstance(f.value, ast.Name)
+                 and f.value.id == "os")
+                or (f.attr == "get" and isinstance(f.value, ast.Attribute)
+                    and f.value.attr == "environ"))
+            if is_env and n.args:
+                key = _const_str(n.args[0])
+        if key and _is_db_key(key):
+            return True
+    return False
+
+
+def _is_connect_call(node) -> bool:
+    """True if a call opens a connection: ``*.connect(...)`` / ``Connection(...)``
+    / any callable whose name ends in 'connect'."""
+    if not isinstance(node, ast.Call):
+        return False
+    f = node.func
+    name = f.attr if isinstance(f, ast.Attribute) else (
+        f.id if isinstance(f, ast.Name) else "")
+    return name in ("connect", "Connection") or name.lower().endswith("connect")
+
+
+def _names_tested_falsy(test) -> set:
+    """Names checked as 'not yet set' in an ``if`` guard: ``X is None`` /
+    ``not X`` / either side of an ``and``/``or``."""
+    out: set = set()
+    if (isinstance(test, ast.Compare) and len(test.ops) == 1
+            and isinstance(test.ops[0], ast.Is)
+            and isinstance(test.left, ast.Name)
+            and isinstance(test.comparators[0], ast.Constant)
+            and test.comparators[0].value is None):
+        out.add(test.left.id)
+    elif (isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not)
+          and isinstance(test.operand, ast.Name)):
+        out.add(test.operand.id)
+    elif isinstance(test, ast.BoolOp):
+        for v in test.values:
+            out |= _names_tested_falsy(v)
+    return out
+
+
+def _connection_cache_global(fn) -> Optional[str]:
+    """If a function caches a CONNECTION in one of its ``global`` names behind
+    an ``is None`` guard, return that name (the singleton), else None."""
+    declared = {nm for n in ast.walk(fn) if isinstance(n, ast.Global)
+                for nm in n.names}
+    if not declared:
+        return None
+    cached: set = set()
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Assign) and any(_is_connect_call(c)
+                                             for c in ast.walk(n.value)):
+            for t in n.targets:
+                if isinstance(t, ast.Name) and t.id in declared:
+                    cached.add(t.id)
+    if not cached:
+        return None
+    for n in ast.walk(fn):
+        if isinstance(n, ast.If):
+            for nm in _names_tested_falsy(n.test):
+                if nm in cached:
+                    return nm
+    return None
+
+
+def db_connection_singleton_violations(root: str) -> list:
+    """Flag a module that opens its db ONCE and caches the handle — a real
+    cross-test corruption bug, not a style nit.
+
+    Why: a weak model 'reuses' the connection in a module global
+    (``_conn = None; if _conn is None: _conn = sqlite3.connect(os.environ[...]))``
+    or opens it at import time. The env db-path is then read ONCE, so the leaf's
+    own test passes, but every SIBLING test sets a FRESH ``NOTES_DB`` and gets
+    the stale handle — whose tables live in the first db — so they die with
+    'no such table'. The boot-gate (one process, one db) cannot see this; catch
+    it statically, model-independently.
+    What: in any src module that reads a db-path env var, flag (a) a module-level
+    connect bound to a global (import-time singleton) and (b) a function caching
+    a connection in a global guarded by ``is None``.
+    Test: a module caching ``_conn`` from ``os.environ['NOTES_DB']`` ⇒ one
+    violation; one that connects fresh per call ⇒ none.
+    """
+    out: list = []
+    srcdir = Path(root) / "src"
+    if not srcdir.is_dir():
+        return out
+    for p in sorted(srcdir.glob("*.py")):
+        try:
+            tree = ast.parse(p.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, SyntaxError):
+            continue
+        if not _reads_db_env(tree):
+            continue
+        for n in tree.body:  # import-time singleton at module scope
+            if isinstance(n, ast.Assign) and any(_is_connect_call(c)
+                                                 for c in ast.walk(n.value)):
+                out.append(
+                    f"src/{p.name}:{n.lineno} opens the db connection at import "
+                    "time — the env db-path is read ONCE, so a later test with a "
+                    "fresh NOTES_DB reuses the stale connection (no such table); "
+                    "open a fresh connection inside connect() on every call")
+        for fn in ast.walk(tree):  # function-level cached singleton
+            if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                nm = _connection_cache_global(fn)
+                if nm:
+                    out.append(
+                        f"src/{p.name}:{fn.lineno} caches the db connection in a "
+                        f"module global '{nm}' (guarded by 'is None') — the env "
+                        "db-path is read once and every sibling test with a fresh "
+                        "NOTES_DB hits the stale connection (no such table); "
+                        "connect() MUST re-read the env var and open a fresh "
+                        "connection on EVERY call")
+    return sorted(set(out))
+
+
 def realness_violations(root: str, modules=None) -> list:
     """Combined 'no fake product' check for a LEAF or BRANCH at REVIEW time:
     stub bodies + mocks of a local module + smoke-only tests + unbounded WSGI
-    body reads. When ``modules`` is given (a set of src stems, e.g. the node's
-    own file), only violations in those files are returned — so a per-node
-    review flags ONLY that node's hollow code. Used by the leaf gate; the full
-    set runs at integrate."""
+    body reads + db-connection singletons. When ``modules`` is given (a set of
+    src stems, e.g. the node's own file), only violations in those files are
+    returned — so a per-node review flags ONLY that node's hollow code. Used by
+    the leaf gate; the full set runs at integrate."""
     v = (stub_bodies(root) + mocks_local_module(root) + smoke_only_tests(root)
-         + wsgi_body_read_violations(root))
+         + wsgi_body_read_violations(root)
+         + db_connection_singleton_violations(root))
     if modules:
         keep = []
         for line in v:
@@ -449,6 +600,7 @@ def run_all(root: str) -> list:
     viol += stub_bodies(root)
     viol += smoke_only_tests(root)        # forbid always-green / no-assert tests
     viol += wsgi_body_read_violations(root)   # forbid POST-hanging body reads
+    viol += db_connection_singleton_violations(root)  # forbid cached-db handle
     # reuse existing deterministic detectors (don't duplicate them)
     for f, mod, name in _cross_module_import_violations(root):
         viol.append(f"{f} imports '{name}' from '{mod}' but src/{mod}.py "
