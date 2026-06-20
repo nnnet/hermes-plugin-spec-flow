@@ -17,6 +17,7 @@ never in the role schema.
 """
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 from .base import (Provider, RoleResultLike, RoleTaskLike, Transport,
@@ -63,8 +64,10 @@ class HermesProvider(Provider):
         ``{"files": {...}}`` reply yields those artifacts."""
         gateway, agent = _gateway(task), _agent(task)
         cfg = {**(task.constraints or {}), **(task.context or {})}
+        # auth lives INSIDE the adapter: explicit cfg token, else the operator's
+        # env (GATEWAY_API_KEY) — never a secret in the role schema or YAML
         headers: dict = {}
-        token = cfg.get("token")
+        token = cfg.get("token") or os.environ.get("GATEWAY_API_KEY")
         if token:
             headers["Authorization"] = f"Bearer {token}"
         payload = {

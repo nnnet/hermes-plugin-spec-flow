@@ -164,8 +164,11 @@ workers:
   # want mimo to carry the run so Xiaomi traffic is consistently visible IN
   # Bifrost (round-robin would spread ~1/3 of calls to haiku, which bypasses it).
   cycle_models: false
-  quota_wait_s: 300
-  quota_retries: 11
+  # quota wait is a LAST resort (whole chain 429'd). Kept SHORT: leads are now
+  # local lmstudio (no quota), so a 429 only happens if it AND mimo are down and
+  # a free fallback is hit. A short wait beats minutes of idle (was 300×11 ≈ 55m).
+  quota_wait_s: 20
+  quota_retries: 3
   fallback_models: [claude/haiku]
   providers:
     # Xiaomi MiMo — its OWN Bifrost provider "xiaomimimo" (custom OpenAI-compatible,
@@ -175,6 +178,9 @@ workers:
     # WEAK free models (model-independence), so a strong model must not carry the
     # run. It appears only as one last-ditch fallback in the heaviest role.
     - {name: xiaomimimo, kind: openai, model_prefix: "xiaomimimo/", requests_per_day: 1000}
+    # LMStudio gpt-oss-20b — LOCAL, weak, NO quota. Leads the heavy roles so the
+    # run carries on a WEAK model (model-independence intact) WITHOUT 429 waits.
+    - {name: lmstudio, kind: openai, model_prefix: "lmstudio/"}
     - {name: openrouter-free, kind: openai, model_prefix: "openrouter/", require_suffix: ":free", requests_per_day: 1000}
     - {name: claude-cli, kind: claude, model_prefix: "claude/"}
   # ── SPEC-PIPELINE STAGES ────────────────────────────────────────────────
@@ -226,16 +232,16 @@ workers:
       team:
         specialists:
           - {role: architect, model: "claude/haiku", params: {temperature: 0.2}}        # hard → weak
-          - {role: coder,     model: "openrouter/nvidia/nemotron-3-super-120b-a12b:free", params: {temperature: 0.4, max_tokens: 4000}}  # hard → weak
+          - {role: coder,     model: "lmstudio/gpt-oss-20b", params: {temperature: 0.4, max_tokens: 6000}}  # hard → weak, LOCAL (no quota)
           - {role: tester,    provider: hermes,          agent: "tester",
-             gateway: "http://127.0.0.1:8642", model: "openrouter/google/gemma-4-31b-it:free"}  # check → strong
+             gateway: "http://127.0.0.1:8642", model: "lmstudio/gpt-oss-20b"}  # check; degrades to LOCAL if gateway down (no 429)
           - {role: fixer,     provider: mission-control, agent_template: "fixer",
-             api: "http://127.0.0.1:3000", model: "claude/haiku"}                         # hard → weak
+             api: "http://127.0.0.1:3000", model: "claude/haiku"}                         # hard → weak; mc key from env
     # CHECK stages lead with the 3 strongest VERIFIED-RESPONDING free OpenRouter
     # models (model-independence: the gates are carried by free models, not a
     # single paid/Bifrost provider). cycle_models:false ⇒ the lead really runs.
-    review:                             # CHECK → strong; nemotron-120b leads, gemma-31b + haiku fall back
-      models: ["openrouter/nvidia/nemotron-3-super-120b-a12b:free", "openrouter/google/gemma-4-31b-it:free", "claude/haiku"]
+    review:                             # CHECK → strong; mimo leads (works, no quota), free models fall back
+      models: ["xiaomimimo/mimo-v2.5", "openrouter/nvidia/nemotron-3-super-120b-a12b:free", "openrouter/google/gemma-4-31b-it:free", "claude/haiku"]
     verify:                             # CHECK / final gate → STRONGEST: gpt-oss-120b leads
       models: ["xiaomimimo/mimo-v2.5-pro", "openrouter/openai/gpt-oss-120b:free", "openrouter/nvidia/nemotron-3-super-120b-a12b:free", "claude/haiku"]
   #

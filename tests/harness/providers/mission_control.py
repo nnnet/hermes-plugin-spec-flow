@@ -16,6 +16,7 @@ Config (on the task context/constraints):
 """
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 from .base import (Provider, RoleResultLike, RoleTaskLike, json_request,
@@ -47,9 +48,12 @@ class MissionControlProvider(Provider):
         if not assignee:
             raise ValueError(
                 "mission-control provider needs 'agent' or 'agent_template'")
+        # auth lives INSIDE the adapter: explicit cfg key, else the operator's
+        # env (HERMES_MC_API_KEY) — never a secret in the role schema or YAML
         headers: dict = {}
-        if cfg.get("api_key"):
-            headers["X-API-Key"] = str(cfg["api_key"])
+        api_key = cfg.get("api_key") or os.environ.get("HERMES_MC_API_KEY")
+        if api_key:
+            headers["X-API-Key"] = str(api_key)
 
         create = {
             "title": f"{task.role}:{task.node}",
