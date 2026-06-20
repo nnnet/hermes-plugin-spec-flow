@@ -1814,8 +1814,12 @@ class Engine:
             "the bare word new. When unsure, answer new.")
         try:
             chain = chain_for("reviewer")
+            # attribute the call to a node+purpose: every LLM call must carry a
+            # node so the dashboard never shows a bare «—» for the actor's target
             reply = ask(prompt, model=chain[0], role="reviewer",
-                        step="amend-route", fallbacks=tuple(chain[1:]))
+                        step="amend-route", fallbacks=tuple(chain[1:]),
+                        meta={"node": "late-requirement",
+                              "purpose": "route to owning module"})
         except Exception:               # noqa: BLE001
             return None
         ans = (reply or "").strip().splitlines()[-1].strip().strip("`").strip()
@@ -3293,14 +3297,27 @@ class Engine:
                        ancestors: tuple = ()):
         nid = node["id"]
         title = node.get("title", nid)
-        # spec/plan is written at every depth (>= spec)
-        self._review_gate(node, nid, title, depth, parent,
-                          {"verdict": "leaf", "reasons": "within all thresholds",
-                           "plan": ["bottom-up plan: DB → logic → API → tests",
-                                    "TDD: test (RED) → impl → test (GREEN)",
-                                    "two-stage review (spec-conformance, then quality)",
-                                    "verification-before-completion + commit"]},
-                          ancestors)
+        # resume: a leaf already in the journal was specced, reviewed and frozen
+        # in the original run; its spec sits in the restored checkpoint. Re-running
+        # the review gate would REWRITE that spec (the lint loop even re-asks the
+        # decomposer), drift its hash, and the reuse check below would then treat
+        # it as "spec changed" and re-implement — i.e. restart instead of continue.
+        # So keep the checkpoint spec untouched for a journaled leaf (replan opts out).
+        _journaled = (self.resume and not self.replan
+                      and nid in self._journal_index)
+        if _journaled:
+            self.emit("review", "engine", "", nid,
+                      "resume: spec kept from checkpoint (already reviewed+journaled)",
+                      "", "", "", level=L_DETAIL)
+        else:
+            # spec/plan is written at every depth (>= spec)
+            self._review_gate(node, nid, title, depth, parent,
+                              {"verdict": "leaf", "reasons": "within all thresholds",
+                               "plan": ["bottom-up plan: DB → logic → API → tests",
+                                        "TDD: test (RED) → impl → test (GREEN)",
+                                        "two-stage review (spec-conformance, then quality)",
+                                        "verification-before-completion + commit"]},
+                              ancestors)
         # code & test scaffolds only from depth 'scaffold' upward; at 'execute'
         # an injected implementer agent produces real code instead of a scaffold.
         code_rel = test_rel = None

@@ -97,6 +97,11 @@ def test_clone_from_checkpoint_continues_not_restarts(tmp_path, monkeypatch):
                 and "restored this level from the run journal" in e.action]
     assert any(e.task == "L0" for e in restored), "L0 must be restored, not re-decomposed"
     assert e2._decompose_calls < e1._decompose_calls   # not a full rebuild from L0
+    # the leaf done at M keeps its checkpoint spec (the review gate is NOT re-run,
+    # so its hash does not drift and the reuse check below hits)
+    kept = [e for e in e2.events
+            if "spec kept from checkpoint" in e.action and e.task in done_at_m]
+    assert kept, "a journaled leaf must keep its checkpoint spec on resume"
     # continues from M: the leaf already done at M is reused (not re-implemented),
     # only the remaining leaves finish
     assert done_at_m and not (set(second) & done_at_m)

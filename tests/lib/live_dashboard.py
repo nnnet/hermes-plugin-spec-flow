@@ -1120,10 +1120,12 @@ def _build_state(run_dir: pathlib.Path) -> dict:
         if open_calls:
             parts = []
             for e in open_calls.values():
-                # never show «None» — fall back to the call's title, then a dash
+                # never show «None» — fall back to the call's title, then its
+                # step (specialist), then a dash; a bare «—» means an LLM call
+                # reached the dashboard with no node attribution (a bug upstream)
                 _n = e.get("node")
                 node = (str(_n) if _n not in (None, "None", "")
-                        else (e.get("title") or "—"))
+                        else (e.get("title") or e.get("step") or "—"))
                 lvl = e.get("depth")
                 if not (isinstance(lvl, int) and lvl >= 0):
                     # older harness logs carry no depth — the TREE knows it
