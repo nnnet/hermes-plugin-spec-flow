@@ -1,0 +1,28 @@
+tests/scenarios/p6_micro_notes.yaml
+  s_a7f45290e91181::t_175055b99b961c 235,237,239
+  s_a7f45290e91181::t_c35aaf488c25ee 167-171
+  s_a7f45290e91181::t_9dd4d49359072c 243-244
+  s_a7f45290e91181::t_0ca767a1a91bec 181-183
+tests/harness/providers/hermes.py
+  s_a7f45290e91181::t_a93fa8209e1d7b 20
+  s_a7f45290e91181::t_6aae7b99112f17 67-68,70
+tests/harness/providers/mission_control.py
+  s_a7f45290e91181::t_71c80715942340 19
+  s_a7f45290e91181::t_f5db6d255e79b0 51-52,54-56
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.9",
+  "base_commit_sha": "de330751446b6bc77c2dad5964aac6c187f1fe9d",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
