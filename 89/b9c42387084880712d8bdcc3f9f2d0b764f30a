@@ -1,0 +1,28 @@
+tests/nodes/test_resume_revalidate.py
+  s_a7f45290e91181::t_de3339c59b0db1 58
+  s_a7f45290e91181::t_429e70d1163095 11,22-23,25
+  s_a7f45290e91181::t_26a7607b2f766c 1-10,12-21,24,26-57,59
+tests/lib/run_cases.py
+  s_a7f45290e91181::t_d27d96a332cbc2 334-341
+spec_flow_runner.py
+  s_a7f45290e91181::t_ce0b564324981c 1490-1494
+  s_a7f45290e91181::t_ea184dff1d0ae5 2665-2666,2671-2674,2677,2681-2682,2684-2687
+  s_a7f45290e91181::t_e67960d6f03832 2667-2670,2675-2676,2678-2680,2683
+  s_a7f45290e91181::t_6d7433d7db0b75 3266-3277
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.9",
+  "base_commit_sha": "89b9c42387084880712d8bdcc3f9f2d0b764f30a",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
