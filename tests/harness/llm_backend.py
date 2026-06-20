@@ -60,6 +60,32 @@ FALLBACK_COOLDOWN = config.env("FALLBACK_COOLDOWN", float)
 _free_down_until = 0.0
 last_call: dict = {}    # {"backend":…, "model":…, "fallback":bool} — for logs
 
+# PROVIDER circuit breaker: the injected provider (the Bifrost chain) is tried
+# FIRST on every ask(); when it is DOWN (e.g. repeated 504s from a dead upstream)
+# that tax is paid on every single call and one leaf can burn 20+ min waiting on
+# it. After `provider_breaker_fails` consecutive failures the breaker OPENS for
+# `provider_breaker_cooldown_s`: the provider is skipped and the call goes
+# straight to the working local chain. A success closes it. Model-independent —
+# it keys on the provider label (provider:model), so only the dead route is cut.
+_provider_breaker: dict = {}   # plabel -> {"fails": int, "open_until": float}
+
+
+def _breaker_open(plabel: str) -> bool:
+    st = _provider_breaker.get(plabel)
+    return bool(st) and time.monotonic() < st.get("open_until", 0.0)
+
+
+def _breaker_record(plabel: str, ok: bool, cfg: dict) -> None:
+    if ok:
+        _provider_breaker.pop(plabel, None)
+        return
+    need = max(1, int(cfg.get("provider_breaker_fails", 2)))
+    cooldown = float(cfg.get("provider_breaker_cooldown_s", 120))
+    st = _provider_breaker.setdefault(plabel, {"fails": 0, "open_until": 0.0})
+    st["fails"] += 1
+    if st["fails"] >= need:
+        st["open_until"] = time.monotonic() + cooldown
+
 # per-role worker configuration — the case YAML `workers:` block.
 # Shape (all lists carry parameters; models come STRICTLY from here when
 # the block exists — env vars are ignored):
@@ -525,15 +551,28 @@ def ask(prompt: str, *, model: str, role: str, step: str,
     # its degradation now live in ask()'s ONE logging path like every other hop.
     if provider_call is not None:
         _plabel = f"{provider or 'provider'}:{model}"
-        _spend_call()
-        try:
-            return _ret(provider_call(prompt), _plabel)
-        except Exception as exc:  # noqa: BLE001 — remote down → local chain
-            last_exc = exc
+        if _breaker_open(_plabel):
+            # the provider tripped its breaker on recent failures — skip the
+            # dead route entirely (no wait) and go straight to the local chain
             _log_event({"event": "llm_fallback", "from_model": _plabel,
                         "to_model": chain[0] if chain else None,
                         "provider": provider,
-                        "reason": _failure_reason(exc), "terminal": False})
+                        "reason": "provider circuit open (skipped)",
+                        "terminal": False})
+        else:
+            _spend_call()
+            try:
+                _raw = provider_call(prompt)
+            except Exception as exc:  # noqa: BLE001 — remote down → local chain
+                last_exc = exc
+                _breaker_record(_plabel, False, cfg)
+                _log_event({"event": "llm_fallback", "from_model": _plabel,
+                            "to_model": chain[0] if chain else None,
+                            "provider": provider,
+                            "reason": _failure_reason(exc), "terminal": False})
+            else:
+                _breaker_record(_plabel, True, cfg)
+                return _ret(_raw, _plabel)
     for attempt in range(rounds):
         if attempt:
             from . import llm_log
