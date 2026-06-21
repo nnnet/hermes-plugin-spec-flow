@@ -2009,6 +2009,36 @@ class Engine:
                                 f"{code_rel} adds no new symbol — empty delta"]})
         return False
 
+    def _missing_decisions(self, node: dict, nid: str) -> list:
+        """462 (memory_loss data source): decisions the engine already RECORDED
+        for this run that THIS node failed to honour. A ``depends_on`` link is a
+        recorded decision — 'reuse node X, do not rebuild it' — produced by the
+        dedup gate / decomposer. If the node's owned module never references the
+        depended module, that decision was forgotten. Sourced from the run-wide
+        intentions board the dedup gate already maintains (``_node_registry`` +
+        ``_module_names``), so no new store is needed. Deterministic, code-checked
+        (decided by the artifact, not the model); [] when nothing was forgotten."""
+        deps = node.get("depends_on") or []
+        if not deps:
+            return []
+        fn = self._module_names.get(nid) or _snake(nid)
+        try:
+            body = (Path(self.workspace.root) / f"src/{fn}.py").read_text(
+                encoding="utf-8")
+        except Exception:  # noqa: BLE001 — missing file: everything is unreferenced
+            body = ""
+        missing = []
+        for dep in deps:
+            if dep not in self._node_registry:
+                continue                       # not a recorded decision
+            dep_fn = self._module_names.get(dep) or _snake(dep)
+            if dep_fn and dep_fn in body:
+                continue                       # decision honoured (module reused)
+            title = self._node_registry.get(dep, dep)
+            missing.append(
+                f"reuse {dep} ({title}) via src/{dep_fn}.py — not referenced")
+        return missing
+
     def _ensure_doctor_classifier(self) -> None:
         """Lazily attach the semantic LLM classifier to the doctor, resolving the
         backend (ask + chain_for_tier) the same way the rest of the runner does.
@@ -2079,6 +2109,12 @@ class Engine:
                 drops = _trunc.drain(nid)
                 if drops:
                     evidence["dropped"] = drops
+            # 462: feed the memory_loss detector — recorded depends_on decisions
+            # this node failed to honour, read from the run's intentions board.
+            if "missing_decisions" not in evidence:
+                miss = self._missing_decisions(node, nid)
+                if miss:
+                    evidence["missing_decisions"] = miss
             diag = self._doctor.diagnose(
                 node=nid, gate=gate, verdict=verdict,
                 evidence=evidence, context=ctx)

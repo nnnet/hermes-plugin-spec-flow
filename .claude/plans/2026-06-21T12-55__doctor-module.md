@@ -478,16 +478,18 @@ level_attempts, last_causeset, nonshrink_rounds, open{}}`.
     `complexity_to_tier` `spec_flow_remedies.py:215`; `DEFAULT_TIERS` `spec_flow_remedies.py:26`
 - [x] Инструмент `web_search` (поиск в интернете/доках) как ступень лестницы перед человеком
   → `search()` `spec_flow_websearch.py:42`, `summarize()` :61
-- [~] Источники данных детекторов: ancestry/rewrite/truncation ПОДКЛЮЧЕНЫ;
-      memory_loss (`missing_decisions`) — ещё нет (нет реестра решений в движке)
+- [x] Источники данных детекторов: ancestry/rewrite/truncation/memory_loss ПОДКЛЮЧЕНЫ
   → `_doctor_advise` биндит живые `self.loops` в helpers + `reason_history`
     из reject-записей узла `spec_flow_runner.py:1998-2012`;
     silent_truncation: коллектор `tests/harness/truncation_log.py` (per-node
     ContextVar), producer — `_inline_file` `tests/harness/role_worker.py:314`,
-    движок ставит `node_scope` вокруг воркера `spec_flow_runner.py:_invoke_implementer`
-    + сливает `drain(nid)` в `evidence['dropped']` `spec_flow_runner.py:_doctor_advise`;
-    тесты `test_diagnosers_data.py` + `test_truncation_plumbing.py` (8 зелёных).
-    `_memory_absent` ждёт реестра решений (нет в движке — не выдумано, честно pending)
+    движок ставит `node_scope` вокруг воркера + сливает `drain(nid)` в
+    `evidence['dropped']`; тесты `test_truncation_plumbing.py`;
+    context_loss (memory_loss): `_missing_decisions` `spec_flow_runner.py` —
+    забытые `depends_on`-решения читаются из доски намерений прогона
+    (`_node_registry` + `_module_names`, та же, что у дедуп-гейта) → если узел
+    не сослался на модуль зависимости, факт идёт в `evidence['missing_decisions']`
+    → детектор `memory_absent`. Тест `test_memory_loss_plumbing.py` (5 зелёных)
 - [x] Алгоритм `find_root` (бисекция/трассировка корневого источника)
   → `find_root()` `spec_flow_doctor.py:190`
 - [x] Метрики доктора в `RunResult` + сравнение прогонов (#31): число лечений, доля закрытых причин, READY, разброс голосов
