@@ -177,7 +177,8 @@ def metrics(run_dir: pathlib.Path) -> dict:
         "root_red": root_red,
         "mem_roles": (mem.get("roles") or {}).get("mode", "—")
         if isinstance(mem, dict) else "—",
-        "concurrency": (meta.get("workers") or {}).get("concurrency", "—")
+        "concurrency": ((meta.get("workers") or {}).get("max_concurrent_llm_requests")
+                        or (meta.get("workers") or {}).get("concurrency", "—"))
         if isinstance(meta.get("workers"), dict) else "—",
         # #6: real token economics (0 when the provider returned no usage)
         "tokens_total": tokens_total,

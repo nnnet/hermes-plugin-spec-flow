@@ -184,15 +184,18 @@ def _cycled(chain: list, cfg: dict) -> list:
 # harness's common dependency (no import cycles).
 PYTEST_LOCK = threading.Lock()
 
-# at most workers.concurrency LLM calls in flight — the free pool's
-# per-minute ceiling turns unbounded parallel calls into a 429 storm
+# at most workers.max_concurrent_llm_requests LLM calls in flight — the free
+# pool's per-minute ceiling turns unbounded parallel calls into a 429 storm
 _llm_slots: "threading.Semaphore | None" = None
 _llm_slots_for = 0
 
 
 def _concurrency_gate() -> "threading.Semaphore | None":
     global _llm_slots, _llm_slots_for
-    want = int(WORKERS_CFG.get("concurrency")
+    # canonical key is the self-describing max_concurrent_llm_requests; the old
+    # `concurrency` is still read so resuming a pre-rename run does not break.
+    want = int(WORKERS_CFG.get("max_concurrent_llm_requests")
+               or WORKERS_CFG.get("concurrency")
                or config.env("LLM_CONCURRENCY", int))
     if want <= 0:
         return None

@@ -15,6 +15,12 @@
 name: p6-micro-notes
 node_engine: fsm
 
+# Parallel sibling leaves: up to 3 leaves of a branch build at once. HARD RULE —
+# parallel workers MUST be physically isolated, so each leaf builds in its OWN
+# git worktree and merges back with a merge-tree pre-flight (no shared-dir dups).
+parallel: {children: 3}
+isolation: worktree
+
 goal: >
   A tiny notes service. Two HTTP endpoints over a WSGI app:
   POST /notes accepts {"text": "..."} and stores it, returning {"id": <int>};
@@ -221,7 +227,7 @@ workers:
   max_children: 3
   max_decompose_calls: 40
   creator_ensemble: 2
-  concurrency: 3
+  max_concurrent_llm_requests: 3   # cap of simultaneous in-flight LLM calls
   # cycle_models: false  → STRICT primary-first: each chain's first model
   # (xiaomimimo/mimo-v2.5) is tried on every call, fallbacks only on failure. We
   # want mimo to carry the run so Xiaomi traffic is consistently visible IN

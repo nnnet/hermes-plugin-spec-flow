@@ -254,7 +254,7 @@ workers:
   max_children: 4
   max_decompose_calls: 160
   creator_ensemble: 2
-  concurrency: 3
+  max_concurrent_llm_requests: 3   # cap of simultaneous in-flight LLM calls
   # working language for specs and in-plugin communication (specs, code
   # comments, HITL questions). English keeps the auto-responder and
   # English-only project rules consistent; override via SPEC_FLOW_LANG.

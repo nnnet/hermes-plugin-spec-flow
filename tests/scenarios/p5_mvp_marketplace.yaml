@@ -73,7 +73,7 @@ workers:
   max_children: 4
   max_decompose_calls: 80
   creator_ensemble: 2
-  concurrency: 3
+  max_concurrent_llm_requests: 3   # cap of simultaneous in-flight LLM calls
   cycle_models: true
   quota_wait_s: 300
   quota_retries: 11

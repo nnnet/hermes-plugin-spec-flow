@@ -187,7 +187,7 @@ def test_llm_concurrency_gate(monkeypatch, fake_openai):
     import threading as _th
 
     from harness_fakeapi import ok
-    lb.configure_workers({"concurrency": 2})
+    lb.configure_workers({"max_concurrent_llm_requests": 2})
     monkeypatch.setattr(lb, "_free_down_until", 0.0)
     # a REAL slow local server: each request lingers 0.08s, so 6 client calls
     # fired at once would peak at 6 concurrent on the wire WITHOUT the gate. The
@@ -327,3 +327,10 @@ def test_pure_dependency_chain_stays_serial(tmp_path):
     eng.run_project(chain, workspace=str(tmp_path / "w"), depth="spec",
                     agents={"reviewer": probe})
     assert probe.peak == 1, "a pure chain must stay strictly serial"
+
+
+def test_llm_concurrency_legacy_key(monkeypatch, fake_openai):
+    # back-compat: a pre-rename run with the old `concurrency` key still gates
+    from harness import llm_backend as lb
+    lb.configure_workers({"concurrency": 2})
+    assert lb._concurrency_gate() is not None
