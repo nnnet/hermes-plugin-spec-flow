@@ -512,6 +512,16 @@ level_attempts, last_causeset, nonshrink_rounds, open{}}`.
   → `tests/coverage/test_doctor_core.py`, `test_tiers.py`, `test_websearch.py` (89 зелёных)
 - [x] Golden/характеризация: `enabled=false` по умолчанию (обратная совместимость) + карта «причина→первое лечение» 15 причин + завершаемость каждой лестницы
   → `tests/coverage/test_doctor_golden.py` (4 зелёных); контур/`treat` уже в `test_doctor_core.py`
+- [x] Исполняемый `reconcile_check` (Ф6): доктор не только диагностирует, но ЛЕЧИТ
+  → `_remedy_reconcile_check` `spec_flow_runner.py`: пере-собирает заявленную точку
+    входа через реального воркера (`_invoke_implementer` на спеке `_assembly_node`) +
+    boot-gate; зелёный boot → снять корневой fail + `_doctor_resolve` (красная→зелёная).
+    `_doctor_advise` возвращает Action, пред-гейт исполняет. Commit `3bab846`.
+- [x] Контракт продукта ВЫВОДИТСЯ из человеческого текста (не хардкод, не конфиг-хинт)
+  → `_product_contract()` парсит маршруты/энтри/boot из constitution+goal+инъекций;
+    движок не знает «web/app.py/wsgi/health/notes/ui», ключ `product:` не читается;
+    нет HTTP-описания → нет сборки/boot/reconcile (библиотека/CLI). Boot-probe
+    параметризован выведенным контрактом. Тесты assembly_node на выводе. Commit `3bab846`.
 - [x] Шов integrate ИСПОЛНЯЕТ вердикт доктора (не advisory) — критичный фикс из v044
   → пред-гейт «entry not built» пишет корневой `integrate-fail`; `_doctor_open_causes()`
     `spec_flow_runner.py` ORится в `root_red` → открытая причина блокирует зелёный COMPLETE.
