@@ -2634,11 +2634,13 @@ class Engine:
         # findings — code-checked, model-independent (the v040 web_ui duplicate
         # that the LLM reviewer kept REJECTing). Layered detectors of increasing
         # precision live in _dup_surface_findings.
+        _scope_failed = False
         for _scope_round in range(2):
             findings = self._late_req_scope_findings(
                 node, str(node.get("spec_markdown") or ""))
             if not findings:
                 break
+            _scope_failed = True
             self.emit("review", "engine", "", nid,
                       f"spec scope: {len(findings)} duplicate-surface finding(s)",
                       "; ".join(findings)[:300], "spec_scope", "FAIL",
@@ -2671,6 +2673,13 @@ class Engine:
                 nid, title, depth, spec_args["verdict"], spec_args["reasons"],
                 parent, spec_args["plan"], node=node, target=self._target,
                 module=self._module_for(nid))
+        # if a scope FAIL was raised but the rework cleared it, emit the closing
+        # PASS on the SAME gate — otherwise the FAIL reads as an unresolved
+        # problem forever (no later PASS to pair it with)
+        if _scope_failed and not self._late_req_scope_findings(
+                node, str(node.get("spec_markdown") or "")):
+            self.emit("review", "engine", "", nid, "spec scope clean", "",
+                      "spec_scope", "PASS", level=L_MILESTONE)
         if not _lint_spec_traceability(nid,
                                        str(node.get("spec_markdown") or "")):
             self.emit("review", "engine", "", nid, "spec lint clean", "",

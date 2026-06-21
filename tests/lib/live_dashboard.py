@@ -2749,12 +2749,12 @@ function renderNode(){
  evs.forEach((e,i)=>{if(isBad(e))(fixedBy(i)?fixed:open).push(e);});
  if(open.length){
   h+='<div class=errbox><b>❌ незакрытые проблемы ('+open.length+'):</b><ul>'+
-   open.map(e=>`<li><b>${esc(e.gate||e.phase||'')}</b> → ${esc(e.verdict)}: ${esc(e.detail||e.action||'')}</li>`).join('')+
+   open.map(e=>`<li><span class=dim>#${e.tick??''}</span> <b>${esc(e.gate||e.phase||'')}</b> → ${esc(e.verdict)}: ${esc(e.detail||e.action||'')}</li>`).join('')+
    '</ul></div>';
  }
  if(fixed.length){
   h+='<div class=fixbox><b>🔧 исправлено доработкой ('+fixed.length+') — повторная проверка PASS:</b><ul>'+
-   fixed.map(e=>`<li><b>${esc(e.gate||e.phase||'')}</b> было ${esc(e.verdict)}: ${esc(e.detail||e.action||'')}</li>`).join('')+
+   fixed.map(e=>`<li><span class=dim>#${e.tick??''}</span> <b>${esc(e.gate||e.phase||'')}</b> было ${esc(e.verdict)}: ${esc(e.detail||e.action||'')}</li>`).join('')+
    '</ul></div>';
  }
  h+='<div class=tabs><span class="tab" data-n="__back">⬅ обзор</span>'+tabs.map(([k,t,on])=>on?`<span class="tab${NTAB===k?' on':''}" data-n="${k}">${t}</span>`:'').join('')+'</div>';
@@ -2773,11 +2773,17 @@ async function renderNodeBody(nd){
  else if(NTAB==='test'){b.innerHTML='<pre class=code>'+esc(await getFile(f.test))+'</pre>';}
  else if(NTAB==='contract'){b.innerHTML='<pre class=code>'+esc(await getFile(f.contract))+'</pre>';}
  else if(NTAB==='events'){
-   // newest first (descending event number); error rows highlighted so a FAIL/
-   // REJECT/ERROR anywhere in the history is visible without scrolling
-   const evs=[...(nd.events||[])].sort((a,b)=>(Number(b.tick)||0)-(Number(a.tick)||0));
-   b.innerHTML='<table><thead><tr><th title="номер события в полном журнале">соб.№ ↓</th><th>фаза</th><th>роль</th><th>LLM/агент</th><th>действие</th><th>гейт</th><th>вердикт</th><th>детали</th></tr></thead><tbody>'+
-   evs.map(e=>{const bad=['REJECT','FAIL','ERROR'].includes(String(e.verdict));return `<tr${bad?' style="background:#3a1d1d"':''}><td>${e.tick??''}</td><td>${esc(e.phase)}</td><td>${esc(e.profile)}</td><td>${esc(e.model||'')}</td><td>${esc(e.action)}</td><td>${esc(e.gate)}</td><td>${e.verdict?('<b>'+esc(e.verdict)+'</b>'):''}</td><td>${esc(e.detail||'')}</td></tr>`;}).join('')+'</tbody></table>';
+   // newest first (descending event number). A FAIL/REJECT/ERROR row is marked
+   // by OUTCOME: 🔧 amber = later resolved (a PASS on the SAME gate came after);
+   // ❌ red = still OPEN (no later PASS on that gate). So the table itself shows
+   // WHERE a problem occurred and whether a rework closed it.
+   const all=(nd.events||[]);
+   const isBad=e=>['REJECT','FAIL','ERROR'].includes(String(e.verdict));
+   const fixed=e=>{const g=e.gate;if(!g)return false;return all.some(x=>x.gate===g&&String(x.verdict)==='PASS'&&(Number(x.tick)||0)>(Number(e.tick)||0));};
+   const evs=[...all].sort((a,b)=>(Number(b.tick)||0)-(Number(a.tick)||0));
+   b.innerHTML='<div class=dim style="margin:4px 0">❌ незакрытая · 🔧 исправлена доработкой</div>'+
+   '<table><thead><tr><th title="номер события в полном журнале">соб.№ ↓</th><th>фаза</th><th>роль</th><th>LLM/агент</th><th>действие</th><th>гейт</th><th>вердикт</th><th>детали</th></tr></thead><tbody>'+
+   evs.map(e=>{const bad=isBad(e);const fx=bad&&fixed(e);const bg=bad?(fx?'#3a2f17':'#3a1d1d'):'';const mark=bad?(fx?'🔧 ':'❌ '):'';return `<tr${bg?(' style="background:'+bg+'"'):''}><td>${e.tick??''}</td><td>${esc(e.phase)}</td><td>${esc(e.profile)}</td><td>${esc(e.model||'')}</td><td>${esc(e.action)}</td><td>${esc(e.gate)}</td><td>${mark}${e.verdict?('<b>'+esc(e.verdict)+'</b>'):''}</td><td>${esc(e.detail||'')}</td></tr>`;}).join('')+'</tbody></table>';
  }
  else if(NTAB==='versions'){
    // ordered: v1..vN (superseded) then current spec = newest
