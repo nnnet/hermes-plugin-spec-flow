@@ -87,6 +87,32 @@ def test_no_entry_declared_injects_nothing(tmp_path, monkeypatch):
     assert "product_entry" not in _children_ids(res.project["tree"], "L0")
 
 
+def test_routes_without_named_entry_injects_nothing(tmp_path, monkeypatch):
+    # STRICT anti-guess: the human declared HTTP routes but never named the
+    # entry FILE or its callable. The engine must NOT fall back to a hardcoded
+    # src/app.py / wsgi_app convention — an incomplete contract yields {} and no
+    # assembly node (guessing the entry would be a hardcoded solution assumption).
+    monkeypatch.setenv("SPEC_FLOW_PRE_GATE", "1")
+    routes_only = [
+        "Standard library ONLY for an HTTP service.",
+        "POST /notes takes {text} -> {id}; GET /notes -> {items}; GET /health 200.",
+    ]
+    res = _run(tmp_path, routes_only)
+    assert "product_entry" not in _children_ids(res.project["tree"], "L0")
+
+
+def test_callable_unnamed_injects_nothing(tmp_path, monkeypatch):
+    # routes + a file named, but no "exposes <callable>" -> still no assembly
+    # (the engine will not guess the callable name).
+    monkeypatch.setenv("SPEC_FLOW_PRE_GATE", "1")
+    file_only = [
+        "HTTP service; the entry lives in src/app.py, storage in src/db.py.",
+        "POST /notes -> {id}; GET /notes -> {items}; GET /health 200.",
+    ]
+    res = _run(tmp_path, file_only)
+    assert "product_entry" not in _children_ids(res.project["tree"], "L0")
+
+
 def test_plugin_does_not_import_contract_checks_for_entry():
     """Regression guard: the assembly node must detect the entry INLINE. The
     first cut did `from tests.harness import contract_checks`, which raises

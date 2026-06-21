@@ -2327,12 +2327,17 @@ class Engine:
                 m.group(1).upper())
         if not routes:
             return {}            # no HTTP route described ⇒ not a runnable web product
-        # entry/callable IF the human named them ("src/app.py exposes wsgi_app");
-        # else the runner's Python-WSGI build convention.
+        # The entry FILE and its callable must be NAMED by the human (e.g.
+        # "src/app.py exposes wsgi_app"). If the human declared routes but never
+        # named where they live, the engine does NOT guess a default file/callable
+        # and does NOT assemble — guessing would be a hardcoded assumption about
+        # the solution. Incomplete contract => {} (no assembly, no boot-gate).
         em = re.search(r"(src/[A-Za-z0-9_./-]+\.py)", blob)
-        entry = em.group(1) if em else "src/app.py"
         cm = re.search(r"exposes?\s+`?([a-z_][a-z0-9_]*)`?", low)
-        callables = [cm.group(1)] if cm else ["wsgi_app", "application", "app"]
+        if not em or not cm:
+            return {}
+        entry = em.group(1)
+        callables = [cm.group(1)]
         # classify the described routes into boot checks from the human wording
         boot: dict = {}
         for path, methods in routes.items():
@@ -2382,7 +2387,7 @@ class Engine:
         entry = c["entry"]
         if not force and (Path(self.workspace.root) / entry).is_file():
             return None             # a feature leaf already built the entry
-        callable_name = (c["callable"] or ["wsgi_app"])[0]
+        callable_name = c["callable"][0]
         ok_route = str(c["boot"].get("ok_route") or "")
         api = self._existing_src_api()
         # late human requirements (injected mid-run) that the entry must also
