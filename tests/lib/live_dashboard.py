@@ -2878,7 +2878,16 @@ function evBad(v){return ['REJECT','FAIL','ERROR'].includes(String(v));}
 function evStatus(e,all){
  if(!evBad(e.verdict))return '';
  const g=e.gate,t=Number(e.tick)||0;
- return (g&&all.some(x=>x.gate===g&&String(x.verdict)==='PASS'&&(Number(x.tick)||0)>t))?'fixed':'open';
+ const laterPass=(gate)=>all.some(x=>x.gate===gate&&String(x.verdict)==='PASS'&&(Number(x.tick)||0)>t);
+ // 1) same-gate PASS after the fail = doctor/rework fixed it
+ if(g&&laterPass(g))return 'fixed';
+ // 2) a spec-phase reject (spec_scope/spec_lint feed spec_review) is resolved
+ //    when the spec is later re-reviewed clean — these gates emit only on FAIL,
+ //    so the resolution shows up as a downstream spec_review PASS, never a
+ //    same-gate PASS. Without this, a reworked-then-green node falsely shows
+ //    'незакрытые проблемы' for fails the doctor already closed.
+ if(String(g||'').indexOf('spec')===0&&laterPass('spec_review'))return 'fixed';
+ return 'open';
 }
 
 function renderNode(){
