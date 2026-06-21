@@ -280,6 +280,12 @@ def decompose(ctx: dict) -> dict:
     existing = ctx.get("existing_nodes") or []
     existing_lines = "; ".join(
         f"{n['id']} ({n['title']})" for n in existing) or "—"
+    # 433: the engine trimmed the view to this node's zone; the rest of the
+    # project is referenced by count, not enumerated, so the worker knows other
+    # surfaces exist (don't restate them) without drowning in unrelated nodes.
+    _other = int(ctx.get("other_nodes_count") or 0)
+    if _other:
+        existing_lines += f"; (+{_other} more nodes in other zones — out of scope)"
     prompt = PROMPT.format(
         goal=p.get("goal", ""), target=p.get("target", ""),
         constitution="; ".join(p.get("constitution", [])),

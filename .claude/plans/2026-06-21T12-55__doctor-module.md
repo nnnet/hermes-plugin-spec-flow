@@ -433,8 +433,12 @@ level_attempts, last_causeset, nonshrink_rounds, open{}}`.
 - [x] Контракт узла (зона/контекст/критерии) в схеме декомпозера + `spec_lint`
   → `_decomposer_ctx` late_req_contract `spec_flow_runner.py:2594`;
     `make_decomposer` `tests/harness/role_worker.py:545-560`
-- [ ] Обрезка входа воркера до своей зоны, соседи — ссылкой
-  → НЕТ (pending); место: `_decomposer_ctx` `spec_flow_runner.py`
+- [x] Обрезка входа воркера до своей зоны, соседи — ссылкой
+  → `_decomposer_ctx` `spec_flow_runner.py:2865`: вид декомпозера обрезан до зоны
+    (предки + поддерево родителя по id-префиксу), остальное — `other_nodes_count`,
+    не перечислением; декомпозер-воркер упоминает остаток ссылкой
+    `tests/harness/llm_decomposer.py:280`. Консервативно: при ≤`decomposer_zone_cap`
+    (деф.150) список не меняется → p4/p5 байт-в-байт. Тест `test_decomposer_zone_trim.py`
 - [x] Дифф-правка реализатора по умолчанию
   → `_apply_diff_repair` `tests/harness/role_worker.py:1389` (вызов :1106)
 - [x] Дельта как условие приёмки (`verify` + `testable_criteria`)

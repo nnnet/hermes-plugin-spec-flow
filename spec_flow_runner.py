@@ -2862,6 +2862,30 @@ class Engine:
                 for i, t in list(self._node_registry.items())[:150]
             ],
         }
+        # 433: trim the decomposer's view to the node's ZONE — its ancestors and
+        # the subtree under its parent — and reference the REST by count, not by
+        # name. A flat list spanning unrelated zones invites a child to restate a
+        # distant sibling's surface; the zone is what it needs to scope its delta.
+        # Conservative: when everything fits under the cap the list is unchanged,
+        # so small p4/p5 trees see byte-identical input.
+        reg = list(self._node_registry.items())
+        cap = int((self._project_meta.get("workers") or {}).get(
+            "decomposer_zone_cap", 150))
+        if len(reg) > cap:
+            nid_self = node["id"]
+            pid = ancestors[-1][0] if ancestors else None
+            anc_ids = {a for a, _ in ancestors}
+
+            def _in_zone(i: str) -> bool:
+                return (i in anc_ids or i == nid_self
+                        or bool(pid) and (i == pid or i.startswith(str(pid) + ".")))
+            zone = [(i, t) for i, t in reg if _in_zone(i)]
+            rest = [(i, t) for i, t in reg if not _in_zone(i)]
+            keep = zone + rest[: max(0, cap - len(zone))]
+            ctx["existing_nodes"] = [{"id": i, "title": t} for i, t in keep]
+            other = len(reg) - len(keep)
+            if other:
+                ctx["other_nodes_count"] = other
         # PREVENTION (delta-only contract): a LATE requirement is authored AFTER
         # other modules exist. Tell the decomposer up front which routes/symbols
         # are already owned so it scopes to its OWN delta on the FIRST draft,
