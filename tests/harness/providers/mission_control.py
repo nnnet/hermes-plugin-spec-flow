@@ -24,6 +24,10 @@ from .base import (Provider, RoleResultLike, RoleTaskLike, json_request,
 
 _TERMINAL_DONE = {"done", "completed", "complete", "succeeded", "success"}
 _TERMINAL_FAIL = {"failed", "error", "cancelled", "canceled"}
+# MC gates 'done' behind a separate Aegis quality-review role; a single working
+# agent legitimately delivers to one of these (work done, awaiting QA). For the
+# spec-flow seam that IS a successful delivery — read the produced output.
+_TERMINAL_DELIVERED = {"review", "quality_review", "awaiting_owner"}
 
 
 def _cfg(task: RoleTaskLike) -> dict:
@@ -96,7 +100,7 @@ class MissionControlProvider(Provider):
                              "reasons": [str(poll.get("error") or state)]},
                     meta={"provider": "mission-control", "agent": str(assignee),
                           "task_id": str(task_id), "state": state})
-            if state in _TERMINAL_DONE:
+            if state in _TERMINAL_DONE or state in _TERMINAL_DELIVERED:
                 return _parse_output(poll, str(assignee), str(task_id))
         raise RuntimeError(
             f"mission-control task {task_id} did not finish in {attempts} polls")
