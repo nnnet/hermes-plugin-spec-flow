@@ -741,12 +741,19 @@ def _ask_claude(prompt: str, model: str, system: str | None = None,
             ev["error"] = error
         _log_event(ev)
 
+    # MCP servers are loaded ONLY for the agentic worker session (tools given via
+    # allowed/disallowed). A plain chat call (decompose/review/spec) needs no
+    # tools, and booting all MCP servers per call is the killer: alone it is ~5s,
+    # but under the run's concurrency many claude CLIs each spawn the full MCP set
+    # at once, ballooning every call to 40-300s (and hitting the 300s timeout x
+    # RETRIES). Skip MCP for chat → the claude fallback stays ~5s.
+    mcp = claude_cli.mcp_args_no_serena() if (allowed or disallowed) else []
     for attempt in range(1, RETRIES + 1):
         t0 = time.monotonic()
         try:
             proc = subprocess.run(
                 [*claude_cli.claude_cmd(), "-p", "--model", model,
-                 *extra, *claude_cli.mcp_args_no_serena()],
+                 *extra, *mcp],
                 input=prompt, capture_output=True, text=True,
                 timeout=timeout, cwd=cwd or claude_cli.agent_cwd(), env=env)
         except subprocess.TimeoutExpired:
