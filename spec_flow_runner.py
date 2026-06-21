@@ -947,6 +947,78 @@ def _amend_find_owner(statement: str, modules: list, methods=None,
     return None
 
 
+def _dup_surface_findings(spec_text: str, modules: list) -> list:
+    """Late-requirement DECOMPOSITION-QUALITY check: flag a spec that re-declares
+    a surface an EXISTING module already owns WITHOUT adding a new one — i.e. it
+    would DUPLICATE the service (re-spec POST/GET /notes that notes_api already
+    serves) instead of scoping to its own delta. This is distinct from the
+    amend/new ROUTING decision (_amend_target): even when a late requirement
+    legitimately becomes a new node, its spec must describe ONLY the delta.
+
+    ``modules`` is [(rel, stem, body)] of existing specs+code. Returns a list of
+    deterministic findings (model-independent), ordered coarse→fine and run as a
+    registry of INCREASING-PRECISION methods (mirroring the amend detectors); all
+    that match are reported so the rework round gets the full picture. Empty when
+    the spec contributes genuine new structural surface, or overlaps nothing.
+
+    Only STRUCTURAL surface (HTTP routes + defined symbols) is used — never the
+    fuzzy token set the amend router uses — so a shared domain noun ('notes')
+    can never raise a false duplicate.
+    """
+    spec_routes = _amend_routes(spec_text)
+    spec_syms = _amend_symbols(spec_text)
+    spec_struct = spec_routes | spec_syms
+    if not spec_struct:                       # no structural surface → not our call
+        return []
+    all_routes: set = set()
+    all_syms: set = set()
+    per_mod = []
+    for rel, _stem, body in modules:
+        r, s = _amend_routes(body), _amend_symbols(body)
+        per_mod.append((rel, r, s, r | s))
+        all_routes |= r
+        all_syms |= s
+    all_struct = all_routes | all_syms
+    findings: list = []
+    # 1) coarse — routes: the spec restates existing route(s) and adds none new
+    restated_r = spec_routes & all_routes
+    if spec_routes and restated_r and not (spec_routes - all_routes):
+        owners = sorted({rel for rel, r, _s, _u in per_mod if r & restated_r})
+        findings.append(
+            f"route-redeclare: this spec restates HTTP route(s) "
+            f"{sorted(restated_r)} already served by {owners} and introduces no "
+            "new route — describe ONLY the new behaviour (the delta), or let it "
+            "be folded into the owning module; do not re-declare existing routes")
+    # 2) symbols: the spec restates existing symbol(s) and defines none new
+    restated_s = spec_syms & all_syms
+    if spec_syms and restated_s and not (spec_syms - all_syms):
+        owners = sorted({rel for rel, _r, s, _u in per_mod if s & restated_s})
+        findings.append(
+            f"symbol-redeclare: this spec restates symbol(s) {sorted(restated_s)} "
+            f"already defined by {owners} and defines nothing new — do not "
+            "re-specify code that already exists")
+    # 3) finer — subset: the spec's WHOLE structural surface is owned by one module
+    for rel, _r, _s, mod_struct in per_mod:
+        if spec_struct and spec_struct <= mod_struct:
+            findings.append(
+                f"surface-subset: the entire surface this spec describes is "
+                f"already owned by {rel} (it adds nothing new) — fold the delta "
+                "into that module instead of forking a duplicate")
+            break
+    # 4) finest — breadth: the spec spans the surface of >=2 existing modules
+    #    while contributing at most a sliver of its own (it is re-stating the
+    #    whole service, the v040 web_ui failure)
+    spanned = sorted({rel for rel, _r, _s, u in per_mod if spec_struct & u})
+    new_struct = spec_struct - all_struct
+    if len(spanned) >= 2 and len(new_struct) <= 1:
+        findings.append(
+            f"scope-breadth: this spec spans the surface of {len(spanned)} "
+            f"existing modules ({spanned}) while adding {sorted(new_struct) or 'no'}"
+            " new structural surface — a late requirement must describe ONLY its "
+            "own delta, not re-state the whole service")
+    return findings
+
+
 class Workspace:
     """Optional materialiser for a run. Off by default; enable with a path (or
     SPEC_FLOW_RUN_WORKSPACE env). Writes REAL, inspectable artifacts the run
@@ -1722,6 +1794,10 @@ class Engine:
             out.append({"id": name, "title": title,
                         "requirement": str(statement),
                         "_scoped": scope is not None,
+                        # a standing requirement attached mid-run IS a late
+                        # requirement: its spec must scope to its delta, not
+                        # re-state surface existing modules already own
+                        "_late_req": True,
                         # SAFELY atomic: estimated_loc 150 once tripped the
                         # branch guardrail and the node sailed through as an
                         # EMPTY branch — zero implementation, green integrate
@@ -1753,10 +1829,25 @@ class Engine:
         if os.environ.get("SPEC_FLOW_REQ_AMEND", "") in (
                 "", "0", "false", "False", "no"):
             return None
+        modules = self._surface_modules(_snake(str(node.get("id", ""))))
+        if not modules:
+            return None
+        cand_text = {rel: body[:400] for rel, _stem, body in modules}
+        stmt = str(node.get("requirement") or node.get("spec_markdown")
+                   or node.get("title") or "")
+        llm = None
+        if os.environ.get("SPEC_FLOW_AMEND_LLM", "") not in (
+                "", "0", "false", "False", "no"):
+            llm = self._amend_llm_router
+        return _amend_find_owner(stmt, modules, candidates_text=cand_text,
+                                 llm=llm)
+
+    def _surface_modules(self, own: str) -> list:
+        """Existing candidate modules as [(rel, stem, spec+code body)], merged by
+        stem from BOTH specs/*.md (a placed-but-unbuilt node is matchable from its
+        spec alone) and src/*.py, excluding the node itself. Shared by the amend
+        router and the late-requirement scope lint."""
         root = Path(self.workspace.root)
-        own = _snake(str(node.get("id", "")))
-        # stem -> {"spec": <md>, "code": <py>}; a placed node owns a candidate
-        # via its spec even before its module file is written.
         cand: dict = {}
         specdir = root / "specs"
         if specdir.is_dir():
@@ -1773,20 +1864,26 @@ class Engine:
                     continue
                 cand.setdefault(p.stem, {})["code"] = p.read_text(
                     encoding="utf-8", errors="replace")
-        if not cand:
-            return None
-        modules = [(f"src/{stem}.py", stem,
-                    (d.get("spec", "") + "\n" + d.get("code", "")).strip())
-                   for stem, d in sorted(cand.items())]
-        cand_text = {rel: body[:400] for rel, _stem, body in modules}
-        stmt = str(node.get("requirement") or node.get("spec_markdown")
-                   or node.get("title") or "")
-        llm = None
-        if os.environ.get("SPEC_FLOW_AMEND_LLM", "") not in (
-                "", "0", "false", "False", "no"):
-            llm = self._amend_llm_router
-        return _amend_find_owner(stmt, modules, candidates_text=cand_text,
-                                 llm=llm)
+        return [(f"src/{stem}.py", stem,
+                 (d.get("spec", "") + "\n" + d.get("code", "")).strip())
+                for stem, d in sorted(cand.items())]
+
+    def _late_req_scope_findings(self, node: dict, spec_md: str) -> list:
+        """Deterministic decomposition-quality findings for a LATE-REQUIREMENT
+        node whose spec would DUPLICATE an existing surface (re-state the whole
+        service) instead of scoping to its delta. Only runs for nodes flagged
+        ``_late_req`` and only when other modules exist; returns [] otherwise.
+        The findings (from _dup_surface_findings) are fed VERBATIM to the
+        spec-author rework round, so the spec is narrowed before the LLM review."""
+        if not node.get("_late_req"):
+            return []
+        if os.environ.get("SPEC_FLOW_LATE_REQ_SCOPE", "") in (
+                "0", "false", "False", "no"):
+            return []
+        modules = self._surface_modules(_snake(str(node.get("id", ""))))
+        if not modules:
+            return []
+        return _dup_surface_findings(spec_md or "", modules)
 
     def _amend_llm_router(self, statement: str, modules: list,
                           candidates_text: "Optional[dict]") -> "Optional[str]":
@@ -2531,6 +2628,49 @@ class Engine:
             lint = _lint_spec_traceability(nid,
                                            str(node.get("spec_markdown")
                                                or ""))
+        # deterministic DECOMPOSITION-QUALITY lint BEFORE the reviewer: a LATE
+        # requirement whose spec re-states an existing surface (duplicate) is
+        # narrowed to its delta by a bounded author round carrying the EXACT
+        # findings — code-checked, model-independent (the v040 web_ui duplicate
+        # that the LLM reviewer kept REJECTing). Layered detectors of increasing
+        # precision live in _dup_surface_findings.
+        for _scope_round in range(2):
+            findings = self._late_req_scope_findings(
+                node, str(node.get("spec_markdown") or ""))
+            if not findings:
+                break
+            self.emit("review", "engine", "", nid,
+                      f"spec scope: {len(findings)} duplicate-surface finding(s)",
+                      "; ".join(findings)[:300], "spec_scope", "FAIL",
+                      level=L_MILESTONE)
+            if "decomposer" not in self.agents:
+                break
+            self._decompose_calls += 1
+            sctx = self._decomposer_ctx(node, depth, parent, ancestors)
+            sctx["review_feedback"] = (
+                "DETERMINISTIC SCOPE LINT (code-checked, not an opinion): this is "
+                "a LATE requirement added after the modules below were planned. "
+                "Its spec must describe ONLY its own delta and must NOT re-state "
+                "HTTP routes or symbols that existing modules already own. "
+                "Reference them as context, do not re-specify them. Fix:\n- "
+                + "\n- ".join(findings))
+            sctx["previous_spec"] = str(node.get("spec_markdown") or "")
+            sctx["rework"] = True
+            try:
+                sout = self.agents["decomposer"](sctx) or {}
+            except Exception as exc:  # noqa: BLE001
+                self.emit("review", "spec-decomposer", "spec-flow-decompose",
+                          nid, "scope-fix worker failed — keeping the spec",
+                          str(exc)[:200], level=L_MILESTONE)
+                break
+            smd = str(sout.get("spec_markdown") or "").strip()
+            if not smd:
+                break
+            node["spec_markdown"] = smd
+            spec_rel = self.workspace.spec(
+                nid, title, depth, spec_args["verdict"], spec_args["reasons"],
+                parent, spec_args["plan"], node=node, target=self._target,
+                module=self._module_for(nid))
         if not _lint_spec_traceability(nid,
                                        str(node.get("spec_markdown") or "")):
             self.emit("review", "engine", "", nid, "spec lint clean", "",
