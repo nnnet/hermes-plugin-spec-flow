@@ -131,3 +131,28 @@ def test_engine_infers_atomicity_from_proposed_children(plugin, tmp_path):
     res = eng.run_project(dict(GOAL), workspace=str(tmp_path / "wk2"),
                           tools=plugin.tools, agents={"decomposer": decompose})
     assert "small" in res.tasks and "junk" not in res.tasks
+
+
+# ─── 427: one delta per leaf ──────────────────────────────────────────
+
+
+def test_deltas_absent_is_inert(plugin):
+    # a node that does not report `deltas` keeps pure-threshold behaviour
+    assert _check(plugin, ATOMIC)["verdict"] == "leaf"
+
+
+def test_one_delta_stays_leaf(plugin):
+    assert _check(plugin, ATOMIC, deltas=1)["verdict"] == "leaf"
+
+
+def test_two_deltas_force_branch(plugin):
+    res = _check(plugin, ATOMIC, deltas=2)
+    assert res["verdict"] == "branch"
+    assert any("one delta per leaf" in r for r in res["reasons"])
+
+
+def test_two_deltas_override_atomic_claim(plugin):
+    # claimed atomic, but two deltas is coupled work -> thresholds win (branch)
+    res = _check(plugin, ATOMIC, deltas=2, atomic=True)
+    assert res["verdict"] == "branch"
+    assert res["mismatch"] == "under-decomposition"

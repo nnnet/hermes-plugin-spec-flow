@@ -427,9 +427,12 @@ level_attempts, last_causeset, nonshrink_rounds, open{}}`.
     `spec_flow_runner.py:3951`; `chain_for(role, specialty, tier)` — известный тир
     бьёт даже явные модели роли `tests/harness/llm_backend.py:260`; три пути
     имплементера читают `ctx["tier"]`. Тест `test_complexity_routing.py` (6 зелёных)
-- [ ] Атомарность: предел «одна дельта на лист» в декомпозере + пороги `leaf_check`
-  → пороги `MAX_MODULES/TASKS/INTERFACES/LOC` `spec_flow_tools.py:74-77`,
-    `_handle_leaf_check` `spec_flow_tools.py:213`; ужесточение на разбиении — pending
+- [x] Атомарность: предел «одна дельта на лист» в декомпозере + пороги `leaf_check`
+  → новое измерение `deltas` в схеме + `_handle_leaf_check` `spec_flow_tools.py`:
+    `deltas > MAX_DELTAS` (деф.1, `SPEC_FLOW_LEAF_MAX_DELTAS`) → branch; играет с
+    атомик-реконсиляцией (claim atomic + 2 дельты → under-decomposition → branch).
+    Инертно при отсутствии `deltas` (обратная совместимость, p4/p5 без изменений).
+    Тесты в `tests/gates/test_atomicity_guardrail.py` (4 новых, 11 зелёных)
 - [x] Контракт узла (зона/контекст/критерии) в схеме декомпозера + `spec_lint`
   → `_decomposer_ctx` late_req_contract `spec_flow_runner.py:2594`;
     `make_decomposer` `tests/harness/role_worker.py:545-560`

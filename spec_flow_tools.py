@@ -83,6 +83,7 @@ MAX_MODULES = _leaf_env("SPEC_FLOW_LEAF_MAX_MODULES", 1)      # one module per l
 MAX_TASKS = _leaf_env("SPEC_FLOW_LEAF_MAX_TASKS", 5)         # bite-sized tasks
 MAX_INTERFACES = _leaf_env("SPEC_FLOW_LEAF_MAX_INTERFACES", 2)  # interface surfaces
 MAX_LOC = _leaf_env("SPEC_FLOW_LEAF_MAX_LOC", 100)          # ~one commit
+MAX_DELTAS = _leaf_env("SPEC_FLOW_LEAF_MAX_DELTAS", 1)      # one delta per leaf
 
 # contract_check: validator command templates. ``{contract}`` and ``{code}``
 # are substituted with the contract artifact path and a code path/dir. Swap in
@@ -208,6 +209,7 @@ LEAF_CHECK_SCHEMA = {
                 "interfaces": {"type": "integer", "description": "Interface surfaces (APIs/contracts) involved."},
                 "estimated_loc": {"type": "integer", "description": "Estimated lines of code for the whole node."},
                 "open_decisions": {"type": "integer", "description": "Count of unresolved design decisions; >0 forces branch."},
+                "deltas": {"type": "integer", "description": "Distinct NEW behaviours/surfaces this node introduces (routes, commands, public functions). Atomicity rule: a leaf owns ONE delta — >1 forces branch. Omit/0 for pure-threshold behaviour."},
                 "single_concern": {"type": "boolean", "description": "True if the node is one concern (e.g. only DB, only API). 'frontend+backend together' is False."},
                 "testable_criteria": {"type": "boolean", "description": "True if every acceptance criterion is mechanically testable."},
                 "atomic": {"type": "boolean", "description": "The decomposer's primary judgment: True if this is ONE indivisible, single-prompt-solvable unit of work (a leaf). Reconciled with the thresholds; omit for pure-threshold behaviour."},
@@ -224,6 +226,7 @@ def _handle_leaf_check(args: dict[str, Any], **_: Any) -> str:
     interfaces = int(args.get("interfaces", 0))
     estimated_loc = int(args.get("estimated_loc", 0))
     open_decisions = int(args.get("open_decisions", 0))
+    deltas = int(args.get("deltas", 0))
     single_concern = bool(args.get("single_concern", True))
     testable_criteria = bool(args.get("testable_criteria", True))
 
@@ -238,6 +241,11 @@ def _handle_leaf_check(args: dict[str, Any], **_: Any) -> str:
         reasons.append(f"estimated_loc {estimated_loc} > {MAX_LOC} (not one commit)")
     if open_decisions > 0:
         reasons.append(f"{open_decisions} open decision(s) — resolve before leafing")
+    # 427 atomicity: a leaf owns exactly ONE delta (new behaviour/surface). More
+    # than one means coupled work that must split. Absent/0 ⇒ inert (the node
+    # didn't report deltas) so existing pure-threshold cases are unchanged.
+    if deltas > MAX_DELTAS:
+        reasons.append(f"deltas {deltas} > {MAX_DELTAS} (one delta per leaf)")
     if not single_concern:
         reasons.append("coupled step (multiple concerns) — split into single-concern leaves")
     if not testable_criteria:
@@ -282,6 +290,7 @@ def _handle_leaf_check(args: dict[str, Any], **_: Any) -> str:
             "max_tasks": MAX_TASKS,
             "max_interfaces": MAX_INTERFACES,
             "max_loc": MAX_LOC,
+            "max_deltas": MAX_DELTAS,
         },
     }
     return json.dumps(payload, ensure_ascii=False)
