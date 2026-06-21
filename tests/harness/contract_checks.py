@@ -516,21 +516,32 @@ def db_connection_singleton_violations(root: str) -> list:
             if isinstance(n, ast.Assign) and any(_is_connect_call(c)
                                                  for c in ast.walk(n.value)):
                 out.append(
-                    f"src/{p.name}:{n.lineno} opens the db connection at import "
-                    "time — the env db-path is read ONCE, so a later test with a "
-                    "fresh NOTES_DB reuses the stale connection (no such table); "
-                    "open a fresh connection inside connect() on every call")
+                    f"src/{p.name}:{n.lineno}: this module opens the db connection "
+                    "at IMPORT time (a module-level connect). The NOTES_DB env var "
+                    "is then read exactly ONCE — at import — so when a sibling test "
+                    "sets a fresh NOTES_DB and imports this module, it gets the "
+                    "STALE connection whose tables live in the FIRST db, and dies "
+                    "with sqlite3.OperationalError: no such table. FIX: do NOT open "
+                    "at module scope; move the connect INTO a function that re-reads "
+                    "os.environ['NOTES_DB'] and returns a fresh "
+                    "sqlite3.connect(...) on EVERY call.")
         for fn in ast.walk(tree):  # function-level cached singleton
             if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 nm = _connection_cache_global(fn)
                 if nm:
                     out.append(
-                        f"src/{p.name}:{fn.lineno} caches the db connection in a "
-                        f"module global '{nm}' (guarded by 'is None') — the env "
-                        "db-path is read once and every sibling test with a fresh "
-                        "NOTES_DB hits the stale connection (no such table); "
-                        "connect() MUST re-read the env var and open a fresh "
-                        "connection on EVERY call")
+                        f"src/{p.name}:{fn.lineno}: this function CACHES the db "
+                        f"connection in the module global '{nm}' (the "
+                        f"`if {nm} is None:` guard means it opens once and reuses "
+                        "forever). NOTES_DB is therefore read only on the FIRST "
+                        "call; every later caller — a sibling test with its OWN "
+                        "fresh NOTES_DB — gets the stale handle whose tables live "
+                        "in the first db, and dies with "
+                        "sqlite3.OperationalError: no such table. FIX: remove the "
+                        f"'{nm}' cache; make connect() re-read "
+                        "os.environ['NOTES_DB'] and return a NEW "
+                        "sqlite3.connect(...) on EVERY call (open per call, close "
+                        "when done).")
     return sorted(set(out))
 
 
@@ -619,13 +630,30 @@ def schema_guarantee_violations(root: str) -> list:
         for t in q:
             if any(imp in creators.get(t, set()) for imp in imports.get(stem, ())):
                 continue
+            owner = sorted(creators.get(t, set()))
+            # Maximally descriptive rework feedback: this string is handed
+            # VERBATIM to the builder on rework, so it states the exact symptom,
+            # why the leaf's own test hides it, and a concrete fix that names the
+            # real schema-owning module when one exists.
+            if owner:
+                fix = (f"(a) REUSE the schema-owning module: `import {owner[0]}` "
+                       f"then `conn = {owner[0]}.connect()` (it already runs "
+                       f"CREATE TABLE IF NOT EXISTS {t}); or ")
+            else:
+                fix = ("(a) add a CREATE TABLE IF NOT EXISTS for it in a shared "
+                       "db module and import that; or ")
             out.append(
-                f"src/{stem}.py: self-connects and queries table '{t}' but never "
-                f"ensures it exists — no CREATE TABLE for '{t}' here and no import "
-                "of a module that creates it; on a fresh NOTES_DB this is "
-                "'no such table'. Obtain the connection from the schema-"
-                "initialising db module, or CREATE TABLE IF NOT EXISTS before "
-                "querying")
+                f"src/{stem}.py: this module opens its OWN db connection and runs "
+                f"SQL against table '{t}', but nothing guarantees '{t}' exists at "
+                f"that point. On the ASSEMBLED product the database starts EMPTY, "
+                f"so the first query raises "
+                f"sqlite3.OperationalError: no such table: {t}. Your own unit test "
+                f"can pass (it seeds rows in a db it set up), but the product on a "
+                f"fresh NOTES_DB cannot. FIX — pick ONE: {fix}"
+                f"(b) CREATE the schema yourself before ANY query: "
+                f"conn.execute('CREATE TABLE IF NOT EXISTS {t} (...)'). Never rely "
+                f"on another leaf's test having run first — every connection to "
+                f"NOTES_DB is fresh and independent.")
     return sorted(set(out))
 
 

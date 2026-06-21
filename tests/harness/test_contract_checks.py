@@ -303,7 +303,7 @@ def test_db_singleton_fires_on_import_time_open(tmp_path):
          "def all_rows():\n"
          "    return DB.execute('select 1').fetchall()\n")
     v = cc.db_connection_singleton_violations(str(tmp_path))
-    assert any("store.py" in x and "import time" in x for x in v), v
+    assert any("store.py" in x and "import" in x.lower() for x in v), v
 
 
 def test_db_singleton_clean_on_fresh_connection_per_call(tmp_path):
