@@ -1129,11 +1129,30 @@ def _build_state(run_dir: pathlib.Path) -> dict:
         # badge once the same gate passes (the node page already grouped
         # them as fixed history; the tree showed ❌ regardless — they
         # must agree)
+        order = sorted(evs, key=lambda e: e.get("tick") or 0)
         latest_by_gate = {}
-        for e in evs:
-            if e.get("gate"):
-                latest_by_gate[e["gate"]] = str(e.get("verdict") or "")
-        gate_bad = any(v in bad for v in latest_by_gate.values())
+        spec_review_pass_tick = None
+        for e in order:
+            g = e.get("gate")
+            if not g:
+                continue
+            latest_by_gate[g] = (e.get("tick") or 0, str(e.get("verdict") or ""))
+            if g == "spec_review" and str(e.get("verdict")) == "PASS":
+                spec_review_pass_tick = e.get("tick") or 0
+
+        def _gate_is_bad(g, tick, verdict):
+            if verdict not in bad:
+                return False
+            # spec-phase gates (spec_scope/spec_lint) emit ONLY on failure; their
+            # resolution shows up as a later spec_review PASS, never a same-gate
+            # PASS. A reworked-then-green node must NOT carry an ❌ glyph for them
+            # (mirrors evStatus on the node page — the two views must agree).
+            if (str(g).startswith("spec") and spec_review_pass_tick is not None
+                    and spec_review_pass_tick > tick):
+                return False
+            return True
+        gate_bad = any(_gate_is_bad(g, t, v)
+                       for g, (t, v) in latest_by_gate.items())
         loose_bad = any(str(e.get("verdict")) in bad
                         for e in evs if not e.get("gate"))
         had_bad = any(str(e.get("verdict")) in bad for e in evs)
