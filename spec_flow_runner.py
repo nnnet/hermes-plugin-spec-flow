@@ -49,6 +49,29 @@ try:
 except Exception:  # noqa: BLE001
     import spec_flow_tools as _gates  # type: ignore
 
+# Doctor (cause-diagnosis + remedy dispatch). The plugin root must be importable
+# even when the runner is loaded by file (run_engine._load) with tests/ — not the
+# plugin root — on sys.path: put our own directory first, then import absolutely.
+# Import failure is recorded (NOT swallowed) so the engine can fail loudly when
+# the doctor is requested but could not be built.
+import logging as _logging
+_DOCTOR_LOG = _logging.getLogger("spec_flow.doctor")
+_DOCTOR_IMPORT_ERR = ""
+try:
+    import os as _os_d
+    import sys as _sys_d
+    _PLUGIN_DIR = _os_d.path.dirname(_os_d.path.abspath(__file__))
+    if _PLUGIN_DIR not in _sys_d.path:
+        _sys_d.path.insert(0, _PLUGIN_DIR)
+    import spec_flow_doctor as _doctor_mod  # type: ignore
+    import spec_flow_diagnosers as _diag_mod  # type: ignore
+    _DOCTOR_LOG.info("doctor modules imported from %s", _PLUGIN_DIR)
+except Exception as _exc:  # noqa: BLE001
+    _doctor_mod = None  # type: ignore
+    _diag_mod = None  # type: ignore
+    _DOCTOR_IMPORT_ERR = repr(_exc)
+    _DOCTOR_LOG.error("doctor import FAILED: %s", _DOCTOR_IMPORT_ERR)
+
 # Wave journal (parallelization stage 0): a single-writer, append-only record
 # of node commits. Optional — if it can't be imported or opened the run still
 # proceeds; the journal only ADDS a restartable trail, it never gates work.
@@ -1527,9 +1550,39 @@ class Engine:
                  review_policy: Optional[dict] = None,
                  seed_files: Optional[dict] = None,
                  standing_requirements: Optional[Any] = None,
-                 human_ask: Optional[Any] = None):
+                 human_ask: Optional[Any] = None,
+                 doctor_project: Optional[dict] = None):
         if not workspace:
             raise ValueError("Workspace is mandatory — pass a path or a Workspace")
+        # Doctor: built from the case/launch config (doctor/causes/evaluator
+        # blocks). Disabled by default => legacy recovery, byte-identical runs.
+        # FAIL LOUDLY if the case asks for the doctor but it cannot be built —
+        # we must never run for half an hour silently without the doctor.
+        self._doctor = None
+        _dp = doctor_project or {}
+        _wants_doctor = bool((_dp.get("doctor") or {}).get("enabled"))
+        if _doctor_mod is None:
+            _DOCTOR_LOG.warning("doctor module unavailable (%s); enabled=%s",
+                                _DOCTOR_IMPORT_ERR or "import failed", _wants_doctor)
+            if _wants_doctor:
+                raise RuntimeError(
+                    "doctor.enabled=true but the doctor module failed to import: "
+                    f"{_DOCTOR_IMPORT_ERR or 'unknown import error'}")
+        else:
+            try:
+                _dg = _diag_mod.Diagnosers(_diag_mod._Helpers(loops=[])) \
+                    if _diag_mod is not None else None
+                self._doctor = _doctor_mod.Doctor(
+                    project=_dp, diagnosers=_dg)
+                _DOCTOR_LOG.info(
+                    "doctor built: enabled=%s causes=%d evaluator.tier=%s",
+                    self._doctor.enabled, len(self._doctor.causes),
+                    self._doctor.evaluator.get("tier"))
+            except Exception as _exc:  # noqa: BLE001
+                _DOCTOR_LOG.error("doctor build FAILED: %r", _exc)
+                if _wants_doctor:
+                    raise
+                self._doctor = None
         # () -> [(name, statement)] — standing HUMAN requirements (possibly
         # added MID-RUN). The ENGINE owns their placement: a requirement whose
         # acceptance runs on the assembled product is a ROOT-LEVEL concern,
@@ -1619,6 +1672,13 @@ class Engine:
         self.skills: set[str] = set()
         self.profiles: set[str] = set()
         self.loops: list[dict] = []
+        self._doctor_states: dict = {}      # per-node doctor loop state (by nid)
+        # point the doctor's deterministic detectors at the live loop journal
+        if self._doctor is not None and getattr(self._doctor, "diagnosers", None):
+            try:
+                self._doctor.diagnosers.helpers.loops = self.loops
+            except Exception:  # noqa: BLE001
+                pass
         self.gate_calls: dict[str, int] = {"policy_gate": 0, "leaf_check": 0,
                                             "contract_check": 0, "research_trigger_check": 0}
         self._t = 0
@@ -1884,6 +1944,99 @@ class Engine:
         if not modules:
             return []
         return _dup_surface_findings(spec_md or "", modules)
+
+    def _ensure_doctor_classifier(self) -> None:
+        """Lazily attach the semantic LLM classifier to the doctor, resolving the
+        backend (ask + chain_for_tier) the same way the rest of the runner does.
+        No-op if already set or the backend is unavailable."""
+        if self._doctor is None or _diag_mod is None:
+            return
+        if getattr(self._doctor, "classifier", None) is not None:
+            return
+        import importlib
+        for rootmod in ("harness.llm_backend", "tests.harness.llm_backend",
+                        "llm_backend"):
+            try:
+                mod = importlib.import_module(rootmod)
+            except Exception:           # noqa: BLE001
+                continue
+            tier_fn = getattr(mod, "chain_for_tier", None)
+            if getattr(mod, "ask", None) and tier_fn:
+                self._doctor.classifier = _diag_mod.Classifier(
+                    self._doctor.evaluator, mod.ask, tier_fn)
+                _DOCTOR_LOG.info("classifier wired via %s (tier=%s)", rootmod,
+                                 self._doctor.evaluator.get("tier"))
+            return
+
+    def _doctor_advise(self, node: dict, nid: str, depth: int, gate: str,
+                       verdict: str, evidence: dict) -> None:
+        """Run the doctor on a failed gate: diagnose the cause, dispatch a remedy
+        and RECORD it (event + loop journal) so the dashboard shows cause/remedy
+        per node. Advisory in Ф3 — execution stays with the existing recovery.
+        Never raises: a broken doctor must not break a run."""
+        if self._doctor is None or _doctor_mod is None \
+                or not self._doctor.enabled:
+            _DOCTOR_LOG.debug("advise skipped (doctor=%s enabled=%s) %s:%s",
+                              self._doctor is not None,
+                              getattr(self._doctor, "enabled", None), nid, gate)
+            return
+        try:
+            self._ensure_doctor_classifier()
+            _DOCTOR_LOG.info("advise CALL node=%s gate=%s verdict=%s evidence=%s",
+                             nid, gate, verdict,
+                             {k: (len(v) if isinstance(v, (list, tuple)) else str(v)[:80])
+                              for k, v in (evidence or {}).items()})
+            try:
+                _module = self._module_for(nid)
+            except Exception:        # noqa: BLE001 — module label is non-critical
+                _module = ""
+            ctx = _doctor_mod.Context(
+                node=nid, module=_module, gate=gate, depth=depth,
+                depends_on=tuple(node.get("depends_on") or ()))
+            diag = self._doctor.diagnose(
+                node=nid, gate=gate, verdict=verdict,
+                evidence=evidence, context=ctx)
+            ranked = [(f.cause, f.detector, round(float(f.confidence), 2))
+                      for f in diag.ranked]
+            _DOCTOR_LOG.info("advise DIAGNOSIS node=%s ranked=%s abstained=%s",
+                             nid, ranked, diag.abstained)
+            state = self._doctor_states.setdefault(nid, _doctor_mod.new_state())
+            act = self._doctor.treat(diag, state)
+            cause = diag.primary.cause if diag.primary else "(none)"
+            state["last_cause"] = cause          # for the closing PASS on this gate
+            _DOCTOR_LOG.info("advise ACTION node=%s cause=%s remedy=%s rung=%s",
+                             nid, cause, act.kind,
+                             getattr(act.record, "rung", None))
+            self.emit("review", "doctor", "", nid,
+                      f"diagnose {cause} → remedy {act.kind}",
+                      str(act.feedback)[:200], gate=f"doctor:{cause}",
+                      verdict="REJECT", level=L_MILESTONE)
+            if act.record is not None:
+                self.loops.append(act.record.as_loop())
+        except Exception as exc:  # noqa: BLE001
+            _DOCTOR_LOG.exception("advise FAILED node=%s gate=%s", nid, gate)
+            self.emit("review", "doctor", "", nid, "doctor advise failed",
+                      str(exc)[:160], level=L_MILESTONE)
+
+    def _doctor_resolve(self, node: dict, nid: str, gate: str) -> None:
+        """Close the doctor's cause on this node: a later PASS on the same gate
+        means the remedy worked. Emits doctor:<cause> PASS (turns the dashboard
+        row green) and records a resolved loop entry. No-op if nothing was open."""
+        if self._doctor is None or not self._doctor.enabled:
+            return
+        try:
+            state = self._doctor_states.get(nid) or {}
+            cause = state.get("last_cause")
+            if not cause or cause == "(none)":
+                return
+            self.emit("review", "doctor", "", nid, f"resolved {cause}", "",
+                      gate=f"doctor:{cause}", verdict="PASS", level=L_MILESTONE)
+            self.loops.append({"type": "doctor", "task": nid, "cause": cause,
+                               "remedy": "(closed)", "outcome": "resolved",
+                               "detail": f"{gate} passed"})
+            state["last_cause"] = None
+        except Exception:  # noqa: BLE001
+            pass
 
     def _amend_llm_router(self, statement: str, modules: list,
                           candidates_text: "Optional[dict]") -> "Optional[str]":
@@ -2386,6 +2539,11 @@ class Engine:
                           f"was never built — root integrate cannot assemble "
                           f"the product",
                           "integrate_verify", "FAIL", level=L_MILESTONE)
+                # Doctor (Ф5): integrate failure — diagnose + record remedy.
+                self._doctor_advise(
+                    {"id": "L0:integrate"}, "L0:integrate", 0,
+                    "integrate_verify", "FAIL",
+                    {"reasons": f"declared product entry {entry} not built"})
 
         # Sweep: fire any declared revision that did not meet its in-run
         # trigger condition (back-compat + nothing declared is silently dropped).
@@ -2434,6 +2592,16 @@ class Engine:
         """Assemble the RunResult from the engine's current state. Shared by
         a normal finish and a cooperative STOP (П1), so a stopped run returns
         the same shape — just with fewer completed nodes."""
+        if self._doctor is not None and _doctor_mod is not None \
+                and self._doctor.enabled:
+            try:
+                import json as _json
+                m = _doctor_mod.doctor_metrics(self.loops)
+                self.emit("review", "doctor", "", "L0:root", "doctor metrics",
+                          _json.dumps(m)[:300], gate="doctor:metrics",
+                          level=L_MILESTONE)
+            except Exception:  # noqa: BLE001
+                pass
         return RunResult(project, self.events, self.tasks, self.skills, self.profiles,
                          self.loops, self.gate_calls, self.verbosity, self.depth,
                          getattr(self.workspace, "root", None),
@@ -2444,7 +2612,7 @@ class Engine:
                         ancestors: tuple) -> dict:
         """The decomposer worker's task context (shared by the initial
         expansion and the spec-rework rounds)."""
-        return {
+        ctx = {
             "project": {"goal": self._goal, "target": self._target,
                         "constitution": self._constitution},
             "node": {"id": node["id"], "title": node.get("title", node["id"])},
@@ -2459,6 +2627,24 @@ class Engine:
                 for i, t in list(self._node_registry.items())[:150]
             ],
         }
+        # PREVENTION (delta-only contract): a LATE requirement is authored AFTER
+        # other modules exist. Tell the decomposer up front which routes/symbols
+        # are already owned so it scopes to its OWN delta on the FIRST draft,
+        # instead of restating the whole service and being caught later by the
+        # scope-lint backstop (the v041 delete_note duplicate-surface failure).
+        if node.get("_late_req"):
+            modules = self._surface_modules(_snake(str(node.get("id", ""))))
+            routes: set = set()
+            syms: set = set()
+            for _rel, _stem, body in modules:
+                routes |= _amend_routes(body)
+                syms |= _amend_symbols(body)
+            if routes or syms:
+                ctx["late_req_contract"] = {
+                    "existing_routes": sorted(routes),
+                    "existing_symbols": sorted(syms),
+                }
+        return ctx
 
     def _expand_node(self, node: dict, depth: int, parent: Optional[str],
                      ancestors: tuple = ()) -> dict:
@@ -2543,6 +2729,13 @@ class Engine:
             self.tasks[nid].runs += 1
             self.loops.append({"type": "spec-review-reject", "task": nid,
                                "detail": reasons})
+            # Doctor (Ф4): a spec_review REJECT is a SEMANTIC failure — route it
+            # through the LLM classifier to name the cause (vague_spec /
+            # weak_implementer / ...) and record the remedy. Advisory; off=no-op.
+            self._doctor_advise({"id": nid}, nid, 0, "spec_review", "REJECT",
+                                {"reasons": reasons})
+        elif verdict == "PASS":
+            self._doctor_resolve({"id": nid}, nid, "spec_review")
         return verdict, reasons
 
     def _is_simple_node(self, node: dict, depth: int) -> bool:
@@ -2645,6 +2838,11 @@ class Engine:
                       f"spec scope: {len(findings)} duplicate-surface finding(s)",
                       "; ".join(findings)[:300], "spec_scope", "FAIL",
                       level=L_MILESTONE)
+            # Doctor (Ф3): diagnose the cause + dispatch a remedy. Advisory for
+            # now — it records WHAT it would do (dashboard cause/remedy) while the
+            # existing rework below still executes. Off => no-op, byte-identical.
+            self._doctor_advise(node, nid, depth, "spec_scope", "FAIL",
+                                {"scope_findings": list(findings)})
             if "decomposer" not in self.agents:
                 break
             self._decompose_calls += 1
@@ -2680,6 +2878,7 @@ class Engine:
                 node, str(node.get("spec_markdown") or "")):
             self.emit("review", "engine", "", nid, "spec scope clean", "",
                       "spec_scope", "PASS", level=L_MILESTONE)
+            self._doctor_resolve(node, nid, "spec_scope")
         if not _lint_spec_traceability(nid,
                                        str(node.get("spec_markdown") or "")):
             self.emit("review", "engine", "", nid, "spec lint clean", "",
@@ -4076,7 +4275,8 @@ def run_project(project: dict, *, workspace, depth: Any = DEPTH_SPEC,
                   node_engine=node_engine, runtime_guard=runtime_guard,
                   resume=resume, replan=replan, git_provenance=git_provenance,
                   standing_requirements=standing_requirements,
-                  human_ask=human_ask).run(project)
+                  human_ask=human_ask,
+                  doctor_project=project).run(project)
 
 
 def render_log(res: RunResult, level: int = None) -> str:

@@ -1,0 +1,146 @@
+# Doctor factory defaults — ALL data lives here, code only loads it.
+# This is layer 1 (lowest priority) of the 5-layer merge assembled by
+# spec_flow_remedies.py. Override order (low -> high):
+#   1. this file              (factory table)
+#   2. env numeric floors     SPEC_FLOW_DOCTOR_RING / _NODE_ATTEMPTS / ...
+#   3. env JSON               SPEC_FLOW_DOCTOR / _DOCTOR_CAUSES / _EVALUATOR / _TIERS
+#   4. case YAML              project.doctor|causes|evaluator, workers.tiers
+#   5. launch overrides       CLI --doctor-set / --doctor-enabled
+# Point the loader at a different file with env SPEC_FLOW_DOCTOR_DEFAULTS.
+
+# --- LLM power tiers (only free / no-quota models, per project rule #97) ------
+# A role/evaluator/ladder rung names a TIER, never a raw model, so swapping a
+# model is one edit in one place.
+tiers:
+  weak:
+    models: ["lmstudio/gpt-oss-20b", "claude/haiku"]
+    temperature: 0.2
+    votes: 1
+    timeout: 300
+  medium:
+    models: ["xiaomimimo/mimo-v2.5", "claude/haiku"]
+    temperature: 0.1
+    votes: 1
+  strong:
+    models: ["xiaomimimo/mimo-v2.5-pro"]
+    temperature: 0.0
+    votes: 1
+
+# map a node-complexity label to a tier name
+complexity_to_tier:
+  leaf_small: weak
+  leaf_big: medium
+  branch: strong
+
+# --- evaluator (the cause classifier) ----------------------------------------
+evaluator:
+  tier: strong                 # -> tiers.strong (mimo-v2.5-pro)
+  temperature: 0.0
+  votes: 1                     # start at 1; log_vote_spread gathers data first
+  majority: 1
+  require_cite: true           # a cause without a cited finding is discarded
+  abstain_escalate_tier: true
+  log_vote_spread: true        # always log diagnosis confidence
+  semantic_gates: ["spec_review", "integrate_verify"]
+
+# --- when to call the human (explicit trigger) -------------------------------
+human:
+  enable: true
+  after_resources: ["escalate_tier", "web_search"]   # only after these failed
+  at_levels: ["respec", "human"]    # depth levels where a human call is allowed
+  on_abstain: true                  # diagnosis unsure -> human
+  on_root_failure: true             # root (depth==0) never silently halted
+  blast_radius_min: 3               # large edit radius (cf RESPEC_HITL_BLAST)
+  timeout_s: 300
+  on_timeout: record                # no answer -> debt + bubble up, not crash
+
+# --- depth-level ladder: leaf -> re-decompose parent -> re-spec -> human ------
+levels_order: ["leaf", "parent", "respec", "human"]
+# escalation kind emitted per level name (others fall back to "record")
+escalation_kinds:
+  parent: redecompose_parent
+  respec: respec
+
+# --- the 15 base causes: detector + remedy ladder (root->symptom order) -------
+# Each ladder is walked one rung per repeat of the same (cause, place); the rung
+# never repeats. Causes whose detector is "prompt" are the semantic set the LLM
+# classifier may pick; all others are deterministic detectors.
+causes:
+  hidden_deps:
+    detector: hidden_deps
+    ladder: ["order_by_deps", "record"]
+  garbage_accumulation:
+    detector: ancestry
+    ladder: ["find_root", "escalate_tier", "web_search", "ask_human", "rollback_redo"]
+  empty_delta:
+    detector: empty_delta
+    ladder: ["reject_empty", "rework", "escalate_tier"]
+  context_loss:
+    detector: memory_absent
+    ladder: ["reload_memory", "rework", "escalate_tier"]
+  vague_spec:
+    detector: prompt
+    ladder: ["add_contract", "rework", "escalate_tier"]
+  task_too_large:
+    detector: leaf_metrics
+    ladder: ["split", "record"]
+    by_gate:
+      spec_review:
+        ladder: ["split", "record"]
+  task_check_mismatch:
+    detector: prompt
+    ladder: ["reconcile_check", "rework", "escalate_tier"]
+  goal_disconnect:
+    detector: prompt
+    ladder: ["goal_coverage", "rework", "escalate_tier"]
+  weak_implementer:
+    detector: prompt
+    ladder: ["rework", "escalate_tier", "web_search", "ask_human", "record"]
+  rewrite_loops:
+    detector: rewrite_loops
+    ladder: ["patch_diff", "escalate_tier", "split"]
+  excess_input:
+    detector: input_bloat
+    ladder: ["trim_input", "rework"]
+  review_cant_block:
+    detector: config
+    ladder: ["enable_block", "rework", "record"]
+  inconsistent_checks:
+    detector: verdict_spread
+    ladder: ["unify_verdict", "rework"]
+  answer_nondeterminism:
+    detector: vote_spread
+    ladder: ["n_vote", "escalate_tier"]
+  silent_truncation:
+    detector: truncation_marks
+    ladder: ["restore_dropped", "rework", "escalate_tier"]
+
+# root->symptom precedence for ranking a multi-cause diagnosis (treat the root
+# first, symptoms often dissolve)
+causes_order:
+  - hidden_deps
+  - garbage_accumulation
+  - context_loss
+  - silent_truncation
+  - empty_delta
+  - vague_spec
+  - task_too_large
+  - excess_input
+  - task_check_mismatch
+  - goal_disconnect
+  - review_cant_block
+  - rewrite_loops
+  - inconsistent_checks
+  - weak_implementer
+  - answer_nondeterminism
+
+# --- doctor control-loop knobs (numeric floors overridable by env ints) -------
+doctor:
+  enabled: false               # off => today's hardcoded recovery, byte-identical
+  default_ladder: ["rework", "escalate_tier", "web_search", "split", "ask_human", "record"]
+  ring: 6
+  node_attempts: 6
+  nonshrink: 2
+  levels: 4
+  attempts_per_level: 2
+  # causes_order and human are stitched in by the loader from the keys above

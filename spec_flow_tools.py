@@ -70,11 +70,19 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # leaf_check thresholds: a node is a LEAF only when it stays under all of
-# these. Anything above means "expand one more level" (branch).
-MAX_MODULES = 1        # one cohesive module per leaf
-MAX_TASKS = 5          # at most a handful of bite-sized tasks
-MAX_INTERFACES = 2     # touches at most two interface surfaces
-MAX_LOC = 100          # ~one commit; > this is too big for a single leaf
+# these. Anything above means "expand one more level" (branch). Overridable per
+# run via env (works in both the plugin and test contexts — no harness import):
+# SPEC_FLOW_LEAF_MAX_MODULES / _TASKS / _INTERFACES / _LOC.
+def _leaf_env(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, "").strip() or default)
+    except (ValueError, TypeError):
+        return default
+
+MAX_MODULES = _leaf_env("SPEC_FLOW_LEAF_MAX_MODULES", 1)      # one module per leaf
+MAX_TASKS = _leaf_env("SPEC_FLOW_LEAF_MAX_TASKS", 5)         # bite-sized tasks
+MAX_INTERFACES = _leaf_env("SPEC_FLOW_LEAF_MAX_INTERFACES", 2)  # interface surfaces
+MAX_LOC = _leaf_env("SPEC_FLOW_LEAF_MAX_LOC", 100)          # ~one commit
 
 # contract_check: validator command templates. ``{contract}`` and ``{code}``
 # are substituted with the contract artifact path and a code path/dir. Swap in

@@ -312,7 +312,15 @@ def _inline_file(root: Optional[str], rel: str) -> str:
     except OSError:
         return "(file not found)"
     if len(text) > INLINE_FILE_LIMIT:
-        text = text[:INLINE_FILE_LIMIT] + "\n…(truncated)"
+        # Prevention: never drop silently — record HOW MUCH was cut so a
+        # truncation-caused failure is diagnosable instead of invisible.
+        import logging
+        dropped = len(text) - INLINE_FILE_LIMIT
+        logging.getLogger("spec_flow.worker").warning(
+            "inline truncation: %s dropped %d chars (limit %d)",
+            rel, dropped, INLINE_FILE_LIMIT)
+        text = (text[:INLINE_FILE_LIMIT]
+                + f"\n…(truncated: dropped {dropped} chars of {rel})")
     return text
 
 
@@ -537,6 +545,23 @@ def make_decomposer(workspace_dir: Optional[str] = None,
                        " decisions' honest — list ONLY what truly remains"
                        " open ('None — <why>' when nothing does)."
                        "\nReply with ONLY: {\"spec_markdown\": \"...\"}")
+        # PREVENTION (delta-only): on the FIRST authoring of a LATE requirement
+        # (no rework feedback yet) tell the decomposer which routes/symbols are
+        # already owned so it scopes to its own delta instead of restating the
+        # whole service (the v041 duplicate-surface failure caught later by the
+        # scope-lint). Skipped during rework — feedback already steers there.
+        contract = ctx.get("late_req_contract") if not feedback else None
+        if contract:
+            _rts = ", ".join(contract.get("existing_routes") or []) or "—"
+            _sym = ", ".join(contract.get("existing_symbols") or []) or "—"
+            prompt += (
+                "\n\nLATE REQUIREMENT — this node was added AFTER the modules"
+                " below already exist. Describe ONLY your own delta: your spec"
+                " MUST introduce at least ONE genuinely new HTTP route or symbol."
+                " Reference the existing surface as CONTEXT — do NOT re-declare"
+                " or re-specify routes/symbols that are already owned."
+                f"\nAlready-served routes: {_rts}"
+                f"\nAlready-defined symbols: {_sym}")
         parent_id = ctx.get("parent_id")
         if parent_id:
             trace_rule = (" Every requirement you author MUST carry"

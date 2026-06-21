@@ -272,11 +272,21 @@ def chain_for(role: str, specialty: str = "") -> list[str]:
         spec_cfg = (role_cfg.get("specialties") or {}).get(specialty) or {}
         spec_chain = (spec_cfg.get("models")
                       or ([spec_cfg["model"]] if spec_cfg.get("model") else None))
+    # tier fallback: a role/defaults may name a power TIER instead of listing
+    # models, so the doctor's escalate_tier and the complexity->tier router share
+    # ONE place that defines what "strong"/"weak" means (workers.tiers).
+    def _tier_models(cfg: dict):
+        t = cfg.get("tier")
+        if not t:
+            return None
+        return ((WORKERS_CFG.get("tiers") or {}).get(t) or {}).get("models")
     chain = (spec_chain
              or role_cfg.get("models")
              or ([role_cfg["model"]] if role_cfg.get("model") else None)
+             or _tier_models(role_cfg)
              or defaults.get("models")
-             or ([defaults["model"]] if defaults.get("model") else None))
+             or ([defaults["model"]] if defaults.get("model") else None)
+             or _tier_models(defaults))
     if not chain:
         # no workers block in the case YAML — legacy env/default path
         chain = [os.environ.get(
@@ -291,6 +301,34 @@ def model_for(role: str, specialty: str = "") -> str:
     """The role's primary model (head of the chain) — for logs and meta.
     #10: a specialty routes to its own chain head when configured."""
     return chain_for(role, specialty)[0]
+
+
+def chain_for_tier(tier: str) -> list[str]:
+    """Resolve a power TIER name (weak/medium/strong) to its model chain.
+
+    The single place that turns a tier into models — the doctor's escalate_tier
+    and the complexity->tier router both go through here, so swapping a tier's
+    model is one edit in workers.tiers. Falls back to the default role chain when
+    the tier is unknown/unset."""
+    models = ((WORKERS_CFG.get("tiers") or {}).get(tier) or {}).get("models")
+    return list(models) if models else chain_for("defaults")
+
+
+def _with_default_params(params: dict | None, cfg: dict | None = None) -> dict:
+    """Prevention: every worker call gets a LOW default temperature unless the
+    caller set one explicitly (deterministic output, fewer flaky generations).
+    Default from workers.temperature or SPEC_FLOW_WORKER_TEMPERATURE (floor 0.1).
+    Explicit caller params always win."""
+    cfg = cfg if cfg is not None else (WORKERS_CFG or {})
+    try:
+        default_t = float(cfg.get("temperature",
+                                  os.environ.get("SPEC_FLOW_WORKER_TEMPERATURE",
+                                                 "0.1") or 0.1))
+    except (ValueError, TypeError):
+        default_t = 0.1
+    merged = {"temperature": default_t}
+    merged.update(params or {})
+    return merged
 
 
 class QuotaExhausted(RuntimeError):
@@ -333,7 +371,8 @@ def _ask_one(prompt: str, model: str, system: str | None,
                          fallback=fallback)
         return _ask_claude(prompt, cli_model, system=system, direct=True,
                            timeout=timeout, allowed=(tools or {}).get("allowed"),
-                           disallowed=(tools or {}).get("disallowed"), cwd=cwd)
+                           disallowed=(tools or {}).get("disallowed"), cwd=cwd,
+                           log_model=model)
     if BACKEND != "openai":
         # the agentic claude backend (non-chat workers run the CLI with tools).
         # When a gateway is configured it joins the SAME real HTTP path — so an
@@ -464,6 +503,7 @@ def ask(prompt: str, *, model: str, role: str, step: str,
             "implementer/reviewer/verifier). Every LLM call must be attributable "
             "to a stage — a missing/empty role hides token and idle accounting.")
     cfg = WORKERS_CFG or {}
+    params = _with_default_params(params, cfg)   # low default temp for all workers
     _call_ctx.role = role          # #6: tag token usage with the calling role
     _call_ctx.step = step          # specialist (orchestra step) for per-member split
     _call_ctx.last_usage = None    # cleared each call; _ask_openai stashes real usage here
@@ -709,7 +749,7 @@ def _ask_claude(prompt: str, model: str, system: str | None = None,
                 direct: bool = False, timeout: int | None = None,
                 allowed: list[str] | None = None,
                 disallowed: list[str] | None = None,
-                cwd: str | None = None) -> str:
+                cwd: str | None = None, log_model: str | None = None) -> str:
     """The claude CLI backend. ``direct=True`` strips the gateway override
     (ANTHROPIC_BASE_URL): the exhaustion fallback is the SUBSCRIPTION — a
     broken/limited gateway must not take the fallback down with it (a 403 via
@@ -734,8 +774,11 @@ def _ask_claude(prompt: str, model: str, system: str | None = None,
     def _attempt(n: int, t0: float, status, abnormal: bool, error: str = "") -> None:
         # mirror _ask_openai: EVERY claude-CLI attempt is logged so the
         # dashboard sees all delay/failure causes on the subscription path too.
+        # log the CANONICAL ask-level id (e.g. 'claude/haiku') so every event
+        # type (llm_attempt / token_usage / outcome) keys the model identically;
+        # the CLI still runs the short id in `model`.
         ev = {"event": "llm_attempt", "backend": "claude", "provider": "claude",
-              "model": model, "attempt": n, "status": status,
+              "model": log_model or model, "attempt": n, "status": status,
               "latency_s": round(time.monotonic() - t0, 2), "abnormal": abnormal}
         if error:
             ev["error"] = error

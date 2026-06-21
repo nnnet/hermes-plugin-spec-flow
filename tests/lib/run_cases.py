@@ -526,6 +526,63 @@ def _summary_md(name: str, goal: str, depth: str, full: dict | None,
     return "\n".join(lines)
 
 
+def _parse_ovr_value(v: str):
+    """Parse a --doctor-set value: JSON first, then [a,b] lists, bool/int, else str."""
+    import json as _json
+    s = str(v).strip()
+    try:
+        return _json.loads(s)
+    except Exception:  # noqa: BLE001
+        pass
+    if s.startswith("[") and s.endswith("]"):
+        return [x.strip() for x in s[1:-1].split(",") if x.strip()]
+    low = s.lower()
+    if low in ("true", "false"):
+        return low == "true"
+    try:
+        return int(s)
+    except ValueError:
+        try:
+            return float(s)
+        except ValueError:
+            return s
+
+
+def _apply_doctor_overrides(args) -> None:
+    """Turn --doctor-enabled / --doctor-set K=V into layer-5 doctor overrides
+    (highest priority) so a run can be tuned without editing the case YAML."""
+    over: dict = {}
+    if getattr(args, "doctor_enabled", None) is not None:
+        over.setdefault("doctor", {})["enabled"] = bool(args.doctor_enabled)
+    for item in getattr(args, "doctor_set", []) or []:
+        if "=" not in item:
+            continue
+        path, _, val = item.partition("=")
+        keys = [k for k in path.strip().split(".") if k]
+        if not keys:
+            continue
+        ns = keys[0] if keys[0] in ("doctor", "causes", "evaluator", "tiers",
+                                    "complexity_to_tier") else "doctor"
+        rest = keys[1:] if keys[0] == ns else keys
+        node = over.setdefault(ns, {})
+        for k in rest[:-1]:
+            node = node.setdefault(k, {})
+        if rest:
+            node[rest[-1]] = _parse_ovr_value(val)
+    if not over:
+        return
+    try:
+        try:
+            import spec_flow_remedies as _rem  # type: ignore
+        except Exception:  # noqa: BLE001
+            from harness import run_engine  # noqa: F401  (ensures path)
+            import spec_flow_remedies as _rem  # type: ignore
+        _rem.set_overrides(over)
+        print(f"[doctor] overrides applied: {over}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[doctor] could not apply overrides: {exc}")
+
+
 def main() -> int:
     # Verb sugar over the flags (ACTION style, like the project Makefiles), kept
     # back-compatible: a leading non-dash token is a verb; `run` falls through to
@@ -540,6 +597,14 @@ def main() -> int:
             sys.argv = [sys.argv[0], _ctl[_verb], _rest[0]] + _rest[1:]
         elif _verb == "run":
             sys.argv = [sys.argv[0]] + _rest
+    # Opt-in detailed doctor logging (calls + LLM replies + decisions) to stderr,
+    # captured by the run's log file. SPEC_FLOW_DOCTOR_LOG=DEBUG for even more.
+    _dl = os.environ.get("SPEC_FLOW_DOCTOR_LOG", "").strip().upper()
+    if _dl:
+        import logging as _lg
+        _lg.basicConfig(level=getattr(_lg, _dl, _lg.INFO),
+                        format="%(asctime)s %(levelname)s %(name)s %(message)s")
+        _lg.getLogger("spec_flow.doctor").setLevel(getattr(_lg, _dl, _lg.INFO))
     ap = argparse.ArgumentParser(description="Run scenario cases as real plugin runs")
     ap.add_argument("--depth", default="spec", choices=sorted(eng.DEPTHS, key=eng.DEPTHS.get))
     ap.add_argument("--case", default="", help="substring filter on the case file name")
@@ -616,7 +681,19 @@ def main() -> int:
     ap.add_argument("--from-checkpoint", default="", metavar="M",
                     help="checkpoint NUMBER M (the NNN in checkpoints/NNN__*) "
                          "within --from-run to start from")
+    ap.add_argument("--doctor-enabled", dest="doctor_enabled",
+                    action="store_true", default=None,
+                    help="force the cause-diagnosis doctor ON for this run "
+                         "(overrides the case doctor.enabled)")
+    ap.add_argument("--doctor-disabled", dest="doctor_enabled",
+                    action="store_false",
+                    help="force the doctor OFF (baseline compare run)")
+    ap.add_argument("--doctor-set", action="append", default=[], metavar="K=V",
+                    help="override a doctor config key by dot-path, repeatable: "
+                         "--doctor-set evaluator.votes=3 "
+                         "--doctor-set causes.task_too_large.ladder='[split,record]'")
     args = ap.parse_args()
+    _apply_doctor_overrides(args)
     # resolve the operator-friendly --from-run N [--from-checkpoint M] to the
     # checkpoint DIR that --from replays: clone run N's checkpoint M into a fresh
     # numbered run and resume. Numbers, not paths — the run sequence the operator

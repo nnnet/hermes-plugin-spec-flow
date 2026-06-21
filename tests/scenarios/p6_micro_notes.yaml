@@ -175,6 +175,19 @@ injections:
 # Review policy: rework to green, but a tight cap — review + repair are the
 # two biggest time sinks, so bound them and let the gate fail loudly instead
 # of grinding rounds.
+# Doctor: cause-diagnosis + remedy dispatch (Ф3 advisory at scope-lint for now).
+# enabled here so the p6 MVP exercises it; flip to false for a baseline compare.
+doctor:
+  enabled: true
+causes:                  # override only what differs from DEFAULT_CAUSES (15)
+  empty_delta:     {ladder: [reject_empty, rework, escalate_tier]}
+  task_too_large:  {ladder: [split, record]}
+evaluator:
+  tier: strong          # mimo-v2.5-pro via workers.tiers
+  temperature: 0.0
+  votes: 1              # start at 1; log_vote_spread gathers data
+  require_cite: true
+
 review:
   on_reject: rework
   max_rework: 2
@@ -220,6 +233,13 @@ workers:
   quota_wait_s: 20
   quota_retries: 3
   fallback_models: [claude/haiku]
+  # LLM power tiers (doctor escalate_tier + complexity->tier routing). Only
+  # free / no-quota models, per project rule. ONE place that defines power.
+  tiers:
+    weak:   {models: [lmstudio/gpt-oss-20b, claude/haiku], temperature: 0.2}
+    medium: {models: [xiaomimimo/mimo-v2.5, claude/haiku],  temperature: 0.1}
+    strong: {models: [xiaomimimo/mimo-v2.5-pro],            temperature: 0.0}
+  complexity_to_tier: {leaf_small: weak, leaf_big: medium, branch: strong}
   providers:
     # Xiaomi MiMo — its OWN Bifrost provider "xiaomimimo" (custom OpenAI-compatible,
     # base_url xiaomimimo.com, keys XIAOMIMIMO_API_KEY), NOT OpenRouter. Bifrost
