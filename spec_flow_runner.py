@@ -2314,7 +2314,10 @@ class Engine:
         if getattr(self, "_goal", ""):
             texts.append(str(self._goal))
         try:                     # human requirements added mid-run (injections)
-            texts += [str(s) for (_n, s) in (self._standing_requirements or [])]
+            fn = self._standing_requirements
+            items = fn() if callable(fn) else (fn or [])
+            for item in (items or []):
+                texts.append(str(item[1] if len(item) > 1 else item[0]))
         except Exception:        # noqa: BLE001
             pass
         blob = "\n".join(texts)
@@ -2392,9 +2395,17 @@ class Engine:
         api = self._existing_src_api()
         # late human requirements (injected mid-run) that the entry must also
         # route — condensed one-liners, model-independent (echoes human text).
+        # _standing_requirements is a CALLABLE (same source _requirement_nodes
+        # consults): fn() -> [(name, statement, scope?), ...]. It returns ALL
+        # standing/late reqs regardless of coverage, so even a late req already
+        # materialised as its own leaf (e.g. a /ping leaf -> src/ping_text.py)
+        # still surfaces its human statement here, telling the entry to route it.
         _standing = []
         try:
-            for _n, _s in (self._standing_requirements or []):
+            fn = self._standing_requirements
+            items = fn() if callable(fn) else (fn or [])
+            for item in (items or []):
+                _s = item[1] if len(item) > 1 else item[0]
                 _txt = " ".join(str(_s).split())[:200]
                 if _txt:
                     _standing.append(f"- {_txt}")

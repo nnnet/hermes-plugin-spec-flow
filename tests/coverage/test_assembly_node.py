@@ -113,6 +113,40 @@ def test_callable_unnamed_injects_nothing(tmp_path, monkeypatch):
     assert "product_entry" not in _children_ids(res.project["tree"], "L0")
 
 
+def _bare_engine(constitution, goal, standing):
+    import spec_flow_runner as sfr
+    e = sfr.Engine.__new__(sfr.Engine)
+    e._constitution = constitution
+    e._goal = goal
+    e._standing_requirements = standing
+    return e
+
+
+def test_contract_consumes_callable_standing_reqs():
+    # Regression: _standing_requirements is a CALLABLE. _product_contract used to
+    # iterate it directly (for (_n, s) in fn) -> TypeError swallowed -> late human
+    # injections never reached route detection. Here the web product is declared
+    # ONLY through the standing-requirements callable; the constitution names the
+    # entry/callable but declares NO routes. Old (buggy) code => {} (callable not
+    # consumed); fixed code => a real contract.
+    cons = ["HTTP via WSGI; src/app.py exposes `wsgi_app`; sqlite3 in src/db.py."]
+    standing = lambda: [  # noqa: E731
+        ("notes_req", "POST /notes takes {text} -> {id}; GET /notes -> {items}."),
+        ("health_req", "GET /health responds 200."),
+    ]
+    c = _bare_engine(cons, "a notes service", standing)._product_contract()
+    assert c, "callable standing reqs must be consumed -> non-empty contract"
+    assert c.get("entry") == "src/app.py"
+
+
+def test_contract_standing_reqs_list_form_also_works():
+    # the same source may already be a plain list (not a callable) — both accepted.
+    cons = ["HTTP via WSGI; src/app.py exposes `wsgi_app`; sqlite3 in src/db.py."]
+    standing = [("notes_req", "POST /notes -> {id}; GET /notes -> {items}; GET /health 200.")]
+    c = _bare_engine(cons, "notes", standing)._product_contract()
+    assert c, f"list-form standing reqs must be consumed: {c}"
+
+
 def test_plugin_does_not_import_contract_checks_for_entry():
     """Regression guard: the assembly node must detect the entry INLINE. The
     first cut did `from tests.harness import contract_checks`, which raises
