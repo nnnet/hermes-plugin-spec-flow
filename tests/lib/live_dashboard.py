@@ -457,6 +457,9 @@ _STAGE2ROLE = {"decompose": "decomposer", "implement": "implementer",
 # RU stage labels for the map (the four STAGES of the spec pipeline).
 _STAGE_RU = {"decomposer": "декомпозиция", "implementer": "реализация",
              "reviewer": "ревью", "verifier": "верификация"}
+# steps that are SPECIALISTS within a stage (vs an engine step that is its own
+# stage, e.g. amend-route, performed by a role)
+_ORCHESTRA_STEPS = {"architect", "coder", "tester", "fixer"}
 
 
 def _normalise_workers_block(workers) -> dict:
@@ -1760,14 +1763,21 @@ def _token_economics(run_dir: "pathlib.Path | None") -> dict:
             continue
         if e.get("event") != "token_usage":
             continue
-        # split by the orchestra SPECIALIST (step) when present, else the role —
-        # so "реализация" breaks down into architect/coder/tester/fixer, each
-        # with its own model. estimated=True rows were token-counted locally
-        # (the model returned no usage); measured rows came from the API.
-        who = e.get("step") or e.get("role") or "—"
-        key = (who, e.get("model") or "—")
+        # An ORCHESTRA specialist step (architect/coder/tester/fixer) is a
+        # SPECIALIST inside a stage -> stage = the role's stage (реализация),
+        # specialist column = the step. An ENGINE step (e.g. amend-route) is its
+        # OWN stage performed BY a role -> stage = the step, specialist = the role.
+        step = e.get("step")
+        role = e.get("role")
+        if step and step not in _ORCHESTRA_STEPS:
+            stage = step                       # the engine step IS the stage
+            who = role or "—"                  # the role is the worker (specialist)
+        else:
+            stage = _STAGE_RU.get(role, role or "—")
+            who = step or role or "—"          # the orchestra specialist (or role)
+        key = (stage, who, e.get("model") or "—")
         a = agg.setdefault(key, {"calls": 0, "prompt": 0, "completion": 0,
-                                 "estimated": False, "role_raw": e.get("role")})
+                                 "estimated": False})
         pt = int(e.get("prompt_tokens", 0) or 0)
         ct = int(e.get("completion_tokens", 0) or 0)
         a["calls"] += 1
@@ -1775,17 +1785,12 @@ def _token_economics(run_dir: "pathlib.Path | None") -> dict:
         a["completion"] += ct
         if e.get("estimated"):
             a["estimated"] = True
-        if not a.get("role_raw"):
-            a["role_raw"] = e.get("role")
         grand += pt + ct
-    # the pipeline STAGE a row belongs to, derived from its role (a specialist
-    # like coder rolls up under its stage, реализация).
-    rows = [{"stage": _STAGE_RU.get(v.get("role_raw"), v.get("role_raw") or "—"),
-             "role": r, "model": m, "calls": v["calls"],
+    rows = [{"stage": stg, "role": who, "model": m, "calls": v["calls"],
              "prompt": v["prompt"], "completion": v["completion"],
              "total": v["prompt"] + v["completion"],
              "estimated": v["estimated"]}
-            for (r, m), v in agg.items()]
+            for (stg, who, m), v in agg.items()]
     rows.sort(key=lambda x: x["total"], reverse=True)
     return {"rows": rows, "total": grand}
 
