@@ -1993,6 +1993,21 @@ class Engine:
             ctx = _doctor_mod.Context(
                 node=nid, module=_module, gate=gate, depth=depth,
                 depends_on=tuple(node.get("depends_on") or ()))
+            # Feed the DETERMINISTIC detectors live engine data, otherwise only
+            # the semantic classifier ever fires (observed in v043): the loop
+            # journal drives ancestry (upstream *-fail on a dependency), and this
+            # node's prior reject reasons drive rewrite_loops (same reason twice).
+            if _diag_mod is not None and self._doctor.diagnosers is not None:
+                self._doctor.diagnosers.helpers = _diag_mod._Helpers(
+                    loops=list(self.loops))
+            evidence = dict(evidence or {})
+            if "reason_history" not in evidence:
+                hist = [str(lp.get("detail") or "") for lp in self.loops
+                        if lp.get("task") == nid
+                        and "reject" in str(lp.get("type", "")).lower()
+                        and lp.get("detail")]
+                if hist:
+                    evidence["reason_history"] = hist
             diag = self._doctor.diagnose(
                 node=nid, gate=gate, verdict=verdict,
                 evidence=evidence, context=ctx)
