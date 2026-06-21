@@ -2053,6 +2053,21 @@ class Engine:
         except Exception:  # noqa: BLE001
             pass
 
+    def _doctor_open_causes(self) -> list:
+        """(nid, cause) for every node whose doctor cause is still OPEN — set by
+        _doctor_advise and never closed by a later _doctor_resolve PASS. The
+        completion gate uses this to HONOUR the doctor's verdict: an unresolved
+        diagnosed cause must block a green COMPLETE (advisory-only let v044 ship a
+        broken build as done). Empty when the doctor is off or all causes closed."""
+        if self._doctor is None or not self._doctor.enabled:
+            return []
+        out = []
+        for nid, st in (self._doctor_states or {}).items():
+            cause = (st or {}).get("last_cause")
+            if cause and cause != "(none)":
+                out.append((nid, cause))
+        return out
+
     def _amend_llm_router(self, statement: str, modules: list,
                           candidates_text: "Optional[dict]") -> "Optional[str]":
         """#2 router: ONE strong-model call, fired only after every cheaper
@@ -2559,6 +2574,15 @@ class Engine:
                     {"id": "L0:integrate"}, "L0:integrate", 0,
                     "integrate_verify", "FAIL",
                     {"reasons": f"declared product entry {entry} not built"})
+                # A declared-but-unbuilt entry is a ROOT failure. emit() wrote a
+                # trace event only — NOT an integrate-fail loop entry — so root_red
+                # below stayed False and the project was wrongly marked COMPLETE
+                # over a broken build (observed in v044). Record the root fail so
+                # the completion gate honours it (doctor on OR off).
+                _rid = str((project.get("tree") or {}).get("id", "L0"))
+                self.loops.append({
+                    "type": "integrate-fail", "task": _rid,
+                    "detail": f"declared product entry {entry} not built"})
 
         # Sweep: fire any declared revision that did not meet its in-run
         # trigger condition (back-compat + nothing declared is silently dropped).
@@ -2574,12 +2598,20 @@ class Engine:
         root_red = any(lp.get("type") == "integrate-fail"
                        and str(lp.get("task")) == root_id
                        for lp in self.loops)
+        # Honour the doctor's verdict: an unresolved diagnosed cause anywhere
+        # must also block a green COMPLETE (advisory-only let v044 ship green
+        # with an open task_check_mismatch over a broken build).
+        _open = self._doctor_open_causes()
+        if _open:
+            root_red = True
         if root_red:
+            _od = (f"; doctor causes still open: "
+                   f"{', '.join(f'{n}:{c}' for n, c in _open)}" if _open else "")
             self.emit("integrate", "verifier", "spec-integrate",
                       "L0:integrate",
                       "L0 integrate RED — project NOT complete",
                       "root gate recorded FAIL (record policy); the"
-                      " assembled product is not green",
+                      " assembled product is not green" + _od,
                       "integrate_verify", "FAIL", level=L_MILESTONE)
         else:
             self.emit("integrate", "verifier", "spec-integrate",
