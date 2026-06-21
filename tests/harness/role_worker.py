@@ -320,6 +320,13 @@ def _inline_file(root: Optional[str], rel: str) -> str:
         logging.getLogger("spec_flow.worker").warning(
             "inline truncation: %s dropped %d chars (limit %d)",
             rel, dropped, INLINE_FILE_LIMIT)
+        # 462: also hand the cut to the per-node truncation collector, so the
+        # doctor's silent_truncation detector has real evidence['dropped'].
+        try:
+            from . import truncation_log
+            truncation_log.record(f"{rel}:{dropped}")
+        except Exception:            # noqa: BLE001 — diagnostics never kill a run
+            pass
         text = (text[:INLINE_FILE_LIMIT]
                 + f"\n…(truncated: dropped {dropped} chars of {rel})")
     return text

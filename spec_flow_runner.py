@@ -28,6 +28,7 @@ Depth ladder (`spec` < `scaffold` < `verify` < `execute` < `product`):
 from __future__ import annotations
 
 import ast
+import contextlib
 import hashlib
 import json
 import os
@@ -192,6 +193,16 @@ except Exception:  # noqa: BLE001
         from harness import cycle_control as _cycle        # type: ignore
     except Exception:  # noqa: BLE001
         _cycle = None
+
+# 462: per-node truncation collector (doctor data source). Optional — when the
+# harness module is absent the engine simply has no dropped-marker evidence.
+try:
+    from tests.harness import truncation_log as _trunc     # type: ignore
+except Exception:  # noqa: BLE001
+    try:
+        from harness import truncation_log as _trunc       # type: ignore
+    except Exception:  # noqa: BLE001
+        _trunc = None
 
 NODE_ENGINES = ("inline", "fsm")
 
@@ -2026,6 +2037,13 @@ class Engine:
                         and lp.get("detail")]
                 if hist:
                     evidence["reason_history"] = hist
+            # 462: feed the silent_truncation detector — any input cut while
+            # building THIS node was collected per-node by the harness; drain it
+            # into evidence['dropped'] so a truncation-caused failure is visible.
+            if _trunc is not None and "dropped" not in evidence:
+                drops = _trunc.drain(nid)
+                if drops:
+                    evidence["dropped"] = drops
             diag = self._doctor.diagnose(
                 node=nid, gate=gate, verdict=verdict,
                 evidence=evidence, context=ctx)
@@ -3824,17 +3842,23 @@ class Engine:
         shared workspace (default)."""
         impl = self.agents["implementer"]
         ws = self.workspace
+        # 462: mark any input drops during this leaf as belonging to THIS node,
+        # so the doctor's silent_truncation detector gets real evidence later.
+        _scope = (_trunc.node_scope(nid) if _trunc is not None
+                  else contextlib.nullcontext())
         isolated = (self._isolation == "worktree"
                     and getattr(ws, "enabled", False) and getattr(ws, "root", None))
         if not isolated:
-            impl(ictx)
+            with _scope:
+                impl(ictx)
             return
         _ws_tx = _load_ws_tx()
         if _ws_tx is None:
-            impl(ictx)
+            with _scope:
+                impl(ictx)
             return
         _ws_tx.ensure_repo(ws.root)
-        with _ws_tx.leaf_worktree(ws.root, fn, f"leaf:{nid}") as wt:
+        with _scope, _ws_tx.leaf_worktree(ws.root, fn, f"leaf:{nid}") as wt:
             # seed the leaf's spec into the worktree so it is self-contained
             # (the worktree branches off HEAD; an uncommitted spec is absent)
             self._seed_worktree_file(wt.path, ictx.get("spec"))

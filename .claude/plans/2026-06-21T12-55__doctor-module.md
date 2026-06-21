@@ -467,11 +467,16 @@ level_attempts, last_causeset, nonshrink_rounds, open{}}`.
     `complexity_to_tier` `spec_flow_remedies.py:215`; `DEFAULT_TIERS` `spec_flow_remedies.py:26`
 - [x] Инструмент `web_search` (поиск в интернете/доках) как ступень лестницы перед человеком
   → `search()` `spec_flow_websearch.py:42`, `summarize()` :61
-- [~] Источники данных детекторов: обход предков по `loops` (garbage_accumulation) + история причин (rewrite_loops) ПОДКЛЮЧЕНЫ; маркеры отброшенного (silent_truncation) и снимок памяти (memory_loss) — ещё нет
-  → `_doctor_advise` биндит живые `self.loops` в helpers + строит `reason_history`
-    из прошлых reject-записей узла `spec_flow_runner.py:1998-2012`; тест
-    `tests/coverage/test_diagnosers_data.py` (4 зелёных: ancestry fires/silent, rewrite fires/quiet);
-    `_truncation`/`_memory_absent` ждут плумбинга dropped/missing_decisions из движка (pending)
+- [~] Источники данных детекторов: ancestry/rewrite/truncation ПОДКЛЮЧЕНЫ;
+      memory_loss (`missing_decisions`) — ещё нет (нет реестра решений в движке)
+  → `_doctor_advise` биндит живые `self.loops` в helpers + `reason_history`
+    из reject-записей узла `spec_flow_runner.py:1998-2012`;
+    silent_truncation: коллектор `tests/harness/truncation_log.py` (per-node
+    ContextVar), producer — `_inline_file` `tests/harness/role_worker.py:314`,
+    движок ставит `node_scope` вокруг воркера `spec_flow_runner.py:_invoke_implementer`
+    + сливает `drain(nid)` в `evidence['dropped']` `spec_flow_runner.py:_doctor_advise`;
+    тесты `test_diagnosers_data.py` + `test_truncation_plumbing.py` (8 зелёных).
+    `_memory_absent` ждёт реестра решений (нет в движке — не выдумано, честно pending)
 - [x] Алгоритм `find_root` (бисекция/трассировка корневого источника)
   → `find_root()` `spec_flow_doctor.py:190`
 - [x] Метрики доктора в `RunResult` + сравнение прогонов (#31): число лечений, доля закрытых причин, READY, разброс голосов
