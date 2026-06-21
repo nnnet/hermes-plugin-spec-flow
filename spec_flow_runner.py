@@ -3414,6 +3414,13 @@ class Engine:
             return ""
         if not cmap:
             return ""
+        if node.get("id") == "product_entry":
+            # The assembly entry wires every sibling module and must dispatch ALL
+            # routes. Its difficulty is integration breadth, not line count, so a
+            # LoC-based label under-rates it and a weak model wires only the first
+            # module. Route it to the strongest available tier deterministically.
+            return str(cmap.get("branch", "") or cmap.get("leaf_big", "")
+                       or "strong")
         m = node.get("metrics") or {}
         if node.get("children"):
             label = "branch"

@@ -69,6 +69,17 @@ def test_branch_routes_strong():
     assert r._node_tier(node) == "strong"
 
 
+def test_product_entry_forced_strong_despite_small_loc():
+    # the assembly entry is small in LoC but wires every module + dispatches all
+    # routes — its difficulty is integration breadth, so it is forced to the
+    # strongest tier regardless of the LoC-based label (a weak model wires only
+    # the first module).
+    r = _runner()
+    node = {"id": "product_entry", "metrics": {"estimated_loc": 25,
+                                               "open_decisions": 0}}
+    assert r._node_tier(node) == "strong"
+
+
 def test_no_map_yields_empty_tier():
     r = Engine.__new__(Engine)
     r._project_meta = {}          # no complexity_to_tier override
