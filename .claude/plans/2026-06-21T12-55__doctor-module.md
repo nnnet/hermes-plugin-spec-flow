@@ -421,9 +421,12 @@ level_attempts, last_causeset, nonshrink_rounds, open{}}`.
 ещё не проиндексировала (LSP-кэш), номера строк взяты по живому коду (grep).
 
 Профилактика (в рабочих модулях, до доктора):
-- [ ] Модель по сложности узла: маршрутизация `chain_for` по метрикам `leaf_check`
-  → строит.блоки готовы: `complexity_to_tier()` `spec_flow_remedies.py:215`,
-    `chain_for_tier()` `tests/harness/llm_backend.py:306`; маршрутизация на спавне — НЕТ (pending)
+- [x] Модель по сложности узла: маршрутизация `chain_for` по метрикам `leaf_check`
+  → `Engine._node_tier` `spec_flow_runner.py:3243` (leaf_small/leaf_big/branch →
+    тир из `workers.complexity_to_tier`), врезка на спавне ставит `ictx["tier"]`
+    `spec_flow_runner.py:3951`; `chain_for(role, specialty, tier)` — известный тир
+    бьёт даже явные модели роли `tests/harness/llm_backend.py:260`; три пути
+    имплементера читают `ctx["tier"]`. Тест `test_complexity_routing.py` (6 зелёных)
 - [ ] Атомарность: предел «одна дельта на лист» в декомпозере + пороги `leaf_check`
   → пороги `MAX_MODULES/TASKS/INTERFACES/LOC` `spec_flow_tools.py:74-77`,
     `_handle_leaf_check` `spec_flow_tools.py:213`; ужесточение на разбиении — pending

@@ -3240,6 +3240,30 @@ class Engine:
         return _sp.resolve_specialty(node, self._project_meta,
                                      self._impl_specialties, self._auto_specialty)
 
+    def _node_tier(self, node: dict) -> str:
+        """424: map the node's leaf_check complexity to a power TIER name, so the
+        implementer spawns on a chain matched to difficulty — a hard node on the
+        strong chain, a trivial one on the cheap chain. '' when no mapping
+        resolves (routing falls back to the role's default chain). Pure, offline
+        and model-independent: decided purely by structure/metrics, never the
+        model. The label→tier map lives in config (workers.complexity_to_tier)."""
+        try:
+            import spec_flow_remedies as _rem
+            cmap = _rem.complexity_to_tier(self._project_meta)
+        except Exception:  # noqa: BLE001 — routing is best-effort, never fatal
+            return ""
+        if not cmap:
+            return ""
+        m = node.get("metrics") or {}
+        if node.get("children"):
+            label = "branch"
+        else:
+            cap = int((self.review_policy or {}).get("simple_max_loc", 60))
+            loc = int(m.get("estimated_loc", 0) or 0)
+            od = int(m.get("open_decisions", 0) or 0)
+            label = "leaf_small" if (loc <= cap and od == 0) else "leaf_big"
+        return str(cmap.get(label, "") or "")
+
     def _resolve_executor(self, node: dict) -> tuple:
         """C1: route a leaf to an executor. Returns (domain, team) where team is
         a D1 specialist LIST when the routed executor is a team-spec, else None
@@ -3922,6 +3946,15 @@ class Engine:
                 sp = self._resolve_specialty(node)
                 if sp:
                     ictx["specialty"] = sp
+                # 424: route the leaf to a power tier by its complexity, so a
+                # hard node spawns on a stronger model than a trivial one.
+                _tier = self._node_tier(node)
+                if _tier:
+                    ictx["tier"] = _tier
+                    self.emit("implement", "engine", "spec-implement",
+                              f"{nid}:route",
+                              f"complexity routing → tier {_tier}",
+                              _tier, "tier", level=L_DETAIL)
                 # C1: route the leaf to a domain executor. A team-spec executor
                 # runs the D1 orchestra with that team for THIS leaf (overrides
                 # the global implementer team); a named agent / no match keeps

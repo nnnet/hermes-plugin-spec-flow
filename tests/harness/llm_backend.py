@@ -257,16 +257,25 @@ def _is_free_model(model: str) -> bool:
     return bool(prov and prov.get("requests_per_day"))
 
 
-def chain_for(role: str, specialty: str = "") -> list[str]:
+def chain_for(role: str, specialty: str = "", tier: str = "") -> list[str]:
     """Ordered model chain for a role: primary first, quota fallbacks after.
     Every entry is validated against the provider registry.
 
     #10 (П13): when ``specialty`` is given and the role declares a chain for
     it under ``specialties.<name>``, that chain wins — a domain-specific node
     (frontend / db / api) routes to a better-fit model. Falls back to the
-    role's normal chain when the specialty is unknown."""
+    role's normal chain when the specialty is unknown.
+
+    424 (complexity routing): when ``tier`` names a KNOWN power tier
+    (workers.tiers.<tier>), that chain wins over everything — the engine sets
+    it at spawn from the node's leaf_check metrics, so a hard node routes to
+    the strong chain and a trivial one to the cheap chain. An unknown/unset
+    tier is ignored (the normal role/specialty resolution applies)."""
     role_cfg = WORKERS_CFG.get(role) or {}
     defaults = WORKERS_CFG.get("defaults") or {}
+    tier_chain = None
+    if tier:
+        tier_chain = ((WORKERS_CFG.get("tiers") or {}).get(tier) or {}).get("models")
     spec_chain = None
     if specialty:
         spec_cfg = (role_cfg.get("specialties") or {}).get(specialty) or {}
@@ -280,7 +289,8 @@ def chain_for(role: str, specialty: str = "") -> list[str]:
         if not t:
             return None
         return ((WORKERS_CFG.get("tiers") or {}).get(t) or {}).get("models")
-    chain = (spec_chain
+    chain = (list(tier_chain) if tier_chain
+             else spec_chain
              or role_cfg.get("models")
              or ([role_cfg["model"]] if role_cfg.get("model") else None)
              or _tier_models(role_cfg)
@@ -297,10 +307,11 @@ def chain_for(role: str, specialty: str = "") -> list[str]:
     return list(chain)
 
 
-def model_for(role: str, specialty: str = "") -> str:
+def model_for(role: str, specialty: str = "", tier: str = "") -> str:
     """The role's primary model (head of the chain) — for logs and meta.
-    #10: a specialty routes to its own chain head when configured."""
-    return chain_for(role, specialty)[0]
+    #10: a specialty routes to its own chain head when configured.
+    424: a complexity tier routes to its tier chain head when set."""
+    return chain_for(role, specialty, tier)[0]
 
 
 def chain_for_tier(tier: str) -> list[str]:

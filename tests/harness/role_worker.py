@@ -118,12 +118,13 @@ def _with_language(system: str) -> str:
     return system + _LANG_DIRECTIVE.format(lang=worker_language())
 
 
-def _model_for(role: str, specialty: str = "") -> str:
+def _model_for(role: str, specialty: str = "", tier: str = "") -> str:
     # delegates to the shared per-role resolver: the case YAML `workers:`
     # block is the single source of truth when present (env vars apply only
     # without it); paid models stay forbidden — llm_backend gates ':free'.
     # #10: a node's specialty routes the role to a specialty-specific chain.
-    return llm_backend.model_for(role, specialty)
+    # 424: a node's complexity tier (engine-set at spawn) routes to a tier chain.
+    return llm_backend.model_for(role, specialty, tier)
 
 
 def _chat_only() -> bool:
@@ -704,7 +705,8 @@ def _candidate_compiles(raw: str) -> "tuple[bool, int, str]":
 
 def _ensemble_generate(prompt: str, *, node: str, system: str, allowed: list,
                        disallowed: list, cwd: str, model: str, channel: Any,
-                       specialty: str, meta: Optional[dict] = None,
+                       specialty: str, tier: str = "",
+                       meta: Optional[dict] = None,
                        params: Optional[dict] = None) -> str:
     """Generate up to N candidate implementations from different free models
     and return the reply of the first that compiles clean (else the best by
@@ -719,7 +721,7 @@ def _ensemble_generate(prompt: str, *, node: str, system: str, allowed: list,
                              disallowed=disallowed, cwd=cwd, model=model,
                              channel=channel, specialty=specialty, meta=meta,
                              params=params)
-    chain = llm_backend.chain_for("implementer", specialty) or [model]
+    chain = llm_backend.chain_for("implementer", specialty, tier) or [model]
     best = None     # (score_tuple, raw)
     for i in range(n):
         m = chain[i % len(chain)]
@@ -1475,8 +1477,10 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
 
     def _implement_claude(ctx: dict, ws_root: str, nid: str, fn: str) -> Any:
         # #10: a node's specialty routes the implementer to a specialty model
+        # 424: a node's complexity tier (engine-set) routes to a tier chain
         specialty = str(ctx.get("specialty", "") or "")
-        model = _model_for("implementer", specialty)
+        tier = str(ctx.get("tier", "") or "")
+        model = _model_for("implementer", specialty, tier)
         prompt = _IMPLEMENT_TASK.format(title=ctx["title"], id=nid,
                                         spec=ctx["spec"], fn=fn) \
             + memory.recall_block_for("implementer", ctx["title"]) \
@@ -1506,8 +1510,10 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         writes them and runs pytest for REAL; one repair round on failure."""
         ws = ctx["workspace"]
         # #10: a node's specialty routes the implementer to a specialty model
+        # 424: a node's complexity tier (engine-set) routes to a tier chain
         specialty = str(ctx.get("specialty", "") or "")
-        model = _model_for("implementer", specialty)
+        tier = str(ctx.get("tier", "") or "")
+        model = _model_for("implementer", specialty, tier)
         spec_body = _inline_file(ws_root, ctx["spec"])
         prompt = _IMPLEMENT_CHAT_TASK.format(
             title=ctx["title"], id=nid, spec=ctx["spec"],
@@ -1560,7 +1566,7 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         raw = _ensemble_generate(prompt, node=nid, system=system,
                                  allowed=allowed, disallowed=disallowed,
                                  cwd=ws_root, model=model, channel=channel,
-                                 specialty=specialty)
+                                 specialty=specialty, tier=tier)
         try:
             parsed = _extract_json(raw)
         except ValueError:
