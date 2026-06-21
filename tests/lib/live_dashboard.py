@@ -1230,6 +1230,12 @@ def _build_state(run_dir: pathlib.Path) -> dict:
     last_start = list(open_calls.values())[-1] if open_calls else None
     _ROLE_RU = {"decomposer": "декомпозирует", "implementer": "пишет код",
                 "reviewer": "ревьюит", "researcher": "исследует"}
+    # implement/decompose are orchestras — show WHICH specialist is live now, so
+    # the per-step timer reset (architect→coder→tester→fixer) reads as progress.
+    _STEP_RU = {"architect": "архитектор", "coder": "кодер",
+                "tester": "тестировщик", "fixer": "ремонтник",
+                "drafter": "черновик", "critic": "критик",
+                "reconciler": "сведение"}
     if not done:
         if open_calls:
             parts = []
@@ -1246,8 +1252,13 @@ def _build_state(run_dir: pathlib.Path) -> dict:
                     lvl = (meta.get(node) or {}).get("depth")
                 chip = (f" (L-{lvl})"
                         if isinstance(lvl, int) and lvl >= 0 else "")
+                # show the live specialist of an orchestra (architect/coder/…)
+                # so the resetting per-step timer reads as real progress
+                _step = e.get("step")
+                spec = (f" · {_STEP_RU.get(_step, _step)}"
+                        if _step and _step != e.get("role") else "")
                 parts.append(f"{_ROLE_RU.get(e.get('role'), e.get('role'))}"
-                             f" «{node}»{chip}")
+                             f" «{node}»{chip}{spec}")
             current = "🟢 " + "  ⏐  ".join(parts)
         elif events:
             le = events[-1]

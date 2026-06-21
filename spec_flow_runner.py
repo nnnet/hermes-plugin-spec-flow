@@ -4241,6 +4241,43 @@ class Engine:
                       "# Smoke-derived API contract (auto-generated)\n\n"
                       + "\n".join(blocks), "contract")
 
+    def _concise_red_reason(self, out: str, boot_detail: str = "") -> str:
+        """Turn a raw failure dump into ONE human line for the dashboard + the
+        doctor — 'FAIL (scaffolds)' tells the operator nothing. Prefers the
+        boot-gate verdict (a 404 route is the real cause), else the pytest
+        'FAILED …' line + its assertion. Model-independent string surgery."""
+        if boot_detail:
+            for ln in boot_detail.splitlines():
+                s = ln.strip()
+                if s.startswith(("BOOTGATE_FAIL", "boot-gate RED", "- boot-gate")):
+                    return s[:200]
+            return boot_detail.strip().splitlines()[0][:200] if boot_detail.strip() else "boot-gate RED"
+        failed = [ln.strip() for ln in out.splitlines() if ln.startswith("FAILED ")]
+        assertion = [ln.strip() for ln in out.splitlines()
+                     if ln.lstrip().startswith("E   ")]
+        head = "; ".join(failed[:3])
+        tail = assertion[-1] if assertion else ""
+        reason = " — ".join(p for p in (head, tail) if p)
+        return reason[:240] or "tests failed (see TEST-RESULTS.md)"
+
+    def _attempt_integrate_repair(self, reason: str) -> bool:
+        """если падает → нужен рабочий доктор: a RED assembled product is
+        ANALYSED and a fix is ATTEMPTED, not merely recorded. Consults the doctor
+        on the integrate failure; if it prescribes reconcile_check, the engine
+        re-builds the declared entry through the real worker and re-boots. Returns
+        True iff the product now boots green. No-op when no product contract is
+        derivable from the human spec (non-web project / sim with no entry)."""
+        c = self._product_contract()
+        entry = c.get("entry") if c else None
+        if not entry:
+            return False
+        act = self._doctor_advise(
+            {"id": "L0:integrate"}, "L0:integrate", 0,
+            "integrate_verify", "FAIL", {"reasons": reason})
+        if act is not None and getattr(act, "kind", "") == "reconcile_check":
+            return self._remedy_reconcile_check(entry)
+        return False
+
     def _verify_tests(self) -> None:
         ws = self.workspace
         if not ws.enabled or not ws.root:
@@ -4249,47 +4286,72 @@ class Engine:
         if not tests_dir.exists():
             return
         self._derive_smoke_contract()
-        try:
-            # run from the workspace root: paths stay short (tests/test_x.py),
-            # confcutdir isolates the run from any host-project conftest.py;
-            # -v lists every single test with its verdict, not just the total
-            # --import-mode=importlib: tolerate same-basename test files across
-            # tests/ and tests/smoke/ (a late requirement's leaf test and its
-            # seeded smoke acceptance share a name) — the legacy prepend mode
-            # errors the WHOLE collection on a duplicate basename, a false red.
-            proc = subprocess.run(["python3", "-m", "pytest", "-v", "--no-header",
-                                   f"--confcutdir={ws.root}", "-p", "no:cacheprovider",
-                                   "--import-mode=importlib", "tests"],
-                                  capture_output=True, text=True, timeout=300,
-                                  cwd=str(ws.root))
-            passed = proc.returncode == 0
-            out = (proc.stdout or "") + (proc.stderr or "")
-        except Exception as exc:  # noqa: BLE001
-            passed, out = False, f"pytest error: {exc}"
+        # run from the workspace root: paths stay short (tests/test_x.py),
+        # confcutdir isolates the run from any host-project conftest.py;
+        # --import-mode=importlib tolerates same-basename test files across
+        # tests/ and tests/smoke/ (legacy prepend mode false-reds on a dup name).
+        _argv = ["python3", "-m", "pytest", "-v", "--no-header",
+                 f"--confcutdir={ws.root}", "-p", "no:cacheprovider",
+                 "--import-mode=importlib", "tests"]
+
+        def _run_suite() -> "tuple":
+            try:
+                p = subprocess.run(_argv, capture_output=True, text=True,
+                                   timeout=300, cwd=str(ws.root))
+                return p.returncode == 0, (p.stdout or "") + (p.stderr or "")
+            except Exception as exc:  # noqa: BLE001
+                return False, f"pytest error: {exc}"
+
+        passed, out = _run_suite()
         # B2 ROOT BOOT-GATE: a green corpus is HOLLOW if the assembled product
-        # does not serve its frozen contract. Boot the real WSGI entry and drive
-        # the contract — a non-200 route is a hard RED, even when every module
-        # unit-test passed (live v020: all routes 404'd under a green pytest).
+        # does not serve its frozen contract. A non-200 route is a hard RED even
+        # when every module unit-test passed (v020: all routes 404'd green).
+        boot_detail = ""
         if passed:
             boot_ok, boot_detail = self._assembled_product_boots()
             if not boot_ok:
                 passed = False
-                out = (out + "\n\n=== ROOT BOOT-GATE (assembled product) ===\n"
-                       + boot_detail + "\n")
-                self.emit("integrate", "verifier", "spec-integrate",
-                          "L0:integrate", "boot-gate over assembled product",
-                          boot_detail, "integrate_verify", "FAIL",
-                          level=L_MILESTONE)
-                self.loops.append({"type": "integrate-fail",
-                                   "task": getattr(self, "_root_id", "L0"),
-                                   "detail": boot_detail})
+                out += "\n\n=== ROOT BOOT-GATE (assembled product) ===\n" + boot_detail + "\n"
+        root_id = getattr(self, "_root_id", "L0")
+        reason = ""
+        if not passed:
+            # 1) RECORD it informatively — the real cause, never 'FAIL (scaffolds)'
+            reason = self._concise_red_reason(out, boot_detail)
+            self.emit("integrate", "verifier", "spec-integrate", "L0:integrate",
+                      "assembled product RED", reason,
+                      "integrate_verify", "FAIL", level=L_MILESTONE)
+            self.loops.append({"type": "integrate-fail", "task": root_id,
+                               "detail": reason})
+            # 2) ANALYSE + ATTEMPT A FIX (doctor → reconcile_check rebuilds the
+            #    entry through a real worker), then RE-VERIFY once.
+            if self._attempt_integrate_repair(reason):
+                passed, out = _run_suite()
+                if passed:
+                    b_ok, b_detail = self._assembled_product_boots()
+                    if not b_ok:
+                        passed = False
+                        out += "\n=== BOOT-GATE (post-repair) ===\n" + b_detail
+                if passed:
+                    # healed: drop the integrate-fail we recorded, mark green
+                    self.loops = [lp for lp in self.loops
+                                  if not (lp.get("task") == root_id
+                                          and lp.get("type") == "integrate-fail")]
+                    self.emit("integrate", "doctor", "spec-integrate",
+                              "L0:integrate",
+                              "reconcile_check healed the product (red→green)",
+                              "rebuilt entry: suite + boot-gate now green",
+                              "integrate_verify", "PASS", level=L_MILESTONE)
+                    reason = ""
+                else:
+                    reason = self._concise_red_reason(out) + " (still red after repair)"
         depth_name = next((k for k, v in DEPTHS.items() if v == self.depth), str(self.depth))
         ws._write("TEST-RESULTS.md",
                   f"# Test results (depth={depth_name})\n\nStatus: "
-                  f"{'✅ PASS' if passed else '❌ FAIL (scaffolds fail until implemented)'}\n\n"
+                  f"{'✅ PASS' if passed else '❌ FAIL — ' + reason}\n\n"
                   f"```\n{out[-20000:]}\n```\n", "test-results")
         self.emit("integrate", "verifier", "spec-integrate", "verify",
-                  "ran test suite (pytest)", "PASS" if passed else "FAIL (scaffolds)",
+                  "ran test suite (pytest)",
+                  "PASS" if passed else f"FAIL — {reason}",
                   "", "PASS" if passed else "FAIL", level=L_MILESTONE)
 
     def _assembled_product_boots(self) -> "tuple":
