@@ -330,7 +330,37 @@ def _node_files(ws: pathlib.Path, nid: str) -> dict:
     }
 
 
-def _events_by_node(events: list[dict]) -> dict:
+# which LLM role backs each trace phase (engine/deterministic steps use none);
+# implement is an orchestra, so try the specialist roles in build order
+_PHASE_ROLES = {
+    "decompose": ("decomposer",),
+    "review": ("reviewer",),
+    "implement": ("implementer", "coder", "architect", "tester", "fixer"),
+    "contract": ("implementer", "coder"),
+    "verify": ("verifier",),
+    "integrate": ("verifier",),
+}
+
+
+def _events_by_node(events: list[dict], llm: list[dict] | None = None) -> dict:
+    # model used per (node, role), from call_start records (they carry the model;
+    # call_ok/outcome drop it). Lets the events table show WHICH LLM/agent the
+    # role used on each phase. Engine/deterministic steps stay blank.
+    model_by: dict = {}
+    for e in (llm or []):
+        if e.get("event") == "call_start" and e.get("model"):
+            key = (str(e.get("node") or "").split(":")[0], str(e.get("role") or ""))
+            model_by[key] = str(e.get("model"))
+
+    def _model(nid: str, e: dict) -> str:
+        if str(e.get("profile") or "") == "engine":
+            return ""                      # deterministic engine step — no LLM
+        for role in _PHASE_ROLES.get(str(e.get("phase") or ""), ()):  # noqa
+            m = model_by.get((nid, role))
+            if m:
+                return m
+        return ""
+
     idx: dict[str, list[dict]] = {}
     for e in events:
         task = str(e.get("task") or "")
@@ -341,6 +371,7 @@ def _events_by_node(events: list[dict]) -> dict:
             "tick": e.get("tick"), "phase": e.get("phase"), "profile": e.get("profile"),
             "skill": e.get("skill"), "action": e.get("action"), "gate": e.get("gate"),
             "verdict": e.get("verdict"), "detail": e.get("detail"),
+            "model": _model(nid, e),
         })
     return idx
 
@@ -1064,7 +1095,7 @@ def _build_state(run_dir: pathlib.Path) -> dict:
     meta: dict = {}
     _flatten(tree, 0, meta, None)
     files = {nid: _node_files(ws, nid) for nid in meta} if ws.exists() else {}
-    ev_idx = _events_by_node(events)
+    ev_idx = _events_by_node(events, llm)
 
     # error badges: any REJECT/FAIL/ERROR verdict on the node's events marks
     # it on the tree + spec graph; PRUNED (dedup gate) gets its own badge
@@ -2737,8 +2768,11 @@ async function renderNodeBody(nd){
  else if(NTAB==='test'){b.innerHTML='<pre class=code>'+esc(await getFile(f.test))+'</pre>';}
  else if(NTAB==='contract'){b.innerHTML='<pre class=code>'+esc(await getFile(f.contract))+'</pre>';}
  else if(NTAB==='events'){
-   b.innerHTML='<table><thead><tr><th title="номер события в полном журнале">соб.№</th><th>фаза</th><th>роль</th><th>действие</th><th>гейт</th><th>вердикт</th><th>детали</th></tr></thead><tbody>'+
-   nd.events.map(e=>`<tr><td>${e.tick??''}</td><td>${esc(e.phase)}</td><td>${esc(e.profile)}</td><td>${esc(e.action)}</td><td>${esc(e.gate)}</td><td>${e.verdict?('<b>'+esc(e.verdict)+'</b>'):''}</td><td>${esc(e.detail||'')}</td></tr>`).join('')+'</tbody></table>';
+   // newest first (descending event number); error rows highlighted so a FAIL/
+   // REJECT/ERROR anywhere in the history is visible without scrolling
+   const evs=[...(nd.events||[])].sort((a,b)=>(Number(b.tick)||0)-(Number(a.tick)||0));
+   b.innerHTML='<table><thead><tr><th title="номер события в полном журнале">соб.№ ↓</th><th>фаза</th><th>роль</th><th>LLM/агент</th><th>действие</th><th>гейт</th><th>вердикт</th><th>детали</th></tr></thead><tbody>'+
+   evs.map(e=>{const bad=['REJECT','FAIL','ERROR'].includes(String(e.verdict));return `<tr${bad?' style="background:#3a1d1d"':''}><td>${e.tick??''}</td><td>${esc(e.phase)}</td><td>${esc(e.profile)}</td><td>${esc(e.model||'')}</td><td>${esc(e.action)}</td><td>${esc(e.gate)}</td><td>${e.verdict?('<b>'+esc(e.verdict)+'</b>'):''}</td><td>${esc(e.detail||'')}</td></tr>`;}).join('')+'</tbody></table>';
  }
  else if(NTAB==='versions'){
    // ordered: v1..vN (superseded) then current spec = newest
