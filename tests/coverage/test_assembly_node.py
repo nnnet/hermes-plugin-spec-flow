@@ -231,14 +231,16 @@ _WSGI_CONST = ["HTTP through a WSGI app (src/app.py exposes `wsgi_app`).",
                "POST /notes -> {id}; GET /notes -> {items}; GET /health 200."]
 
 
-def _engine_with_ws(tmp_path, app_src, constitution):
+def _engine_with_ws(tmp_path, app_src, constitution, goal=None):
     ws_root = tmp_path / "wk"
     (ws_root / "src").mkdir(parents=True)
     (ws_root / "src" / "app.py").write_text(app_src, encoding="utf-8")
     e = eng.Engine.__new__(eng.Engine)
     e.workspace = type("W", (), {"enabled": True, "root": str(ws_root)})()
     e._constitution = list(constitution)
-    e._goal = "notes service POST /notes GET /notes"
+    # the contract is DERIVED from the human description (constitution + goal);
+    # default to a web goal, but the skip case passes a non-web one
+    e._goal = ("notes service POST /notes GET /notes" if goal is None else goal)
     return e
 
 
@@ -255,7 +257,10 @@ def test_root_boot_gate_green_on_serving_product(tmp_path):
 
 
 def test_root_boot_gate_skipped_without_wsgi_entry(tmp_path):
-    # a non-web product (no wsgi_app in the constitution) is not boot-gated → p4/p5
-    e = _engine_with_ws(tmp_path, _BAD_APP, ["Plain library, no web entry."])
+    # a product whose HUMAN description names no HTTP route is not boot-gated:
+    # the contract is DERIVED from text, so neither constitution nor goal may
+    # mention a route (library/CLI/pipeline) → boot-gate skips.
+    e = _engine_with_ws(tmp_path, _BAD_APP, ["Plain library, no web entry."],
+                        goal="a reusable parsing library, no HTTP service")
     ok, _ = e._assembled_product_boots()
     assert ok

@@ -1462,7 +1462,12 @@ _ROOT_BOOT_PROBE = r'''
 import glob, importlib, io, json, os, sys, tempfile
 from pathlib import Path
 ws = Path(sys.argv[1]).resolve()
-want_notes = sys.argv[2] == "1"
+cfg = json.loads(sys.argv[2]) if len(sys.argv) > 2 else {}
+callables = cfg.get("callable") or ["wsgi_app", "application", "app"]
+entry_stem = cfg.get("entry_stem") or ""
+ok_route = cfg.get("ok_route") or ""
+html_route = cfg.get("html_route") or ""
+json_roundtrip = cfg.get("json_roundtrip") or ""
 sys.path.insert(0, str(ws / "src"))
 db = os.path.join(tempfile.mkdtemp(prefix="rootboot-"), "boot.db")
 for k in ("MARKETPLACE_DB", "NOTES_DB", "NOTES_DB_PATH", "APP_DB", "DB_PATH"):
@@ -1473,8 +1478,8 @@ def fail(msg):
     raise SystemExit(0)
 
 cands = []
-if (ws / "src" / "app.py").exists():
-    cands.append("app")
+if entry_stem and (ws / "src" / (entry_stem + ".py")).exists():
+    cands.append(entry_stem)
 for f in sorted(glob.glob(str(ws / "src" / "*.py"))):
     stem = Path(f).stem
     if stem != "__init__" and stem not in cands:
@@ -1486,7 +1491,7 @@ for name in cands:
     except Exception as exc:  # noqa: BLE001
         last_err = "import %s: %r" % (name, exc)
         continue
-    for attr in ("wsgi_app", "application", "app"):
+    for attr in callables:
         c = getattr(m, attr, None)
         if callable(c):
             wsgi = c
@@ -1494,7 +1499,7 @@ for name in cands:
     if wsgi is not None:
         break
 if wsgi is None:
-    fail("no module under src/ exposes a callable wsgi_app/application/app"
+    fail("no module under src/ exposes a callable %s" % "/".join(callables)
          + ((" (last import error: " + last_err + ")") if last_err else ""))
 
 def call(method, path, payload=None, query=""):
@@ -1511,29 +1516,31 @@ def call(method, path, payload=None, query=""):
     raw = b"".join(chunks if chunks else [])
     return cap.get("status", 0), raw
 
-st, _ = call("GET", "/health")
-if st != 200:
-    fail("GET /health -> %s (expected 200)" % st)
-st, raw = call("GET", "/ui")
-text = (raw or b"").decode("utf-8", "replace").lower()
-if st != 200 or ("<" not in text):
-    fail("GET /ui -> %s / not HTML" % st)
-if want_notes:
-    st, raw = call("POST", "/notes", {"text": "rootboot"})
-    if st not in (200, 201):
-        fail("POST /notes -> %s" % st)
-    st, raw = call("GET", "/notes")
+if ok_route:
+    st, _ = call("GET", ok_route)
     if st != 200:
-        fail("GET /notes -> %s" % st)
+        fail("GET %s -> %s (expected 200)" % (ok_route, st))
+if html_route:
+    st, raw = call("GET", html_route)
+    text = (raw or b"").decode("utf-8", "replace").lower()
+    if st != 200 or ("<" not in text):
+        fail("GET %s -> %s / not HTML" % (html_route, st))
+if json_roundtrip:
+    st, raw = call("POST", json_roundtrip, {"text": "rootboot"})
+    if st not in (200, 201):
+        fail("POST %s -> %s" % (json_roundtrip, st))
+    st, raw = call("GET", json_roundtrip)
+    if st != 200:
+        fail("GET %s -> %s" % (json_roundtrip, st))
     try:
         data = json.loads(raw or b"{}")
         items = data.get("items", data if isinstance(data, list) else [])
         texts = " ".join(str(i.get("text", "")) for i in items
                          if isinstance(i, dict))
     except Exception as exc:  # noqa: BLE001
-        fail("GET /notes body not JSON: %r" % (exc,))
+        fail("GET %s body not JSON: %r" % (json_roundtrip, exc))
     if "rootboot" not in texts:
-        fail("POST then GET /notes did not round-trip the note")
+        fail("POST then GET %s did not round-trip" % json_roundtrip)
 print("BOOTGATE_OK")
 '''
 
@@ -2028,10 +2035,12 @@ class Engine:
                       verdict="REJECT", level=L_MILESTONE)
             if act.record is not None:
                 self.loops.append(act.record.as_loop())
+            return act                       # the engine seam may EXECUTE it
         except Exception as exc:  # noqa: BLE001
             _DOCTOR_LOG.exception("advise FAILED node=%s gate=%s", nid, gate)
             self.emit("review", "doctor", "", nid, "doctor advise failed",
                       str(exc)[:160], level=L_MILESTONE)
+        return None
 
     def _doctor_resolve(self, node: dict, nid: str, gate: str) -> None:
         """Close the doctor's cause on this node: a later PASS on the same gate
@@ -2067,6 +2076,67 @@ class Engine:
             if cause and cause != "(none)":
                 out.append((nid, cause))
         return out
+
+    def _remedy_reconcile_check(self, entry: str) -> bool:
+        """Executable reconcile_check (Ф6): the integrate gate found the declared
+        product entry missing. Re-run the ENGINE's OWN assembly leaf — its spec
+        (built by _assembly_node) tells the implementer to create the entry
+        wiring the modules already under src/ — through THIS run's implementer
+        worker (sim or live, never a hand-written scaffold), then re-verify with
+        the boot-gate. Green boot => drop the root integrate-fail + close the
+        doctor cause (row turns green). Otherwise stay RED. Returns True iff healed."""
+        ws = self.workspace
+        if not (getattr(ws, "enabled", False) and getattr(ws, "root", None)
+                and "implementer" in self.agents):
+            return False
+        asm = self._assembly_node()
+        if not asm:
+            return False
+        module = Path(asm.get("code_target") or entry).stem    # src/app.py -> app
+        spec_rel = f"specs/{module}.md"
+        try:
+            sp = Path(ws.root) / spec_rel
+            sp.parent.mkdir(parents=True, exist_ok=True)
+            sp.write_text(str(asm.get("spec_markdown") or ""), encoding="utf-8")
+        except OSError as exc:
+            self.emit("integrate", "doctor", "", "L0:integrate",
+                      "reconcile_check could not write the build spec",
+                      str(exc)[:140], "integrate_verify", "FAIL", level=L_MILESTONE)
+            return False
+        self.emit("integrate", "doctor", "spec-implement", "L0:integrate",
+                  f"reconcile_check: build declared entry {entry}",
+                  "re-running the implementer on the assembly spec to wire wsgi_app",
+                  "integrate_verify", "", level=L_MILESTONE)
+        ictx = {"node": "product_entry",
+                "title": str(asm.get("title") or f"Assemble {entry}"),
+                "depth": self.depth, "workspace": ws,
+                "spec": spec_rel, "module": module}
+        try:
+            self._invoke_implementer(ictx, "product_entry", module)
+        except Exception as exc:        # noqa: BLE001
+            self.emit("integrate", "doctor", "", "L0:integrate",
+                      "reconcile_check build raised", str(exc)[:140],
+                      "integrate_verify", "FAIL", level=L_MILESTONE)
+            return False
+        boot_ok, boot_detail = self._assembled_product_boots()
+        if not boot_ok:
+            self.emit("integrate", "verifier", "spec-integrate", "L0:integrate",
+                      "reconcile_check did not fix the build", boot_detail,
+                      "integrate_verify", "FAIL", level=L_MILESTONE)
+            return False
+        # healed: drop the recorded root fail and close the cause
+        _rid = getattr(self, "_root_id", "L0")
+        self.loops = [lp for lp in self.loops
+                      if not (lp.get("type") == "integrate-fail"
+                              and str(lp.get("task")) == str(_rid)
+                              and "entry" in str(lp.get("detail", "")).lower())]
+        self.emit("integrate", "verifier", "spec-integrate", "L0:integrate",
+                  "reconcile_check OK — declared entry built & boots green",
+                  "boot-gate green over the assembled product",
+                  "integrate_verify", "PASS", level=L_MILESTONE)
+        self._doctor_resolve({"id": "L0:integrate"}, "L0:integrate",
+                             "integrate_verify")
+        return True
 
     def _amend_llm_router(self, statement: str, modules: list,
                           candidates_text: "Optional[dict]") -> "Optional[str]":
@@ -2123,6 +2193,60 @@ class Engine:
                 continue
         return None, None
 
+    def _product_contract(self) -> dict:
+        """Derive the runnable-product contract from the project's OWN HUMAN
+        description — NEVER from structured config. No `product:` key is read;
+        the plugin works only from specs born of human text. Sources: the
+        constitution + goal + accumulated human requirements (so a HUMAN-injected
+        route like /ui is picked up too). A project that describes no HTTP service
+        (library / CLI / pipeline) yields {} ⇒ no assembly node, no boot-gate, no
+        reconcile. Returns {entry, callable, boot:{ok_route, html_route,
+        json_roundtrip}} or {}. Heuristic, model-independent (pure text)."""
+        texts = [str(t) for t in (self._constitution or [])]
+        if getattr(self, "_goal", ""):
+            texts.append(str(self._goal))
+        try:                     # human requirements added mid-run (injections)
+            texts += [str(s) for (_n, s) in (self._standing_requirements or [])]
+        except Exception:        # noqa: BLE001
+            pass
+        blob = "\n".join(texts)
+        low = blob.lower()
+        # routes the HUMAN described: METHOD /path
+        routes: dict = {}
+        for m in re.finditer(
+                r"\b(GET|POST|PUT|DELETE|PATCH)\s+(/[A-Za-z0-9_./{}-]*)", blob):
+            routes.setdefault(m.group(2).rstrip(".,;:)"), set()).add(
+                m.group(1).upper())
+        if not routes:
+            return {}            # no HTTP route described ⇒ not a runnable web product
+        # entry/callable IF the human named them ("src/app.py exposes wsgi_app");
+        # else the runner's Python-WSGI build convention.
+        em = re.search(r"(src/[A-Za-z0-9_./-]+\.py)", blob)
+        entry = em.group(1) if em else "src/app.py"
+        cm = re.search(r"exposes?\s+`?([a-z_][a-z0-9_]*)`?", low)
+        callables = [cm.group(1)] if cm else ["wsgi_app", "application", "app"]
+        # classify the described routes into boot checks from the human wording
+        boot: dict = {}
+        for path, methods in routes.items():
+            n = path.lower()
+            if any(k in n for k in ("health", "status", "ping", "ready", "live")):
+                boot.setdefault("ok_route", path)
+            elif "POST" in methods and "GET" in methods:
+                boot.setdefault("json_roundtrip", path)
+        for path, methods in routes.items():     # an HTML page route
+            if "GET" in methods and path not in boot.values():
+                i = low.find(path.lower())
+                if any(k in low[max(0, i - 90):i + 90]
+                       for k in ("html", "page", "browser", "form", "renders")):
+                    boot.setdefault("html_route", path)
+                    break
+        if not boot:                              # fall back to the first GET
+            for path, methods in routes.items():
+                if "GET" in methods:
+                    boot["ok_route"] = path
+                    break
+        return {"entry": entry, "callable": callables, "boot": boot}
+
     def _assembly_node(self) -> "Optional[dict]":
         """B2 mechanism 3: an ENGINE-generated assembly leaf.
 
@@ -2142,37 +2266,31 @@ class Engine:
         if os.environ.get("SPEC_FLOW_PRE_GATE", "") in (
                 "", "0", "false", "False", "no"):
             return None
-        # Entry detection is INLINE — the plugin must not import the test
-        # harness (tests/ is not on sys.path inside a real run; the old
-        # `from tests.harness import contract_checks` silently raised, the
-        # except swallowed it, entry became None and the node never injected).
-        blob = " ".join(str(r) for r in (self._constitution or [])).lower()
-        if "wsgi_app" not in blob or not ("app.py" in blob or "src/app" in blob):
-            return None             # no declared entry ⇒ no assembly (p4/p5)
-        entry = "src/app.py"
+        # Entry comes from the DECLARED product contract — no hardcoded
+        # 'src/app.py'/'wsgi_app'. No contract => no assembly (library/CLI/…).
+        c = self._product_contract()
+        if not c:
+            return None
+        entry = c["entry"]
         if (Path(self.workspace.root) / entry).is_file():
             return None             # a feature leaf already built the entry
-        # The leaf pipeline derives the output file from the node id unless a
-        # code_target overrides it (code_fn = Path(code_target).stem). Without
-        # this the engine tracked src/product_entry.py while the constitution
-        # and the boot-gate demand src/app.py — a permanent name mismatch that
-        # left the worker writing only a test and the entry never built. Pin
-        # the target so the implementer writes EXACTLY src/app.py.
+        callable_name = (c["callable"] or ["wsgi_app"])[0]
+        ok_route = str(c["boot"].get("ok_route") or "")
         api = self._existing_src_api()
         # The implementer reads the node's SPEC, not a `requirement` field, so
-        # the build directive goes into spec_markdown (which lands in the spec
-        # body); the title is the short heading.
+        # the build directive goes into spec_markdown; the title is the heading.
+        boot_line = (f" The product must boot in a fresh process and answer "
+                     f"`GET {ok_route}` -> 200." if ok_route else "")
         spec_md = (
             "## ASSEMBLE THE PRODUCT ENTRY (engine-required, binding)\n\n"
-            f"Create `{entry}` exposing a module-level `wsgi_app` callable that "
-            "wires the feature modules ALREADY built under `src/` into one "
-            "running WSGI app. Import the existing modules (do NOT reimplement "
-            "them, do NOT mock them); dispatch every endpoint the constitution "
-            "API contract declares to the matching handler/storage already "
-            "present. The app must boot in a fresh process and answer "
-            "`GET /health` -> 200. Standard library only.\n\n"
+            f"Create `{entry}` exposing a module-level `{callable_name}` callable "
+            "that wires the feature modules ALREADY built under `src/` into one "
+            "running product. Import the existing modules (do NOT reimplement "
+            "them, do NOT mock them); dispatch every endpoint the contract "
+            "declares to the matching handler/storage already present."
+            + boot_line + " Standard library only.\n\n"
             + (api + "\n\n" if api else "")
-            + "### Constitution API contract\n"
+            + "### Contract (binding)\n"
             + "\n".join(f"- {r}" for r in (self._constitution or [])))
         return {"id": "product_entry",
                 "title": "Assemble product entry (" + entry + ")",
@@ -2199,8 +2317,9 @@ class Engine:
         if not root.is_dir():
             return ""
         lines: list = []
+        _entry_name = Path((self._product_contract().get("entry") or "")).name
         for py in sorted(root.glob("*.py")):
-            if py.name in ("app.py", "__init__.py"):
+            if py.name in (_entry_name, "__init__.py"):
                 continue
             try:
                 tree = ast.parse(py.read_text(encoding="utf-8", errors="replace"))
@@ -2555,12 +2674,10 @@ class Engine:
         # / no entry declared, behavior is unchanged.
         if os.environ.get("SPEC_FLOW_PRE_GATE", "") not in ("", "0", "false",
                                                             "False", "no"):
-            # inline entry detection — the plugin must not import the test
-            # harness (it is not importable inside a real run; see _assembly_node)
-            _blob = " ".join(str(r) for r in
-                             (self._constitution or [])).lower()
-            entry = ("src/app.py" if "wsgi_app" in _blob
-                     and ("app.py" in _blob or "src/app" in _blob) else None)
+            # entry comes from the DECLARED product contract (no hardcoded
+            # app.py/wsgi_app) — absent for non-web projects ⇒ nothing to gate
+            _c = self._product_contract()
+            entry = _c.get("entry") if _c else None
             if entry and not (Path(self.workspace.root) / entry).is_file():
                 self.emit("integrate", "engine", "spec-integrate",
                           "L0:integrate",
@@ -2570,7 +2687,7 @@ class Engine:
                           f"the product",
                           "integrate_verify", "FAIL", level=L_MILESTONE)
                 # Doctor (Ф5): integrate failure — diagnose + record remedy.
-                self._doctor_advise(
+                _act = self._doctor_advise(
                     {"id": "L0:integrate"}, "L0:integrate", 0,
                     "integrate_verify", "FAIL",
                     {"reasons": f"declared product entry {entry} not built"})
@@ -2583,6 +2700,13 @@ class Engine:
                 self.loops.append({
                     "type": "integrate-fail", "task": _rid,
                     "detail": f"declared product entry {entry} not built"})
+                # EXECUTE the doctor's verdict (Ф6): reconcile_check actually
+                # re-builds the declared entry through the real implementer and
+                # re-boots; on a green boot it drops the root fail recorded above
+                # and closes the cause (row red->green). Advisory-only let v044/v047
+                # ship/stall with a broken build.
+                if _act is not None and getattr(_act, "kind", "") == "reconcile_check":
+                    self._remedy_reconcile_check(entry)
 
         # Sweep: fire any declared revision that did not meet its in-run
         # trigger condition (back-compat + nothing declared is silently dropped).
@@ -4014,14 +4138,19 @@ class Engine:
         ws = self.workspace
         if not (ws.enabled and ws.root):
             return True, ""
-        blob = " ".join(str(r) for r in (self._constitution or [])).lower()
-        if "wsgi_app" not in blob or not ("app.py" in blob or "src/app" in blob):
-            return True, ""                 # no declared entry → not applicable
-        goalblob = (blob + " " + str(getattr(self, "_goal", "") or "")).lower()
-        want_notes = "1" if "/notes" in goalblob else "0"
+        c = self._product_contract()
+        if not c:
+            return True, ""                 # no declared runnable product → n/a
+        boot = c["boot"]
+        probe_cfg = json.dumps({
+            "callable": c["callable"],
+            "entry_stem": Path(c["entry"]).stem,
+            "ok_route": boot.get("ok_route", ""),
+            "html_route": boot.get("html_route", ""),
+            "json_roundtrip": boot.get("json_roundtrip", "")})
         try:
             proc = subprocess.run(
-                ["python3", "-c", _ROOT_BOOT_PROBE, str(ws.root), want_notes],
+                ["python3", "-c", _ROOT_BOOT_PROBE, str(ws.root), probe_cfg],
                 capture_output=True, text=True, timeout=60)
             sout = (proc.stdout or "") + (proc.stderr or "")
         except Exception as exc:  # noqa: BLE001
