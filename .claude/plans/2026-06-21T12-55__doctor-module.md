@@ -510,9 +510,16 @@ level_attempts, last_causeset, nonshrink_rounds, open{}}`.
 Проверка:
 - [x] Юнит: чистая математика контура + мердж конфига `doctor:`
   → `tests/coverage/test_doctor_core.py`, `test_tiers.py`, `test_websearch.py` (89 зелёных)
-- [ ] Golden: `enabled=true` без переопределений = текущие политики; `enabled=false` = идентично
-  → pending (нужен прогон)
-- [ ] E2E p6 (как v041): `delete_note` получает причину, проходит лестницу, не уходит с пустой дельтой; строка на дашборде красная→зелёная
-  → pending (прогон)
+- [x] Golden/характеризация: `enabled=false` по умолчанию (обратная совместимость) + карта «причина→первое лечение» 15 причин + завершаемость каждой лестницы
+  → `tests/coverage/test_doctor_golden.py` (4 зелёных); контур/`treat` уже в `test_doctor_core.py`
+- [x] Шов integrate ИСПОЛНЯЕТ вердикт доктора (не advisory) — критичный фикс из v044
+  → пред-гейт «entry not built» пишет корневой `integrate-fail`; `_doctor_open_causes()`
+    `spec_flow_runner.py` ORится в `root_red` → открытая причина блокирует зелёный COMPLETE.
+    v044: COMPLETE/зелёный над битой сборкой (500 no-such-table) → v045 (тот же чекпоинт):
+    NOT complete / RED. Commit `2e0f70e`.
+- [~] E2E p6 (как v041): `delete_note` получает причину, проходит лестницу; красная→зелёная
+  → ЧАСТИЧНО: негативная половина доказана (v045 — битая сборка теперь RED, не COMPLETE).
+    Позитивная (полный product-прогон до зелёного рабочего продукта) — v046 идёт (отвязанно,
+    depth=product, doctor on)
 - [ ] Обновить указатель сабмодуля spec-flow в родителе
-  → pending
+  → pending (только после зелёного E2E v046)
