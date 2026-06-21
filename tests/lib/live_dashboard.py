@@ -1154,7 +1154,12 @@ def _build_state(run_dir: pathlib.Path) -> dict:
         key = (e.get("node"), e.get("role"))
         if e.get("event") == "call_start":
             open_calls[key] = e
-        elif e.get("event") == "outcome":
+        elif e.get("event") in ("call_ok", "call_error", "outcome"):
+            # a call closes with call_ok/call_error (per LLM call); 'outcome' is
+            # a per-node summary that does not fire for every call. Popping only
+            # on 'outcome' left ~half the calls dangling 'open' forever — incl.
+            # the synthetic 'late-requirement' (amend-route) call, which then
+            # showed as the active node for the whole run. Pop on any completion.
             open_calls.pop(key, None)
     # The orchestra emits SEVERAL call_start per (node, role) — architect / coder
     # / tester / fixer and retries — but only ONE 'outcome', so a done node can
