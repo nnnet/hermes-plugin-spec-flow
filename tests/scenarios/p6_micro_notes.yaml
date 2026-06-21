@@ -15,11 +15,11 @@
 name: p6-micro-notes
 node_engine: fsm
 
-# NOTE: parallel leaves (parallel.children + isolation: worktree) are OFF here.
-# On a --from-run RESUME the per-leaf worktrees did not merge their files back
-# into the shared workspace, so the assembled src/ lost app.py and several
-# modules (v051 RED: "src/app.py never built"). p6 stays sequential + shared
-# until worktree merge-back-on-resume is fixed; the baseline assembles cleanly.
+# Parallel sibling leaves: up to 3 leaves of a branch build at once. HARD RULE —
+# parallel workers MUST be physically isolated: each leaf builds in its OWN git
+# worktree and merges back with a merge-tree pre-flight (no shared-dir dups).
+parallel: {children: 3}
+isolation: worktree
 
 goal: >
   A tiny notes service. Two HTTP endpoints over a WSGI app:
@@ -161,22 +161,13 @@ injections:
         Serve GET /ping returning the plain text "pong" (content-type
         text/plain, status 200). It touches nothing else. Build it AND prove
         GET /ping returns exactly "pong". Standard library only.
-  # Possible HUMAN answers — handed to the plugin ONLY when a worker actually
-  # asks a question, and only the one whose `match` is found in that question
-  # (else `default`). Never pushed proactively; one reply per real question.
+  # HUMAN answer handed to the plugin ONLY when a worker actually asks, to
+  # unblock without babysitting. STRICT anti-leak rule: NO solution hints — the
+  # reply must NOT name the file/route/field/form/storage or otherwise design
+  # the feature for the worker. Everything needed is already in the requirement
+  # statement; the worker must read and derive it. A single neutral nudge only.
   answers:
-    default: "Proceed with the simplest correct standard-library approach; do not block on this."
-    faq:
-      - {match: "port", reply: "Any free localhost port is fine; tests drive the WSGI app directly, no real socket needed."}
-      - {match: "framework", reply: "Standard library only — no Flask/Django. Plain WSGI, return HTML strings."}
-      - {match: "storage", reply: "Reuse the existing notes storage (src/db.py) and the /notes logic; do not add new storage."}
-      - {match: "database", reply: "Reuse the existing sqlite storage via src/db.py; no schema changes."}
-      - {match: "form", reply: "A plain HTML <form> that POSTs to /ui with one text input named \"text\"; no JavaScript."}
-      - {match: "field", reply: "The text input is named exactly \"text\"."}
-      - {match: "order", reply: "List notes newest-first, same as GET /notes."}
-      - {match: "path", reply: "Serve the page at GET /ui; the JSON API stays at /notes."}
-      - {match: "json", reply: "/ui returns HTML (text/html), not JSON; JSON stays at /notes."}
-      - {match: "file", reply: "Put it in src/web_ui.py as one feature leaf."}
+    default: "Proceed with the simplest correct standard-library approach that satisfies the requirement as written; do not block on this."
 
 # Review policy: rework to green, but a tight cap — review + repair are the
 # two biggest time sinks, so bound them and let the gate fail loudly instead
