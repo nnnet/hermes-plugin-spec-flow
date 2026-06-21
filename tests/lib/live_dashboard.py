@@ -1156,6 +1156,21 @@ def _build_state(run_dir: pathlib.Path) -> dict:
             open_calls[key] = e
         elif e.get("event") == "outcome":
             open_calls.pop(key, None)
+    # The orchestra emits SEVERAL call_start per (node, role) — architect / coder
+    # / tester / fixer and retries — but only ONE 'outcome', so a done node can
+    # keep a dangling open call and look like it is still executing. Reconcile
+    # against the node's LATEST lifecycle state in the trace: a node that already
+    # reached a terminal state is NOT active, whatever the llm-log left open.
+    _TERMINAL = {"to_done", "to_failed", "to_halted", "done", "to_integrated"}
+    node_state = {}
+    for e in events:
+        if e.get("phase") == "lifecycle":
+            nn = str(e.get("task") or e.get("node") or "").split(":")[0]
+            if nn:
+                node_state[nn] = str(e.get("action") or e.get("state") or "")
+    open_calls = {
+        k: e for k, e in open_calls.items()
+        if node_state.get(str(e.get("node") or "").split(":")[0]) not in _TERMINAL}
     last_start = list(open_calls.values())[-1] if open_calls else None
     _ROLE_RU = {"decomposer": "декомпозирует", "implementer": "пишет код",
                 "reviewer": "ревьюит", "researcher": "исследует"}
