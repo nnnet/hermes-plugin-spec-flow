@@ -235,7 +235,7 @@ workers:
   tiers:
     weak:   {models: [lmstudio/gpt-oss-20b, claude/haiku], temperature: 0.2}
     medium: {models: [xiaomimimo/mimo-v2.5, claude/haiku],  temperature: 0.1}
-    strong: {models: [xiaomimimo/mimo-v2.5-pro],            temperature: 0.0}
+    strong: {models: [xiaomimimo/mimo-v2.5-pro, claude/haiku], temperature: 0.0}
   complexity_to_tier: {leaf_small: weak, leaf_big: medium, branch: strong}
   providers:
     # Xiaomi MiMo — its OWN Bifrost provider "xiaomimimo" (custom OpenAI-compatible,
