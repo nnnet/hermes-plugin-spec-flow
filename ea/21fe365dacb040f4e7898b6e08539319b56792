@@ -1,0 +1,21 @@
+spec_flow_runner.py
+  s_a7f45290e91181::t_165f28685a9222 3417-3423
+tests/coverage/test_complexity_routing.py
+  s_a7f45290e91181::t_d4feaf9f228767 72-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.9",
+  "base_commit_sha": "ea21fe365dacb040f4e7898b6e08539319b56792",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
