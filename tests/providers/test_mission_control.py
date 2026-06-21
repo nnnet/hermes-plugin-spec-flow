@@ -61,6 +61,21 @@ def test_mc_creates_and_polls_to_done():
     assert res.meta["task_id"] == "T-42"
 
 
+def test_mc_create_id_under_task_envelope():
+    """MC wraps the new row as {"task": {"id": ...}}; the adapter must read the
+    nested id (the flat-only read made every real create fail 'no task id')."""
+    captured = []
+    transport = _scripted(
+        captured,
+        create_reply={"task": {"id": 91, "status": "inbox"}},
+        poll_replies=[{"task": {"id": 91, "status": "done",
+                                "output": {"files": {"f.py": "1\n"}}}}])
+    adapter = get_provider("mission-control", transport=transport)
+    res = adapter.execute(_task())
+    assert captured[1]["url"] == "https://mc.example/api/tasks/91"
+    assert res.artifacts == {"f.py": "1\n"}
+
+
 def test_mc_failed_task_is_verdict():
     transport = _scripted([], {"id": "T-1"},
                           [{"status": "failed", "error": "agent crashed"}])

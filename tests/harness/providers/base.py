@@ -83,19 +83,23 @@ def urllib_transport(url: str, *, method: str = "GET",
 
 def json_request(transport: Transport, url: str, *, method: str,
                  payload: Optional[dict] = None,
-                 headers: Optional[dict] = None) -> "tuple[int, Any]":
+                 headers: Optional[dict] = None,
+                 timeout: Optional[float] = None) -> "tuple[int, Any]":
     """POST/GET JSON via ``transport`` and parse a JSON reply.
 
     Why: every remote adapter speaks JSON over HTTP; centralising the encode/
     decode keeps each adapter to its own request-shaping logic.
     What: serialises ``payload`` (when given), sets the JSON content-type, and
-    returns ``(status, parsed_body_or_raw_text)``.
+    returns ``(status, parsed_body_or_raw_text)``. ``timeout`` (seconds) is
+    forwarded to the transport when given — some agents (the Hermes gateway runs
+    a full agent loop) need more than the transport's default.
     Test: drive with a fake transport asserting the url/method/body it received
     and returning a canned ``(200, json_text)``."""
     hdrs = {"Content-Type": "application/json", "Accept": "application/json"}
     hdrs.update(headers or {})
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
-    status, text = transport(url, method=method, headers=hdrs, body=body)
+    kw = {} if timeout is None else {"timeout": timeout}
+    status, text = transport(url, method=method, headers=hdrs, body=body, **kw)
     try:
         return status, json.loads(text) if text else {}
     except (ValueError, TypeError):

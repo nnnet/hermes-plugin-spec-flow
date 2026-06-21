@@ -70,7 +70,12 @@ class MissionControlProvider(Provider):
         if status >= 400 or not isinstance(body, dict):
             raise RuntimeError(f"mission-control create failed HTTP {status}: "
                                f"{str(body)[:200]}")
-        task_id = body.get("id") or body.get("task_id")
+        # MC wraps the created row in a {"task": {...}} envelope; accept both the
+        # wrapped and a flat shape (the flat form was the only one the adapter
+        # read before — which made every real create fail with 'no task id').
+        envelope = body.get("task") if isinstance(body.get("task"), dict) else body
+        task_id = (envelope.get("id") or envelope.get("task_id")
+                   or body.get("id") or body.get("task_id"))
         if not task_id:
             raise RuntimeError("mission-control create returned no task id")
 
@@ -81,6 +86,8 @@ class MissionControlProvider(Provider):
                                     method="GET", headers=headers)
             if st >= 400 or not isinstance(poll, dict):
                 raise RuntimeError(f"mission-control poll failed HTTP {st}")
+            if isinstance(poll.get("task"), dict):   # unwrap the {"task": {...}}
+                poll = poll["task"]
             state = str(poll.get("status") or poll.get("state") or "").lower()
             if state in _TERMINAL_FAIL:
                 return RoleResultLike(

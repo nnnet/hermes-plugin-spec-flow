@@ -1,8 +1,10 @@
 """Hermes provider adapter — request shaping + reply parsing (doc §4).
 
 Hermetic: a FAKE transport captures the (url, method, body) the adapter sends
-and returns a canned reply; NO network. Asserts the adapter POSTs the RoleTask
-to the right agent URL and maps the reply files into RoleResultLike.
+and returns a canned reply; NO network. The Hermes gateway is its OpenAI-
+compatible api_server, so the adapter POSTs an OpenAI chat completion to
+``/v1/chat/completions`` and maps the assistant content (a ``{"files": {...}}``
+or ``{"pass": ...}`` object) into RoleResultLike.
 """
 import json
 import pathlib
@@ -13,6 +15,12 @@ import pytest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from harness.providers import get_provider               # noqa: E402
 from harness.providers.base import RoleTaskLike          # noqa: E402
+
+
+def _chat(content: str) -> dict:
+    """An OpenAI chat-completion envelope carrying ``content``."""
+    return {"choices": [{"index": 0,
+                         "message": {"role": "assistant", "content": content}}]}
 
 
 def _fake(captured, reply):
@@ -26,25 +34,28 @@ def _fake(captured, reply):
 def _task():
     return RoleTaskLike(role="coder", node="leaf1", title="Leaf One",
                         spec="specs/leaf1.md", provider="hermes",
+                        model="claude/haiku",
                         context={"gateway": "https://hx.example",
                                  "agent": "senior-dev", "token": "T"})
 
 
-def test_hermes_posts_roletask_to_agent():
+def test_hermes_posts_chat_completion():
     captured = []
     adapter = get_provider("hermes", transport=_fake(
-        captured, {"files": {"src/leaf1.py": "x=1\n"}}))
+        captured, _chat(json.dumps({"files": {"src/leaf1.py": "x=1\n"}}))))
     res = adapter.execute(_task())
     assert len(captured) == 1
     call = captured[0]
     assert call["method"] == "POST"
-    assert call["url"] == "https://hx.example/v1/agents/senior-dev/messages"
+    assert call["url"] == "https://hx.example/v1/chat/completions"
     assert call["headers"]["Authorization"] == "Bearer T"
-    # the RoleTask travels in the body
-    assert call["body"]["role"] == "coder"
-    assert call["body"]["node"] == "leaf1"
-    assert "message" in call["body"]
-    # reply files become artifacts
+    # the RoleTask travels as chat messages; role/node land in the system content
+    msgs = call["body"]["messages"]
+    assert msgs[0]["role"] == "system"
+    assert "coder" in msgs[0]["content"] and "leaf1" in msgs[0]["content"]
+    assert msgs[-1]["role"] == "user"
+    assert call["body"]["model"] == "claude/haiku"
+    # a {"files": ...} content becomes artifacts
     assert res.kind == "files"
     assert res.artifacts == {"src/leaf1.py": "x=1\n"}
     assert res.meta["provider"] == "hermes"
@@ -52,12 +63,27 @@ def test_hermes_posts_roletask_to_agent():
 
 
 def test_hermes_verdict_reply():
-    """A bare pass/reasons reply maps to a verdict RoleResult."""
+    """A pass/reasons object in the assistant content maps to a verdict result."""
     adapter = get_provider("hermes", transport=_fake(
-        [], {"pass": False, "reasons": ["missing endpoint"]}))
+        [], _chat(json.dumps({"pass": False, "reasons": ["missing endpoint"]}))))
     res = adapter.execute(_task())
     assert res.kind == "verdict"
     assert res.verdict == {"pass": False, "reasons": ["missing endpoint"]}
+
+
+def test_hermes_plain_text_reply_kept():
+    """Non-JSON content is still returned as the agent's reply (no artifacts)."""
+    adapter = get_provider("hermes", transport=_fake([], _chat("all good")))
+    res = adapter.execute(_task())
+    assert res.artifacts == {}
+    assert res.meta["reply"] == "all good"
+
+
+def test_hermes_json_in_code_fence():
+    adapter = get_provider("hermes", transport=_fake(
+        [], _chat("here:\n```json\n{\"files\": {\"a.py\": \"1\"}}\n```")))
+    res = adapter.execute(_task())
+    assert res.artifacts == {"a.py": "1"}
 
 
 def test_hermes_http_error_raises():

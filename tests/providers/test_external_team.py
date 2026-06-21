@@ -41,9 +41,13 @@ def test_external_team_delegates_one_roletask(tmp_path):
         "external": True, "provider": "hermes",
         "gateway": "https://crew.example", "agent": "impl-crew"}}})
     sent = []
+    # the Hermes gateway answers as an OpenAI chat completion whose content is the
+    # {"files": ...} object the adapter asked for
+    reply_content = json.dumps({"files": {"src/leaf1.py": "x = 1\n",
+                                          "tests/test_leaf1.py": "assert True\n"}})
     transport = _fake_transport(
-        sent, {"files": {"src/leaf1.py": "x = 1\n",
-                         "tests/test_leaf1.py": "assert True\n"}})
+        sent, {"choices": [{"message": {"role": "assistant",
+                                        "content": reply_content}}]})
 
     agents = eng._wrap_external_teams(None, transport=transport)
     lb.configure_workers(None)
@@ -56,9 +60,10 @@ def test_external_team_delegates_one_roletask(tmp_path):
 
     # exactly ONE RoleTask was delegated for the whole role ...
     assert len(sent) == 1
-    assert sent[0]["url"] == "https://crew.example/v1/agents/impl-crew/messages"
-    assert sent[0]["body"]["role"] == "implementer"
-    assert sent[0]["body"]["node"] == "leaf1"
+    assert sent[0]["url"] == "https://crew.example/v1/chat/completions"
+    # role/node travel in the chat messages (system framing)
+    sysmsg = sent[0]["body"]["messages"][0]["content"]
+    assert "implementer" in sysmsg and "leaf1" in sysmsg
     # ... and the returned artifacts were written back into the workspace
     assert ws.written == {"src/leaf1.py": "x = 1\n",
                           "tests/test_leaf1.py": "assert True\n"}
