@@ -2191,7 +2191,10 @@ class Engine:
         if not (getattr(ws, "enabled", False) and getattr(ws, "root", None)
                 and "implementer" in self.agents):
             return False
-        asm = self._assembly_node()
+        # force=True: this is a REACTIVE heal — the entry may already exist but
+        # is RED (not serving its contract), so build the rebuild spec even when
+        # the file is present (the normal proactive path skips an existing entry).
+        asm = self._assembly_node(force=True)
         if not asm:
             return False
         module = Path(asm.get("code_target") or entry).stem    # src/app.py -> app
@@ -2352,7 +2355,7 @@ class Engine:
                     break
         return {"entry": entry, "callable": callables, "boot": boot}
 
-    def _assembly_node(self) -> "Optional[dict]":
+    def _assembly_node(self, force: bool = False) -> "Optional[dict]":
         """B2 mechanism 3: an ENGINE-generated assembly leaf.
 
         When the constitution declares a product entry (a module-level
@@ -2377,11 +2380,23 @@ class Engine:
         if not c:
             return None
         entry = c["entry"]
-        if (Path(self.workspace.root) / entry).is_file():
+        if not force and (Path(self.workspace.root) / entry).is_file():
             return None             # a feature leaf already built the entry
         callable_name = (c["callable"] or ["wsgi_app"])[0]
         ok_route = str(c["boot"].get("ok_route") or "")
         api = self._existing_src_api()
+        # late human requirements (injected mid-run) that the entry must also
+        # route — condensed one-liners, model-independent (echoes human text).
+        _standing = []
+        try:
+            for _n, _s in (self._standing_requirements or []):
+                _txt = " ".join(str(_s).split())[:200]
+                if _txt:
+                    _standing.append(f"- {_txt}")
+        except Exception:  # noqa: BLE001 — standing reqs are best-effort context
+            pass
+        _standing_lines = (("\n\n### Late human requirements (also wire these)\n"
+                            + "\n".join(_standing)) if _standing else "")
         # The implementer reads the node's SPEC, not a `requirement` field, so
         # the build directive goes into spec_markdown; the title is the heading.
         boot_line = (f" The product must boot in a fresh process and answer "
@@ -2396,7 +2411,12 @@ class Engine:
             + boot_line + " Standard library only.\n\n"
             + (api + "\n\n" if api else "")
             + "### Contract (binding)\n"
-            + "\n".join(f"- {r}" for r in (self._constitution or [])))
+            + "\n".join(f"- {r}" for r in (self._constitution or []))
+            # also wire the LATE human requirements (injected mid-run: e.g. a
+            # /ping or /ui surface) — they are NOT in the constitution but are
+            # real endpoints the assembled entry must route, else the boot-gate
+            # 404s them (the v054 RED: app.py existed but never routed /ping).
+            + _standing_lines)
         return {"id": "product_entry",
                 "title": "Assemble product entry (" + entry + ")",
                 "spec_markdown": spec_md, "atomic": True,

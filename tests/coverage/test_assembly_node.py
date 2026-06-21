@@ -264,3 +264,45 @@ def test_root_boot_gate_skipped_without_wsgi_entry(tmp_path):
                         goal="a reusable parsing library, no HTTP service")
     ok, _ = e._assembled_product_boots()
     assert ok
+
+
+def test_force_rebuilds_when_entry_present_but_broken(tmp_path):
+    # REACTIVE heal: the entry exists but is RED (404s its contract). The normal
+    # (proactive) path skips an existing entry; force=True must still produce the
+    # rebuild spec so the doctor's reconcile_check can re-assemble it.
+    import os as _os
+    _os.environ["SPEC_FLOW_PRE_GATE"] = "1"
+    try:
+        ws = tmp_path / "wk"
+        (ws / "src").mkdir(parents=True)
+        (ws / "src" / "app.py").write_text(  # entry PRESENT but incomplete
+            "def wsgi_app(environ, start_response):\n"
+            "    start_response('404 Not Found', [])\n    return [b'']\n",
+            encoding="utf-8")
+        e = eng.Engine.__new__(eng.Engine)
+        e._constitution = _CONSTITUTION
+        e.workspace = type("W", (), {"root": str(ws)})()
+        assert e._assembly_node() is None            # proactive: entry exists
+        node = e._assembly_node(force=True)           # reactive heal
+        assert node and node["code_target"] == "src/app.py"
+    finally:
+        _os.environ.pop("SPEC_FLOW_PRE_GATE", None)
+
+
+def test_late_requirements_ride_into_assembly_spec(tmp_path):
+    # the injected human requirements (e.g. /ping, /ui) are NOT in the
+    # constitution but must be routed by the entry — they must appear in the
+    # rebuild spec so the assembler wires them (the v054 RED: /ping unrouted).
+    import os as _os
+    _os.environ["SPEC_FLOW_PRE_GATE"] = "1"
+    try:
+        e = eng.Engine.__new__(eng.Engine)
+        e._constitution = _CONSTITUTION
+        e._standing_requirements = [
+            ("ping", "Serve GET /ping returning the plain text pong.")]
+        e.workspace = type("W", (), {"root": str(tmp_path)})()
+        node = e._assembly_node(force=True)
+        assert node and "GET /ping" in node["spec_markdown"]
+        assert "Late human requirements" in node["spec_markdown"]
+    finally:
+        _os.environ.pop("SPEC_FLOW_PRE_GATE", None)
