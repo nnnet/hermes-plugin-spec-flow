@@ -2177,14 +2177,16 @@ class Engine:
                 out.append((nid, cause))
         return out
 
-    def _remedy_reconcile_check(self, entry: str) -> bool:
-        """Executable reconcile_check (Ф6): the integrate gate found the declared
-        product entry missing. Re-run the ENGINE's OWN assembly leaf — its spec
-        (built by _assembly_node) tells the implementer to create the entry
-        wiring the modules already under src/ — through THIS run's implementer
-        worker (sim or live, never a hand-written scaffold), then re-verify with
-        the boot-gate. Green boot => drop the root integrate-fail + close the
-        doctor cause (row turns green). Otherwise stay RED. Returns True iff healed."""
+    def _remedy_reconcile_check(self, entry: str, escalate: bool = False) -> bool:
+        """Executable reconcile_check (Ф6): the integrate gate found the assembled
+        product RED (entry missing OR present but not serving its contract). Re-run
+        the ENGINE's OWN assembly leaf — its spec (built by _assembly_node) tells
+        the implementer to create the entry wiring the modules already under src/ —
+        through THIS run's implementer worker (sim or live, never a hand-written
+        scaffold), then re-verify with the boot-gate. Green boot => drop the root
+        integrate-fail + close the doctor cause (row turns green). Otherwise stay
+        RED. ``escalate`` forces the rebuild onto the strong tier (escalate_tier
+        remedy). Returns True iff healed."""
         ws = self.workspace
         if not (getattr(ws, "enabled", False) and getattr(ws, "root", None)
                 and "implementer" in self.agents):
@@ -2211,6 +2213,9 @@ class Engine:
                 "title": str(asm.get("title") or f"Assemble {entry}"),
                 "depth": self.depth, "workspace": ws,
                 "spec": spec_rel, "module": module}
+        # escalate_tier remedy: rebuild the entry on the strong model tier
+        if escalate:
+            ictx["tier"] = "strong"
         try:
             self._invoke_implementer(ictx, "product_entry", module)
         except Exception as exc:        # noqa: BLE001
@@ -4274,8 +4279,15 @@ class Engine:
         act = self._doctor_advise(
             {"id": "L0:integrate"}, "L0:integrate", 0,
             "integrate_verify", "FAIL", {"reasons": reason})
-        if act is not None and getattr(act, "kind", "") == "reconcile_check":
-            return self._remedy_reconcile_check(entry)
+        remedy = getattr(act, "kind", "") if act is not None else ""
+        # At the integrate gate the engine's ONLY physical lever is to rebuild
+        # the assembled entry through a real worker and re-boot. reconcile_check
+        # IS that action; rework / escalate_tier reduce to the SAME thing here
+        # (re-run the builder), so honour the whole rebuild-family — otherwise a
+        # fail diagnosed as weak_implementer (ladder: rework→escalate) would be
+        # analysed but never acted on, leaving the product RED (v050).
+        if remedy in ("reconcile_check", "rework", "escalate_tier"):
+            return self._remedy_reconcile_check(entry, escalate=(remedy == "escalate_tier"))
         return False
 
     def _verify_tests(self) -> None:
