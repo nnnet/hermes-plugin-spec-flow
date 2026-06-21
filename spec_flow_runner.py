@@ -2423,7 +2423,13 @@ class Engine:
             "that wires the feature modules ALREADY built under `src/` into one "
             "running product. Import the existing modules (do NOT reimplement "
             "them, do NOT mock them); dispatch every endpoint the contract "
-            "declares to the matching handler/storage already present."
+            "declares to the matching handler/storage already present. "
+            "EVERY listed module that exposes an HTTP handler — a function taking "
+            "`(environ, start_response)`, e.g. `handle_*` / `*_handler` / "
+            "`route_*` — is a delivered feature: the entry MUST import and route "
+            "it to its endpoint (infer the path from the handler name, e.g. a "
+            "`handle_status` function -> `GET /status`). Leave NO built handler "
+            "unrouted."
             + boot_line + " Standard library only.\n\n"
             + (api + "\n\n" if api else "")
             + "### Contract (binding)\n"
@@ -3971,6 +3977,22 @@ class Engine:
         # returning up a level — check both revision methods at this moment
         self._research_tick(node, depth)
 
+    def _leaf_uses_worktree(self, nid: str, ws) -> bool:
+        """Whether this leaf builds in an isolated git worktree (axis F).
+
+        Worktree isolation exists to keep PARALLEL sibling leaves from clobbering
+        each other. The synthesized product entry (``product_entry``) is the SERIAL
+        integration point: it wires every sibling module into src/app.py and runs
+        alone at integrate time, so it has no concurrent peer to isolate from. A
+        worktree branched off HEAD merges back by the leaf's owned path, which
+        drops a brand new src/app.py — the root integrate then never sees it and
+        every route 404s. The entry therefore always writes to the main workspace.
+        """
+        return (self._isolation == "worktree"
+                and nid != "product_entry"
+                and bool(getattr(ws, "enabled", False))
+                and bool(getattr(ws, "root", None)))
+
     def _invoke_implementer(self, ictx: dict, nid: str, fn: str) -> None:
         """Run the implementer for one leaf. Under `isolation: worktree`
         (axis F) the leaf builds in its OWN git worktree and merges back
@@ -3982,8 +4004,7 @@ class Engine:
         # so the doctor's silent_truncation detector gets real evidence later.
         _scope = (_trunc.node_scope(nid) if _trunc is not None
                   else contextlib.nullcontext())
-        isolated = (self._isolation == "worktree"
-                    and getattr(ws, "enabled", False) and getattr(ws, "root", None))
+        isolated = self._leaf_uses_worktree(nid, ws)
         if not isolated:
             with _scope:
                 impl(ictx)
