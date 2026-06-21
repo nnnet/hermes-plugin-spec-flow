@@ -1974,6 +1974,41 @@ class Engine:
             return []
         return _dup_surface_findings(spec_md or "", modules)
 
+    def _late_req_delta_gate(self, node: dict, nid: str, depth: int,
+                             code_rel: str) -> bool:
+        """437: delta as acceptance. A LATE requirement leaf must produce a REAL
+        delta — its owned module ends up present with non-trivial code. An empty
+        change (owner file missing or only blanks/comments) is the v041 failure:
+        the node 'ran' but added nothing. Deterministic, code-checked (decided by
+        the artifact, not the model); surfaces the empty_delta cause so the doctor
+        treats it instead of letting a hollow leaf pass as implemented. Returns
+        True when a real delta is present. Inert for non-late nodes."""
+        if not node.get("_late_req"):
+            return True
+        try:
+            body = (Path(self.workspace.root) / code_rel).read_text(
+                encoding="utf-8")
+        except Exception:  # noqa: BLE001 — missing file == empty delta
+            body = ""
+        meaningful = sum(1 for ln in body.splitlines()
+                         if ln.strip() and not ln.strip().startswith("#"))
+        floor = int((self.review_policy or {}).get("min_delta_lines", 1))
+        if meaningful >= floor:
+            return True
+        self.loops.append({"type": "empty-delta", "task": nid,
+                           "detail": f"late requirement produced no delta "
+                                     f"in {code_rel} ({meaningful} code line(s))"})
+        self.emit("review", "engine", "", nid,
+                  "delta gate: late requirement produced no real change",
+                  f"{code_rel}: {meaningful} code line(s) < {floor}",
+                  "delta_gate", "FAIL", level=L_MILESTONE)
+        # feed the empty_delta detector verbatim (its scope_findings reader keys
+        # on 'adds no new symbol' / 'no new route')
+        self._doctor_advise(node, nid, depth, "delta_gate", "FAIL",
+                            {"scope_findings": [
+                                f"{code_rel} adds no new symbol — empty delta"]})
+        return False
+
     def _ensure_doctor_classifier(self) -> None:
         """Lazily attach the semantic LLM classifier to the doctor, resolving the
         backend (ask + chain_for_tier) the same way the rest of the runner does.
@@ -4035,6 +4070,10 @@ class Engine:
                                   "edit-in-place guard: dropped a parallel fork",
                                   f"removed src/{fn}.py — surface owned by {ctgt}",
                                   "amend_guard", "ENFORCED", level=L_MILESTONE)
+                # 437: a late requirement must leave a REAL delta in its owner
+                # module before it is judged 'implemented' (the v041 empty-change
+                # failure). Inert for ordinary nodes.
+                self._late_req_delta_gate(node, nid, depth, code_rel)
                 self._judge_leaf(nid, title, fn, code_rel, test_rel)
         elif self.depth >= DEPTH_SCAFFOLD:
             code_rel = self.workspace.code(nid, title)

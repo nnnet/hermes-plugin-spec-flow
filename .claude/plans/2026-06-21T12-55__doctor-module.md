@@ -437,9 +437,13 @@ level_attempts, last_causeset, nonshrink_rounds, open{}}`.
   → НЕТ (pending); место: `_decomposer_ctx` `spec_flow_runner.py`
 - [x] Дифф-правка реализатора по умолчанию
   → `_apply_diff_repair` `tests/harness/role_worker.py:1389` (вызов :1106)
-- [ ] Дельта как условие приёмки (`verify` + `testable_criteria`)
-  → частично: детектор `empty_delta` `spec_flow_diagnosers.py` `_scope_findings`;
-    отдельного приёмочного гейта пустой дельты нет (pending)
+- [x] Дельта как условие приёмки (`verify` + `testable_criteria`)
+  → `Engine._late_req_delta_gate` `spec_flow_runner.py`: late_req-лист обязан
+    оставить реальную дельту в своём модуле (файл есть, есть код-строки ≥
+    `review.min_delta_lines`), иначе — empty-delta loop + `delta_gate` FAIL →
+    `_doctor_advise` с `scope_findings` («adds no new symbol») → детектор
+    `empty_delta`. Решает артефакт, не модель; инертен для обычных узлов.
+    Врезка перед `_judge_leaf`. Тест `test_late_req_delta_gate.py` (4 зелёных)
 - [x] Проверка выводится из требования (авто-контракт + промпт ревью)
   → авто-контракт `tests/harness/contract_from_smoke.py:1`; узел несёт требование
     в спеку (`Covers human requirement`/`Acceptance` `spec_flow_runner.py:1211`);
