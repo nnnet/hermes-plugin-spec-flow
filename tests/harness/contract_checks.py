@@ -534,6 +534,101 @@ def db_connection_singleton_violations(root: str) -> list:
     return sorted(set(out))
 
 
+# --- query a table without ensuring its schema ------------------------------
+_SQL_VERB = re.compile(r"(?i)\b(?:select|insert|update|delete|create)\b")
+_RE_CREATE = re.compile(r"(?i)\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?"
+                        r"[\"'`\[]?(\w+)")
+_RE_QUERY = re.compile(r"(?i)\b(?:from|into|update|join)\s+[\"'`\[]?(\w+)")
+
+
+def _sql_literals(tree) -> list:
+    """String constants in a module that look like SQL (contain a verb)."""
+    return [n.value for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+            and _SQL_VERB.search(n.value)]
+
+
+def _local_imports(tree, stems: set) -> set:
+    """Project-local module stems this module imports (``import db_connect`` /
+    ``from db_connect import connect`` / ``from . import db_connect``)."""
+    out: set = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            for a in n.names:
+                b = a.name.split(".")[0]
+                if b in stems:
+                    out.add(b)
+        elif isinstance(n, ast.ImportFrom):
+            if n.module and n.module.split(".")[0] in stems:
+                out.add(n.module.split(".")[0])
+            for a in n.names:
+                if a.name in stems:
+                    out.add(a.name)
+    return out
+
+
+def schema_guarantee_violations(root: str) -> list:
+    """Flag a self-connecting module that QUERIES a table it never ensures.
+
+    Why: the decomposer often splits the db into connect/insert/read leaves, but
+    a sibling (e.g. the WSGI endpoints) then opens its OWN connection and runs
+    ``SELECT/INSERT ... FROM <t>`` without going through the schema-initialising
+    connect() and without a ``CREATE TABLE IF NOT EXISTS`` of its own. On a fresh
+    NOTES_DB that is 'no such table'. The leaf's own test may pass (it seeds the
+    row first), but the assembled product on an empty db fails — a recurring
+    cross-module class, distinct from the cached-connection one.
+    What: for each src module that self-connects (reads a db env or opens a
+    connection) and queries table T, require it to either CREATE T itself or
+    import a local module that creates T; else flag.
+    Test: an endpoints module that ``sqlite3.connect``s and selects ``notes``
+    while only db_connect creates it ⇒ one violation; the same module importing
+    db_connect ⇒ none.
+    """
+    srcdir = Path(root) / "src"
+    if not srcdir.is_dir():
+        return []
+    files = {p.stem: p for p in srcdir.glob("*.py")}
+    stems = set(files)
+    created: dict = {}
+    queried: dict = {}
+    imports: dict = {}
+    selfconn: dict = {}
+    for stem, p in files.items():
+        try:
+            tree = ast.parse(p.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, SyntaxError):
+            continue
+        cr: set = set()
+        q: set = set()
+        for s in _sql_literals(tree):
+            cr |= {m.group(1).lower() for m in _RE_CREATE.finditer(s)}
+            q |= {m.group(1).lower() for m in _RE_QUERY.finditer(s)}
+        created[stem] = cr
+        queried[stem] = q - cr
+        imports[stem] = _local_imports(tree, stems)
+        selfconn[stem] = (_reads_db_env(tree)
+                          or any(_is_connect_call(n) for n in ast.walk(tree)))
+    creators: dict = {}
+    for stem, cr in created.items():
+        for t in cr:
+            creators.setdefault(t, set()).add(stem)
+    out: list = []
+    for stem, q in queried.items():
+        if not selfconn.get(stem):          # a DI consumer (gets a conn) is fine
+            continue
+        for t in q:
+            if any(imp in creators.get(t, set()) for imp in imports.get(stem, ())):
+                continue
+            out.append(
+                f"src/{stem}.py: self-connects and queries table '{t}' but never "
+                f"ensures it exists — no CREATE TABLE for '{t}' here and no import "
+                "of a module that creates it; on a fresh NOTES_DB this is "
+                "'no such table'. Obtain the connection from the schema-"
+                "initialising db module, or CREATE TABLE IF NOT EXISTS before "
+                "querying")
+    return sorted(set(out))
+
+
 def realness_violations(root: str, modules=None) -> list:
     """Combined 'no fake product' check for a LEAF or BRANCH at REVIEW time:
     stub bodies + mocks of a local module + smoke-only tests + unbounded WSGI
@@ -543,7 +638,8 @@ def realness_violations(root: str, modules=None) -> list:
     the leaf gate; the full set runs at integrate."""
     v = (stub_bodies(root) + mocks_local_module(root) + smoke_only_tests(root)
          + wsgi_body_read_violations(root)
-         + db_connection_singleton_violations(root))
+         + db_connection_singleton_violations(root)
+         + schema_guarantee_violations(root))
     if modules:
         keep = []
         for line in v:
@@ -601,6 +697,7 @@ def run_all(root: str) -> list:
     viol += smoke_only_tests(root)        # forbid always-green / no-assert tests
     viol += wsgi_body_read_violations(root)   # forbid POST-hanging body reads
     viol += db_connection_singleton_violations(root)  # forbid cached-db handle
+    viol += schema_guarantee_violations(root)  # forbid query-without-schema
     # reuse existing deterministic detectors (don't duplicate them)
     for f, mod, name in _cross_module_import_violations(root):
         viol.append(f"{f} imports '{name}' from '{mod}' but src/{mod}.py "

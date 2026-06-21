@@ -1193,6 +1193,12 @@ cached handle points at the FIRST db and every later test dies with
 'no such table'. Read the path INSIDE the function and connect each time:
     def _db():
         return sqlite3.connect(os.environ['NOTES_DB'])
+If your module RUNS SQL against a table (SELECT/INSERT/... FROM <table>), it MUST
+ensure that table exists FIRST: either obtain the connection from the db module
+that initialises the schema (import it and call its connect()), or run
+CREATE TABLE IF NOT EXISTS <table> before querying. A module that opens its own
+connection and queries a table it never creates will pass its own seeded test
+but die with 'no such table' on the assembled product's fresh db.
 Test ONLY your own module in isolation. NEVER author whole-product or
 cross-feature end-to-end tests — the platform smoke suite (tests/smoke/)
 owns the assembled-product check and runs at the root integrate; a copy of

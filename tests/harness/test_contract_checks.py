@@ -343,3 +343,69 @@ def test_db_singleton_flows_through_realness_and_run_all(tmp_path):
     # per-node review filter keeps it when its module is in scope
     scoped = cc.realness_violations(str(tmp_path), modules={"notes_db"})
     assert any("notes_db.py" in x for x in scoped), scoped
+
+
+# --- schema_guarantee_violations ------------------------------------------
+
+def test_schema_guarantee_fires_on_query_without_create(tmp_path):
+    _src(tmp_path, "db_connect.py",
+         "import os, sqlite3\n"
+         "def connect():\n"
+         "    c = sqlite3.connect(os.environ['NOTES_DB'])\n"
+         "    c.execute('CREATE TABLE IF NOT EXISTS notes (id INTEGER, text TEXT)')\n"
+         "    return c\n")
+    _src(tmp_path, "endpoints.py",
+         "import os, sqlite3\n"
+         "def _db():\n    return sqlite3.connect(os.environ['NOTES_DB'])\n"
+         "def list_notes():\n"
+         "    return _db().execute('SELECT id, text FROM notes').fetchall()\n")
+    v = cc.schema_guarantee_violations(str(tmp_path))
+    assert any("endpoints.py" in x and "notes" in x for x in v), v
+
+
+def test_schema_guarantee_clean_when_creator_imported(tmp_path):
+    _src(tmp_path, "db_connect.py",
+         "import os, sqlite3\n"
+         "def connect():\n"
+         "    c = sqlite3.connect(os.environ['NOTES_DB'])\n"
+         "    c.execute('CREATE TABLE IF NOT EXISTS notes (id INTEGER, text TEXT)')\n"
+         "    return c\n")
+    _src(tmp_path, "endpoints.py",
+         "import db_connect\n"
+         "def list_notes():\n"
+         "    return db_connect.connect().execute('SELECT id FROM notes').fetchall()\n")
+    assert cc.schema_guarantee_violations(str(tmp_path)) == []
+
+
+def test_schema_guarantee_clean_when_creates_itself(tmp_path):
+    _src(tmp_path, "store.py",
+         "import os, sqlite3\n"
+         "def _db():\n    return sqlite3.connect(os.environ['NOTES_DB'])\n"
+         "def setup():\n"
+         "    _db().execute('CREATE TABLE IF NOT EXISTS notes (id INTEGER)')\n"
+         "def rows():\n"
+         "    return _db().execute('SELECT id FROM notes').fetchall()\n")
+    assert cc.schema_guarantee_violations(str(tmp_path)) == []
+
+
+def test_schema_guarantee_ignores_di_consumer(tmp_path):
+    _src(tmp_path, "service.py",
+         "def list_notes(conn):\n"
+         "    return conn.execute('SELECT id, text FROM notes').fetchall()\n")
+    assert cc.schema_guarantee_violations(str(tmp_path)) == []
+
+
+def test_schema_guarantee_flows_through_run_all(tmp_path):
+    _src(tmp_path, "db_connect.py",
+         "import os, sqlite3\n"
+         "def connect():\n"
+         "    c = sqlite3.connect(os.environ['NOTES_DB'])\n"
+         "    c.execute('CREATE TABLE IF NOT EXISTS notes (id INTEGER)')\n"
+         "    return c\n")
+    _src(tmp_path, "endpoints.py",
+         "import os, sqlite3\n"
+         "def _db():\n    return sqlite3.connect(os.environ['NOTES_DB'])\n"
+         "def q():\n    return _db().execute('SELECT id FROM notes').fetchall()\n")
+    assert any("endpoints.py" in x for x in cc.run_all(str(tmp_path)))
+    scoped = cc.realness_violations(str(tmp_path), modules={"endpoints"})
+    assert any("endpoints.py" in x for x in scoped), scoped
