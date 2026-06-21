@@ -445,6 +445,13 @@ def _inline(s: str) -> str:
     return s
 
 
+def _esc(s: object, limit: int = 0) -> str:
+    """Single HTML-escape helper for server-built fragments. limit>0 truncates
+    (used for compact flow-chart labels); limit==0 keeps the full string."""
+    out = str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return out[:limit] if limit else out
+
+
 # ── starting inputs + service info (readable "what we start from") ───────────
 def _kv_table(d: dict) -> str:
     rows = [f"| {html.escape(str(k))} | {html.escape(str(v))} |" for k, v in d.items()]
@@ -736,9 +743,9 @@ def _flow_mermaid(events: list[dict], tree: dict | None = None) -> str | None:
         act = clean(e.get("action") or "")
         body[lane].append(f'    {nid}["{e.get("phase")} · {node}<br/>{act}"]')
         if str(e.get("verdict")) in {"REJECT", "FAIL", "ERROR"}:
-            body[lane].append(f"    style {nid} fill:#3a1620,stroke:#f85149")
+            body[lane].append(f"    style {nid} fill:var(--err-bg),stroke:var(--err)")
         elif str(e.get("phase")) in ep_phase or e.get("gate") in ("clarify", "drift", "hitl"):
-            body[lane].append(f"    style {nid} fill:#3a2a12,stroke:#e3b341")
+            body[lane].append(f"    style {nid} fill:var(--warn-bg),stroke:var(--warn)")
         prev = prev_in.get(lane)
         if prev is not None:
             edge = clean(e.get("verdict") or e.get("gate") or "")
@@ -781,9 +788,6 @@ def _flow_timeaxis(events: list[dict], tree: dict | None = None) -> str | None:
     if not miles:
         return None        # nothing but checkpoints -> no flow to chart
 
-    def esc(s: object) -> str:
-        return (str(s).replace("&", "&amp;").replace("<", "&lt;")
-                .replace(">", "&gt;"))[:90]
 
     lanes_map = _lane_map(tree)
     root_id = (tree or {}).get("id", "L0")
@@ -836,21 +840,32 @@ def _flow_timeaxis(events: list[dict], tree: dict | None = None) -> str | None:
         v = str(e.get("verdict") or "")
         ph = str(e.get("phase") or "")
         if v in ("REJECT", "FAIL", "ERROR"):
-            return "#f85149", "#3a1620"
+            return "var(--err)", "var(--err-bg)"
         if ph in ("research", "drift", "respec", "hitl") \
                 or e.get("gate") in ("clarify", "drift", "hitl"):
-            return "#e3b341", "#3a2a12"
-        return "#2f5d40", "#161b22"
+            return "var(--warn)", "var(--warn-bg)"
+        return "var(--ok-border)", "var(--panel)"
 
     p = [f'<div style="position:relative;width:{width}px;height:{height}px;'
          f'font-size:11px;min-width:{width}px">']
-    p.append(f'<div style="position:absolute;left:{AXIS - 1}px;top:{PADT - 6}px;'
-             f'width:1px;height:{y - PADT}px;background:#30363d"></div>')
+    # left time axis (vertical line + per-row time labels + checkpoint stars) is
+    # collected here and emitted in a sticky left:0 band, so it stays put while
+    # the lane columns scroll HORIZONTALLY (it still scrolls vertically).
+    axis: list = []
+    axis.append(f'<div style="position:absolute;left:{AXIS - 1}px;top:{PADT - 6}px;'
+                f'width:1px;height:{y - PADT}px;background:var(--border)"></div>')
+    # lane labels PINNED to the top: a zero-height sticky band is the absolute
+    # positioning context for the names, so they stay visible while the body
+    # scrolls vertically (they still scroll horizontally with their columns).
+    # Opaque background hides boxes sliding underneath.
+    p.append('<div style="position:sticky;top:0;z-index:5;height:0">')
     for lane in order:
         lx = AXIS + lane_x[lane] * LANEW
         p.append(f'<div style="position:absolute;left:{lx}px;top:0;'
-                 f'width:{LANEW - 8}px;color:#79c0ff;font-weight:600;overflow:hidden;'
-                 f'white-space:nowrap;text-overflow:ellipsis">{esc(lane)}</div>')
+                 f'width:{LANEW - 8}px;color:var(--link-2);font-weight:600;overflow:hidden;'
+                 f'white-space:nowrap;text-overflow:ellipsis;background:var(--bg);'
+                 f'padding:2px 0">{_esc(lane, 90)}</div>')
+    p.append('</div>')
     # lane connectors (behind boxes): a line through each lane's box centres
     lane_cy: dict = {}
     for sec in rows:
@@ -862,14 +877,15 @@ def _flow_timeaxis(events: list[dict], tree: dict | None = None) -> str | None:
         if len(cys) >= 2:
             lx = AXIS + lane_x[lane] * LANEW + 10
             p.append(f'<div style="position:absolute;left:{lx}px;top:{min(cys):.0f}px;'
-                     f'width:2px;height:{max(cys) - min(cys):.0f}px;background:#30363d"></div>')
+                     f'width:2px;height:{max(cys) - min(cys):.0f}px;background:var(--border)"></div>')
     # rows: time label + gridline + stacked boxes (no same-lane overlap)
     for sec in rows:
         top = row_top[sec]
-        p.append(f'<div style="position:absolute;left:0;top:{top}px;'
-                 f'width:{AXIS - 6}px;text-align:right;color:#6e7681">{hms(sec)}</div>')
+        axis.append(f'<div style="position:absolute;left:0;top:{top}px;'
+                    f'width:{AXIS - 6}px;text-align:right;color:var(--dim-2);'
+                    f'background:var(--bg)">{hms(sec)}</div>')
         p.append(f'<div style="position:absolute;left:{AXIS}px;top:{top + row_h[sec] - 5}px;'
-                 f'width:{width - AXIS}px;height:1px;background:#13171d"></div>')
+                 f'width:{width - AXIS}px;height:1px;background:var(--hair)"></div>')
         for lane, evs in by_lane[sec].items():
             for k, e in enumerate(evs):
                 yy = top + k * BOXH
@@ -877,10 +893,10 @@ def _flow_timeaxis(events: list[dict], tree: dict | None = None) -> str | None:
                 border, bg = _color(e)
                 v = str(e.get("verdict") or "")
                 ph = str(e.get("phase") or "")
-                node = esc(str(e.get("task") or "").split(":")[0] or ph)
-                label = (f'<b style="color:#adbac7">{esc(ph)} · {node}</b>'
-                         f'<br><span style="color:#8b949e">{esc(e.get("action") or "")}</span>'
-                         + (f' <span style="color:#6e7681">· {esc(v)}</span>' if v else ''))
+                node = _esc(str(e.get("task") or "").split(":")[0] or ph, 90)
+                label = (f'<b style="color:var(--fg-strong)">{_esc(ph, 90)} · {node}</b>'
+                         f'<br><span style="color:var(--dim)">{_esc(e.get("action") or "", 90)}</span>'
+                         + (f' <span style="color:var(--dim-2)">· {_esc(v, 90)}</span>' if v else ''))
                 p.append(f'<div style="position:absolute;left:{lx}px;top:{yy}px;'
                          f'width:{LANEW - 18}px;max-height:{BOXH - 6}px;overflow:hidden;'
                          f'background:{bg};border:1px solid {border};border-radius:6px;'
@@ -893,10 +909,14 @@ def _flow_timeaxis(events: list[dict], tree: dict | None = None) -> str | None:
         cy = row_top[sec] + row_h[sec] / 2
         p.append(f'<div title="чекпойнт {hms(sec)}" style="position:absolute;'
                  f'left:{AXIS}px;top:{cy:.0f}px;width:{width - AXIS}px;height:0;'
-                 f'border-top:1px dashed #8b949e;opacity:.55"></div>')
-        p.append(f'<div title="чекпойнт сохранён · {hms(sec)}" '
-                 f'style="position:absolute;left:{AXIS - 16}px;top:{cy - 9:.0f}px;'
-                 f'color:#e3b341;font-size:13px;line-height:1">★</div>')
+                 f'border-top:1px dashed var(--dim);opacity:.55"></div>')
+        axis.append(f'<div title="чекпойнт сохранён · {hms(sec)}" '
+                    f'style="position:absolute;left:{AXIS - 16}px;top:{cy - 9:.0f}px;'
+                    f'color:var(--warn);font-size:13px;line-height:1">★</div>')
+    # the left axis pinned horizontally: a sticky left:0 band is the positioning
+    # context for the time labels, so they never scroll out sideways.
+    p.append('<div style="position:sticky;left:0;z-index:4;width:0;height:0">'
+             + "".join(axis) + '</div>')
     p.append('</div>')
     return "".join(p)
 
@@ -973,14 +993,11 @@ def _flow_orchestra_html(llm: list[dict]) -> str | None:
     if not seqs:
         return None
 
-    def esc(s: object) -> str:
-        return (str(s).replace("&", "&amp;").replace("<", "&lt;")
-                .replace(">", "&gt;"))
 
     # function/role glyph per specialist so the chain reads at a glance
     glyph = {"architect": "📐", "coder": "💻", "tester": "🧪", "fixer": "🔧"}
     out = ['<div class=orchestra style="margin-top:14px">',
-           '<h4 style="color:#79c0ff;margin:0 0 6px">🎻 Оркестр: '
+           '<h4 style="color:var(--link-2);margin:0 0 6px">🎻 Оркестр: '
            'последовательность вызовов специалистов</h4>',
            '<p class=dim style="margin:0 0 8px">для узлов с командой — порядок '
            'специалистов (роль = функция), модель и реальная длительность; '
@@ -991,25 +1008,25 @@ def _flow_orchestra_html(llm: list[dict]) -> str | None:
         # neutral word if the id is missing (defensive; the engine now always
         # stamps the real node on every orchestra step).
         node_label = node if node and node != "None" else "узел (без id)"
-        out.append('<div style="margin:0 0 12px;border:1px solid #21262d;'
+        out.append('<div style="margin:0 0 12px;border:1px solid var(--panel-2);'
                    'border-radius:6px;padding:8px 10px">')
-        out.append(f'<div style="color:#adbac7;font-weight:600;margin-bottom:6px">'
-                   f'{esc(node_label)}</div>')
+        out.append(f'<div style="color:var(--fg-strong);font-weight:600;margin-bottom:6px">'
+                   f'{_esc(node_label)}</div>')
         for i, st in enumerate(steps):
-            role = esc(st.get("step"))
+            role = _esc(st.get("step"))
             ico = glyph.get(str(st.get("step")), "•")
-            model = esc(st.get("model") or "—")
+            model = _esc(st.get("model") or "—")
             lat = st.get("latency_s")
             dur = f'{lat:.1f}s' if isinstance(lat, (int, float)) else '—'
-            arrow = ('<div style="color:#30363d;margin:1px 0 1px 6px">↓</div>'
+            arrow = ('<div style="color:var(--border);margin:1px 0 1px 6px">↓</div>'
                      if i else '')
             out.append(arrow)
             out.append(
-                f'<div style="background:#161b22;border:1px solid #2f5d40;'
+                f'<div style="background:var(--panel);border:1px solid var(--ok-border);'
                 f'border-radius:6px;padding:4px 8px;line-height:1.3">'
-                f'<b style="color:#adbac7">{ico} {role}</b>'
-                f' <span style="color:#8b949e">· {model}</span>'
-                f' <span style="color:#6e7681">· {dur}</span></div>')
+                f'<b style="color:var(--fg-strong)">{ico} {role}</b>'
+                f' <span style="color:var(--dim)">· {model}</span>'
+                f' <span style="color:var(--dim-2)">· {dur}</span></div>')
         out.append('</div>')
     out.append('</div>')
     return "".join(out)
@@ -1726,6 +1743,9 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
         "by_phase": _rollup("phase"),
         "by_cause": _cause_rollup(),
         "tokens": _token_economics(run_dir),
+        # headline usage-per-LLM table (provider+model): requests, tokens
+        # in/out, wall time — the "who did the work" table for the Простои tab.
+        "agent_usage": _llm_agent_usage(run_dir),
         # multi-parameter LLM-usage breakdown (by role / specialty / model /
         # node) — the data side of the multi-axis analysis; the UI can slice it
         # any way without re-reading the log.
@@ -1793,6 +1813,68 @@ def _token_economics(run_dir: "pathlib.Path | None") -> dict:
             for (stg, who, m), v in agg.items()]
     rows.sort(key=lambda x: x["total"], reverse=True)
     return {"rows": rows, "total": grand}
+
+
+def _llm_agent_usage(run_dir: "pathlib.Path | None") -> dict:
+    """Headline 'who did the work' table — usage per LLM (provider+model):
+    request count and wall time come from llm_attempt (it carries model +
+    latency_s), prompt/completion tokens come from token_usage (model + usage).
+    Joined on the model id. Returns {rows:[{provider, model, requests, prompt,
+    completion, total, time_s, abnormal, estimated}], totals:{...}}."""
+    if run_dir is None:
+        return {"rows": [], "totals": {}}
+    lf = run_dir / "llm-log.jsonl"
+    if not lf.exists():
+        return {"rows": [], "totals": {}}
+    agg: dict = {}
+
+    def _row(model: str) -> dict:
+        return agg.setdefault(model, {
+            "provider": "", "requests": 0, "prompt": 0, "completion": 0,
+            "time_s": 0.0, "abnormal": 0, "estimated": False})
+
+    for line in lf.read_text(encoding="utf-8", errors="ignore").splitlines():
+        try:
+            e = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        ev = e.get("event")
+        if ev == "llm_attempt":
+            # canonicalise a bare model id ('haiku') to 'provider/model' so it
+            # joins token_usage's prefixed id ('claude/haiku') — older logs wrote
+            # the short id here (the source now logs the canonical one).
+            _m = e.get("model") or "—"
+            _p = e.get("provider")
+            if _p and "/" not in _m:
+                _m = f"{_p}/{_m}"
+            r = _row(_m)
+            r["requests"] += 1
+            r["time_s"] += float(e.get("latency_s", 0) or 0)
+            if not r["provider"] and e.get("provider"):
+                r["provider"] = e.get("provider")
+            if e.get("abnormal"):
+                r["abnormal"] += 1
+        elif ev == "token_usage":
+            r = _row(e.get("model") or "—")
+            r["prompt"] += int(e.get("prompt_tokens", 0) or 0)
+            r["completion"] += int(e.get("completion_tokens", 0) or 0)
+            if e.get("estimated"):
+                r["estimated"] = True
+    rows = [{"model": m, "provider": v["provider"] or "—",
+             "requests": v["requests"], "prompt": v["prompt"],
+             "completion": v["completion"],
+             "total": v["prompt"] + v["completion"],
+             "time_s": round(v["time_s"], 1), "abnormal": v["abnormal"],
+             "estimated": v["estimated"]}
+            for m, v in agg.items()]
+    rows.sort(key=lambda x: x["time_s"], reverse=True)
+    totals = {
+        "requests": sum(r["requests"] for r in rows),
+        "tokens": sum(r["total"] for r in rows),
+        "time_s": round(sum(r["time_s"] for r in rows), 1),
+        "abnormal": sum(r["abnormal"] for r in rows),
+    }
+    return {"rows": rows, "totals": totals}
 
 
 def _hitl_state(run_dir: "pathlib.Path | None") -> dict:
@@ -2132,60 +2214,90 @@ class _H(BaseHTTPRequestHandler):
 _PAGE = r"""<!doctype html><html lang=ru><head><meta charset=utf-8>
 <title>spec-flow live</title><style>
 *{box-sizing:border-box}
-body{margin:0;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;background:#0d1117;color:#c9d1d9}
-.bar{position:sticky;top:0;z-index:5;background:#161b22;border-bottom:1px solid #30363d;padding:8px 14px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
-.st{font-weight:700}.dim{color:#8b949e}.pill{background:#21262d;border-radius:10px;padding:1px 8px;cursor:pointer}
-.home{cursor:pointer;background:#1f6feb;color:#fff;border-radius:6px;padding:2px 10px;font-weight:700}.home:hover{background:#388bfd}
-.runbar{display:flex;gap:8px;align-items:center;margin-left:auto;padding-left:14px;border-left:1px solid #30363d}
-.runbtn{cursor:pointer;border-radius:6px;padding:2px 10px;font-weight:700;border:1px solid #30363d}
-#runstop{background:#3d1518;color:#f85149}#runstop:hover{background:#5a1d22}
-#runstart{background:#11281a;color:#3fb950}#runstart:hover{background:#163a25}
-#runlive{background:#16202c;color:#58a6ff}#runlive:hover{background:#1d2c3d}
-.cmp tbody tr[data-run]{cursor:pointer}.cmp tbody tr[data-run]:hover{background:#161b22}
-.cmp tr.selrow{background:#15324a}.cmp tr.selrow:hover{background:#1b3d59}
-.cmpact{text-align:center}.delrun{cursor:pointer;color:#8b949e}.delrun:hover{color:#f85149}
+/* SINGLE source of truth for every colour. Nothing below may use a raw hex
+   literal — always reference a token. Status hues are deliberately ONE each:
+   --err (red) and --ok (green) look identical everywhere they appear. */
+:root{
+ /* surfaces */
+ --bg:#0d1117; --bg-sunken:#0f141a; --panel:#161b22; --panel-2:#21262d;
+ --border:#30363d; --hair:#13171d;
+ /* text */
+ --fg:#c9d1d9; --fg-strong:#adbac7; --dim:#8b949e; --dim-2:#6e7681; --on-accent:#fff;
+ /* brand / links */
+ --accent:#1f6feb; --accent-hi:#388bfd; --link:#58a6ff; --link-2:#79c0ff; --purple:#a371f7;
+ --code:#ffa657;
+ /* status: error (red) — one hue, fills derived. -soft is the translucent
+    box/row fill (softer, more pleasant than the solid -bg). */
+ --err:#f85149; --err-bg:#4a1414; --err-bg-hi:#5a1d22;
+ --err-soft:color-mix(in srgb,var(--err) 25%,transparent);
+ /* status: ok / fixed (green) — one hue, fills derived */
+ --ok:#3fb950; --ok-bg:#12361f; --ok-bg-hi:#163a25; --ok-border:#2f5d40;
+ --ok-soft:color-mix(in srgb,var(--ok) 25%,transparent);
+ /* status: warn (amber) */
+ --warn:#e3b341; --warn-bg:#3a2a12;
+ /* blue fills: selection + info panels */
+ --sel-bg:#15324a; --sel-bg-hi:#1b3d59; --info-bg:#16202c; --info-bg-hi:#1d2c3d;
+}
+body{margin:0;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;background:var(--bg);color:var(--fg)}
+.bar{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px solid var(--border);padding:8px 14px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.st{font-weight:700}.dim{color:var(--dim)}.pill{background:var(--panel-2);border-radius:10px;padding:1px 8px;cursor:pointer}
+.home{cursor:pointer;background:var(--accent);color:var(--on-accent);border-radius:6px;padding:2px 10px;font-weight:700}.home:hover{background:var(--accent-hi)}
+.runbar{display:flex;gap:8px;align-items:center;margin-left:auto;padding-left:14px;border-left:1px solid var(--border)}
+.runbtn{cursor:pointer;border-radius:6px;padding:2px 10px;font-weight:700;border:1px solid var(--border)}
+#runstop{background:var(--err-bg);color:var(--err)}#runstop:hover{background:var(--err-bg-hi)}
+#runstart{background:var(--ok-bg);color:var(--ok)}#runstart:hover{background:var(--ok-bg-hi)}
+#runlive{background:var(--info-bg);color:var(--link)}#runlive:hover{background:var(--info-bg-hi)}
+.cmp tbody tr[data-run]{cursor:pointer}.cmp tbody tr[data-run]:hover{background:var(--panel)}
+.cmp tr.selrow{background:var(--sel-bg)}.cmp tr.selrow:hover{background:var(--sel-bg-hi)}
+.cmpact{text-align:center}.delrun{cursor:pointer;color:var(--dim)}.delrun:hover{color:var(--err)}
 .runbtn.off{opacity:.35;cursor:not-allowed;pointer-events:none;filter:grayscale(.6)}
-.live{color:#3fb950}.donec{color:#8b949e}
-.bar2{position:sticky;top:38px;z-index:4;background:#0f141a;border-bottom:1px solid #21262d;padding:3px 14px;display:block;font-size:12px}
-.goal{color:#e3b341;display:block;min-height:1.2em;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.cur{color:#3fb950;font-weight:700;display:block;margin-top:0;min-height:1.2em;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.live{color:var(--ok)}.donec{color:var(--dim)}
+.bar2{position:sticky;top:38px;z-index:4;background:var(--bg-sunken);border-bottom:1px solid var(--panel-2);padding:3px 14px;display:block;font-size:12px}
+.goal{color:var(--warn);display:block;min-height:1.2em;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.cur{color:var(--ok);font-weight:700;display:block;margin-top:0;min-height:1.2em;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 ol.tl{padding-left:18px}ol.tl li{margin:1px 0;white-space:nowrap}
-.tl .tk{color:#6e7681;display:inline-block;min-width:34px}
-.tl .ph{color:#79c0ff;display:inline-block;min-width:96px}
-.tl li:last-child{background:#12361f;border-radius:4px;padding:0 4px}
+.tl .tk{color:var(--dim-2);display:inline-block;min-width:34px}
+.tl .ph{color:var(--link-2);display:inline-block;min-width:96px}
+.tl li:last-child{background:var(--ok-bg);border-radius:4px;padding:0 4px}
 .wrap{display:grid;grid-template-columns:var(--treew,340px) 6px 1fr;gap:0;height:calc(100vh - 70px)}
-.split{cursor:col-resize;background:#21262d;position:relative}.split:hover{background:#1f6feb}
-.split .knob{position:absolute;top:8px;left:-7px;width:20px;height:20px;line-height:20px;text-align:center;cursor:pointer;background:#161b22;border:1px solid #30363d;border-radius:5px;color:#8b949e;font-size:11px;z-index:5}.split .knob:hover{color:#58a6ff}
+.split{cursor:col-resize;background:var(--panel-2);position:relative}.split:hover{background:var(--accent)}
+.split .knob{position:absolute;top:8px;left:-7px;width:20px;height:20px;line-height:20px;text-align:center;cursor:pointer;background:var(--panel);border:1px solid var(--border);border-radius:5px;color:var(--dim);font-size:11px;z-index:5}.split .knob:hover{color:var(--link)}
 body.treecol .col.tree{overflow:hidden;padding:0;min-width:0}body.treecol .split .knob{left:1px}
 body.treecol .wrap{grid-template-columns:0 6px 1fr}
 .col{overflow:auto;height:100%}
-.tree{padding:10px 8px;border-right:1px solid #21262d}
+.tree{padding:10px 8px;border-right:1px solid var(--panel-2)}
 .tree ul{list-style:none;margin:0;padding-left:16px}
 .tree li{margin:1px 0;white-space:nowrap}/* a wrapped label left the twisty alone on its own line — a fake empty row before long ids */
 .node{cursor:pointer;padding:1px 6px;border-radius:5px;white-space:nowrap}
-.node:hover{background:#161b22}.node.sel{background:#1f6feb33;outline:1px solid #1f6feb}
-.tw{cursor:pointer;display:inline-block;width:12px;color:#8b949e}
+.node:hover{background:var(--panel)}.node.sel{background:color-mix(in srgb,var(--accent) 20%,transparent);outline:1px solid var(--accent)}
+.tw{cursor:pointer;display:inline-block;width:12px;color:var(--dim)}
 .badge{font-size:11px}
 .detail{padding:12px 18px}
-.tabs{display:flex;gap:4px;flex-wrap:wrap;margin:6px 0 10px;border-bottom:1px solid #21262d;position:sticky;top:-12px;background:#0d1117;z-index:6;padding-top:12px}
-.tab{cursor:pointer;padding:4px 10px;border:1px solid #30363d;border-bottom:none;border-radius:6px 6px 0 0;background:#161b22;color:#8b949e}
-.tab.on{background:#0d1117;color:#58a6ff;border-color:#1f6feb}
-h2{color:#58a6ff;border-bottom:1px solid #21262d;padding-bottom:4px}h3,h4{color:#79c0ff}
+.tabs{display:flex;gap:4px;flex-wrap:wrap;margin:6px 0 10px;border-bottom:1px solid var(--panel-2);position:sticky;top:-12px;background:var(--bg);z-index:6;padding-top:12px}
+.tab{cursor:pointer;padding:4px 10px;border:1px solid var(--border);border-bottom:none;border-radius:6px 6px 0 0;background:var(--panel);color:var(--dim)}
+.tab.on{background:var(--bg);color:var(--link);border-color:var(--accent)}
+h2{color:var(--link);border-bottom:1px solid var(--panel-2);padding-bottom:4px}h3,h4{color:var(--link-2)}
 table{border-collapse:collapse;width:100%;margin:8px 0;font-size:12px}
-th,td{border:1px solid #30363d;padding:4px 7px;text-align:left;vertical-align:top}
-th{background:#161b22}tr:nth-child(even) td{background:#0f141a}
-/* compare tab: only the data BODY scrolls; header stays pinned */
-.cmpscroll{max-height:calc(100vh - 230px);overflow:auto;border:1px solid #21262d;border-radius:6px}
+th,td{border:1px solid var(--border);padding:4px 7px;text-align:left;vertical-align:top}
+th{background:var(--panel)}tr:nth-child(even) td{background:var(--bg-sunken)}
+/* event-health rows: must come AFTER nth-child so the cell colour wins */
+tr.evbad td{background:var(--err-soft)}tr.evfix td{background:var(--ok-soft)}
+/* SINGLE source of pinned table headers. Any table wrapped in .cmpscroll keeps
+   its header row fixed while the body scrolls vertically (model: the compare
+   tab). Reused everywhere — compare, Простои, таймлайн, воркфлоу, события — so
+   the look is defined in exactly ONE place. The opaque th background is what
+   stops body rows from showing through the pinned header. */
+.cmpscroll{max-height:calc(100vh - 230px);overflow:auto;border:1px solid var(--panel-2);border-radius:6px}
 .cmpscroll table{margin:0}
-.cmpscroll thead th{position:sticky;top:0;z-index:2}
-code{background:#161b22;padding:1px 5px;border-radius:4px;color:#ffa657}
-pre.code{background:#161b22;padding:10px;border-radius:6px;overflow:auto;white-space:pre-wrap}
+.cmpscroll thead th{position:sticky;top:0;z-index:3;background:var(--panel)}
+code{background:var(--panel);padding:1px 5px;border-radius:4px;color:var(--code)}
+pre.code{background:var(--panel);padding:10px;border-radius:6px;overflow:auto;white-space:pre-wrap}
 .feed{padding-left:38px;max-height:150px;overflow:auto}.feed.full{max-height:none;overflow:visible}.feed li{margin:1px 0}
-.diff .add{background:#12361f;color:#3fb950}.diff .del{background:#3a1620;color:#f85149}
-.muted{color:#6e7681}.kv{color:#8b949e}
+.diff .add{background:var(--ok-bg);color:var(--ok)}.diff .del{background:var(--err-bg);color:var(--err)}
+.muted{color:var(--dim-2)}.kv{color:var(--dim)}
 .badge{font-size:9px;vertical-align:middle;letter-spacing:1px}
-.actv{color:#e3b341;font-weight:700}
-.errbox{background:#3a162040;border:1px solid #f8514966;border-radius:6px;padding:6px 10px;margin:8px 0;font-size:12px}.errbox li{margin:2px 0}
-.fixbox{background:#163a1c40;border:1px solid #3fb95066;border-radius:6px;padding:6px 10px;margin:8px 0;font-size:12px}.fixbox li{margin:2px 0}
+.actv{color:var(--warn);font-weight:700}
+.errbox{background:var(--err-soft);border:1px solid color-mix(in srgb,var(--err) 40%,transparent);border-radius:6px;padding:6px 10px;margin:8px 0;font-size:12px}.errbox li{margin:2px 0}
+.fixbox{background:var(--ok-soft);border:1px solid color-mix(in srgb,var(--ok) 40%,transparent);border-radius:6px;padding:6px 10px;margin:8px 0;font-size:12px}.fixbox li{margin:2px 0}
 .gtabs{margin-top:8px}
 </style></head><body>
 <div class=bar>
@@ -2305,7 +2417,7 @@ function treeHTML(n){
  const act=isActive(n.id);
  const ico=act?'⏳':(has?'🌿':'🍃');
  const pin=n.technical?'<span title="служебный узел движка (чекпойнт/гейт/сборка) — не вброс человека">⚙️</span> ':(n.attached?'<span title="позднее требование, вброшено в прогон">📌</span> ':'');
- const pend=n.pending?'<span title="вброшено, ещё не материализовано в узел" style="color:#e3a008">⏳вброшено</span> ':'';
+ const pend=n.pending?'<span title="вброшено, ещё не материализовано в узел" style="color:var(--warn)">⏳вброшено</span> ':'';
  let h=`<li>${tw}<span class="node${sel}${act?' actv':''}" data-id="${n.id}">${ico} ${pin}${pend}${n.id} <span class=badge>${badgeHTML(n.episodes)}</span></span>`;
  if(has&&open){h+='<ul>'+n.children.map(treeHTML).join('')+'</ul>';}
  h+='</li>';return h;
@@ -2356,7 +2468,7 @@ function timelineHTML(){
  }).join('');
  return '<p class=muted>сверху — последние по времени; «время» = от старта прогона; '+
   '«соб.№» — номер события в полном журнале (тут только вехи, поэтому номера с пропусками)</p>'+
-  '<table><thead><tr><th>время</th><th title="номер события в полном журнале прогона">соб.№</th><th>фаза</th><th>действие</th><th>вердикт</th></tr></thead><tbody>'+rows+'</tbody></table>';
+  '<div class=cmpscroll style="max-height:calc(100vh - 180px)"><table><thead><tr><th>время</th><th title="номер события в полном журнале прогона">соб.№</th><th>фаза</th><th>действие</th><th>вердикт</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
 }
 
 // run comparison (П5): lazy-load /api/compare once, filter+sort client-side
@@ -2435,16 +2547,16 @@ function compareHTML(){
  const heat=(k,v)=>{if(typeof v!=='number'||!ext[k])return '';
   const[mn,mx]=ext[k];if(mn===mx)return '';
   const t=(v-mn)/(mx-mn);const good=CMP_LOWER.has(k)?(1-t):t; // 1=best
-  if(good>=0.66)return ' style="color:#3fb950"';
-  if(good<=0.33)return ' style="color:#f85149"';
-  return ' style="color:#e3b341"';};
+  if(good>=0.66)return ' style="color:var(--ok)"';
+  if(good<=0.33)return ' style="color:var(--err)"';
+  return ' style="color:var(--warn)"';};
  const curName=(STATE&&STATE.name)||'';
  h+='<div class=cmpscroll><table class=cmp><thead><tr>'+CMP_COLS.map(([k,t])=>
   `<th data-sort="${k}" title="${esc(CMP_TIPS[k]||'')}" style="cursor:help"${CMP_NORM.has(k)?' class=normcol':''}>${t}${CMP_SORT===k?(CMP_DESC?' ▾':' ▴'):''}</th>`).join('')+'<th title="перенести прогон в архив"></th></tr></thead><tbody>';
  rows.forEach(r=>{
   const sel=(r.dir&&r.dir===curName)?' class=selrow':'';
   h+=`<tr data-run="${esc(r.dir||'')}" title="клик — показать этот прогон"${sel}>`+CMP_COLS.map(([k])=>{
-  let v=r[k];if(typeof v==='boolean')v=v?'<b style="color:#f85149">RED</b>':'—';
+  let v=r[k];if(typeof v==='boolean')v=v?'<b style="color:var(--err)">RED</b>':'—';
   const hc=CMP_NORM.has(k)?heat(k,r[k]):'';
   return `<td${hc}>${v===undefined?'':v}</td>`;}).join('')+
   `<td class=cmpact><span class=delrun data-del="${esc(r.dir||'')}" title="в архив (runs-out/_archive/)">🗑</span></td></tr>`;});
@@ -2469,14 +2581,31 @@ function idleHTML(){
  rows.sort((a,b)=>{let x=a[IDLE_SORT],y=b[IDLE_SORT];
   if(x<y)return IDLE_DESC?1:-1;if(x>y)return IDLE_DESC?-1:1;return 0;});
  // cause heat: quota waits + integration are the usual long poles
- const causeColor=c=>({'ожидание квоты':'#f85149','интеграция (тесты)':'#e3b341',
-  'починка':'#db6d28','реализация (LLM)':'#58a6ff','ревью спеки':'#79c0ff',
-  'декомпозиция (LLM)':'#a371f7','ответ человека':'#f0883e'}[c]||'#8b949e');
+ const causeColor=c=>({'ожидание квоты':'var(--err)','интеграция (тесты)':'var(--warn)',
+  'починка':'var(--code)','реализация (LLM)':'var(--link)','ревью спеки':'var(--link-2)',
+  'декомпозиция (LLM)':'var(--purple)','ответ человека':'var(--code)'}[c]||'var(--dim)');
  let h='<h3 class=muted>⏱ Анализ простоев и длительности '+
   '<span class="tab" id=idlereload style="margin-left:8px">↻ обновить</span></h3>';
  h+='<p class=muted>суммарно учтено <b>'+fmtDur(IDLE.total_s||0)+'</b> по '+
   (IDLE.events||0)+' операциям. Длительность = разрыв до следующего события трассы, '+
   'причина атрибутирована по фазе/действию и окнам ожидания квоты.</p>';
+ // headline usage per LLM (provider+model): requests, tokens in/out, wall time
+ const au=IDLE.agent_usage||{rows:[],totals:{}};
+ if(au.rows.length){
+  const aut=au.totals||{};
+  h+='<h4>Использование ЛЛМ/агентов <span class=dim>(запросы · токены вход/выход · время)</span></h4>';
+  h+='<div class=cmpscroll style="max-height:300px"><table class=cmp><thead><tr>'+
+   '<th>провайдер</th><th>модель</th><th>запросов</th><th>токены вход</th>'+
+   '<th>токены выход</th><th>всего токенов</th><th>время</th><th>сбоев</th></tr></thead><tbody>';
+  au.rows.forEach(r=>{
+   h+=`<tr><td>${esc(r.provider)}</td><td>${esc(r.model)}</td><td>${r.requests}</td>`+
+    `<td>${r.prompt}</td><td>${r.completion}</td>`+
+    `<td><b>${r.total}</b>${r.estimated?' <span class=dim>≈</span>':''}</td>`+
+    `<td>${fmtDur(r.time_s)}</td>`+
+    `<td style="color:${r.abnormal?'var(--err)':'inherit'}">${r.abnormal||0}</td></tr>`;});
+  h+='</tbody></table></div>';
+  h+=`<p class=dim>итого: <b>${aut.requests||0}</b> запросов · <b>${aut.tokens||0}</b> токенов · <b>${fmtDur(aut.time_s||0)}</b></p>`;
+ }
  // roll-up by cause — where the time structurally goes
  h+='<h4>По причинам (куда уходит время)</h4><div class=cmpscroll style="max-height:none">'+
   '<table class=cmp><thead><tr><th>причина</th><th>суммарно</th><th>операций</th><th>запросов LLM</th><th>доля</th></tr></thead><tbody>';
@@ -2495,9 +2624,9 @@ function idleHTML(){
  const fl=IDLE.failures||{by_model:[],transitions:[],totals:{}};
  const ft=fl.totals||{};
  if((ft.abnormal||0)>0||(ft.fallbacks||0)>0){
-  h+='<h4 style="color:#f85149">Сбои моделей → фоллбек/ошибка</h4>';
+  h+='<h4 style="color:var(--err)">Сбои моделей → фоллбек/ошибка</h4>';
   h+='<p class=muted>модель не ответила нормально <b>'+(ft.abnormal||0)+'</b> раз → '+
-   '<b>'+(ft.fallbacks||0)+'</b> фоллбеков, <b style="color:#f85149">'+(ft.terminal||0)+
+   '<b>'+(ft.fallbacks||0)+'</b> фоллбеков, <b style="color:var(--err)">'+(ft.terminal||0)+
    '</b> терминальных ошибок; потеряно на ретраях/ожидании <b>'+fmtDur(ft.delay_s||0)+'</b>.</p>';
   h+='<div class=cmpscroll style="max-height:240px"><table class=cmp><thead><tr>'+
    '<th>модель</th><th>сбоев</th><th>429</th><th>5xx</th><th>timeout</th><th>пусто</th>'+
@@ -2505,7 +2634,7 @@ function idleHTML(){
   (fl.by_model||[]).forEach(r=>{ if(!(r.abn||r.fallbacks))return;
    h+=`<tr><td>${esc(r.model)}</td><td>${r.abn||0}</td><td>${r['429']||0}</td>`+
     `<td>${r['5xx']||0}</td><td>${r.timeout||0}</td><td>${r.empty||0}</td>`+
-    `<td>${r.fallbacks||0}</td><td style="color:${r.errors?'#f85149':'inherit'}">${r.errors||0}</td>`+
+    `<td>${r.fallbacks||0}</td><td style="color:${r.errors?'var(--err)':'inherit'}">${r.errors||0}</td>`+
     `<td>${fmtDur(r.delay_s||0)}</td></tr>`;});
   h+='</tbody></table></div>';
   // transition chain: who fell back to whom and why
@@ -2513,8 +2642,8 @@ function idleHTML(){
   if(trs.length){
    h+='<p class=muted style="margin-top:6px">Переходы (что пробовали после сбоя):</p><div class=cmpscroll style="max-height:160px"><ul style="margin:2px 0 0 14px;padding:0">';
    trs.slice().reverse().forEach(t=>{
-    const to=t.terminal||!t.to ? '<b style="color:#f85149">✗ цепочка исчерпана</b>' : esc(t.to);
-    h+=`<li><span class=dim>${esc(t.from||'—')}</span> →<span style="color:#db6d28">(${esc(t.reason||'?')})</span>→ ${to}</li>`;});
+    const to=t.terminal||!t.to ? '<b style="color:var(--err)">✗ цепочка исчерпана</b>' : esc(t.to);
+    h+=`<li><span class=dim>${esc(t.from||'—')}</span> →<span style="color:var(--code)">(${esc(t.reason||'?')})</span>→ ${to}</li>`;});
    h+='</ul></div>';
   }
  }
@@ -2526,7 +2655,7 @@ function idleHTML(){
   tok.rows.forEach(r=>{const sh=tok.total?Math.round(100*r.total/tok.total):0;
    h+=`<tr><td>${esc(r.stage||'—')}</td><td>${esc(r.role)}${r.estimated?' <span class=dim>≈</span>':''}</td><td>${esc(r.model)}</td><td>${r.calls}</td>`+
     `<td>${r.prompt}</td><td>${r.completion}</td><td><b>${r.total}</b></td>`+
-    `<td><span style="display:inline-block;height:8px;background:#58a6ff;width:${sh}px;max-width:120px"></span> ${sh}%</td></tr>`;});
+    `<td><span style="display:inline-block;height:8px;background:var(--link);width:${sh}px;max-width:120px"></span> ${sh}%</td></tr>`;});
   h+=`</tbody></table></div><p class=dim>всего токенов: <b>${tok.total}</b></p>`;
  } else {
   // never vanish silently — say WHY the table is empty (a stopped/young run has
@@ -2578,7 +2707,7 @@ function hitlHTML(){
  h+='<div class='+(HITL.pending?'errbox':'fixbox')+'>'+
   (HITL.pending?'⏳ <b>ответ записан, воркер ещё не забрал</b> (answer.md ждёт потребления)'
    :'✓ <b>нет неотправленного ответа</b> — можно отвечать на новый вопрос')+
-  (open?' · <span style="color:#c0392b">без ответа: '+open+'</span>':'')+'</div>';
+  (open?' · <span style="color:var(--err)">без ответа: '+open+'</span>':'')+'</div>';
  h+='<h4>Ответить воркеру (человек → worker)</h4>'+
   '<textarea id=hitlans rows=4 style="width:100%" placeholder="Текст ответа — попадёт в hitl/answer.md, воркер заберёт его из своего цикла ожидания"></textarea>'+
   '<div style="margin:6px 0"><span class="tab" id=hitlsend>➤ отправить ответ</span> '+
@@ -2608,17 +2737,17 @@ function hitlHTML(){
    '.hitlcol-right{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;min-height:0}'+
    '.hitlcol-right>h4{flex:0 0 auto}'+
    '.chat{flex:1 1 auto;min-height:0;overflow-y:auto;padding:8px;margin-top:4px;'+
-   'background:#0e1117;border:1px solid #222;border-radius:8px;display:flex;flex-direction:column}'+
+   'background:var(--bg);border:1px solid var(--panel);border-radius:8px;display:flex;flex-direction:column}'+
    '.bub{max-width:78%;margin:4px 0;padding:6px 9px;border-radius:12px;'+
    'white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.35}'+
-   '.bin{align-self:flex-start;background:#23303a;border:1px solid #2d4150;'+
+   '.bin{align-self:flex-start;background:var(--border);border:1px solid var(--border);'+
    'border-bottom-left-radius:3px}'+
-   '.bout{align-self:flex-end;background:#1f3b2a;border:1px solid #2f5d40;'+
+   '.bout{align-self:flex-end;background:var(--ok-bg);border:1px solid var(--ok-border);'+
    'border-bottom-right-radius:3px}'+
-   '.bun{align-self:flex-start;background:#3a2326;border:1px solid #7a2b30;'+
+   '.bun{align-self:flex-start;background:var(--err-bg-hi);border:1px solid var(--err-bg-hi);'+
    'border-bottom-left-radius:3px}'+
    '.bmeta{font-size:11px;opacity:.7;margin-bottom:3px;font-weight:600}'+
-   '.bun .bmeta{color:#ff6b6b;opacity:1}';
+   '.bun .bmeta{color:var(--err);opacity:1}';
  h+='<style>'+chatCss+'</style>';
  const meta=t=>`<div class=bmeta>${esc(t)}</div>`;
  const bub=(side,m,txt)=>`<div class="bub ${side}">${meta(m)}${esc(txt)}</div>`;
@@ -2699,6 +2828,8 @@ function renderGlobal(){
  else if(GTAB==='compare')body=compareHTML();
  else if(GTAB==='timeline')body=timelineHTML();
  else if(GTAB==='graph')body='<p class=muted>граф задач, что построил плагин — <b>дабл-клик</b> = провалиться в спеку/код/версии · <b>клик</b> = свернуть поддерево / развернуть следующий уровень. 🌿 ветка · 🍃 лист · бейджи = эпизоды</p>'+graphSVG();
+ // воркфлоу: server-rendered markdown (may hold tables) — scroll body, pin headers
+ else if(GTAB==='workflow')body='<div class=cmpscroll style="max-height:calc(100vh - 170px)">'+(R.workflow||'<p class=dim>нет данных</p>')+'</div>';
  else body=R[GTAB]||'<p class=dim>нет данных</p>';
  h+='<div id=gbody>'+body+'</div>';
  $('#detail').innerHTML=h;
@@ -2714,7 +2845,7 @@ function graphSVG(){
  (function walk(n){maxD=Math.max(maxD,n._d);maxY=Math.max(maxY,n._y);nodes.push(n);effKids(n).forEach(c=>{edges.push([n,c]);walk(c);});})(root);
  const X=n=>PX+n._d*COLW,Y=n=>PY+n._y*ROWH;const W=PX*2+(maxD+1)*COLW,H=PY*2+(maxY+1)*ROWH;
  let s=`<svg width="${W}" height="${H}" style="min-width:${W}px">`;
- edges.forEach(([a,b])=>{const x1=X(a)+BW,y1=Y(a)+BH/2,x2=X(b),y2=Y(b)+BH/2;s+=`<path d="M${x1} ${y1} C${x1+24} ${y1}, ${x2-24} ${y2}, ${x2} ${y2}" stroke="#30363d" fill="none"/>`;});
+ edges.forEach(([a,b])=>{const x1=X(a)+BW,y1=Y(a)+BH/2,x2=X(b),y2=Y(b)+BH/2;s+=`<path d="M${x1} ${y1} C${x1+24} ${y1}, ${x2-24} ${y2}, ${x2} ${y2}" stroke="var(--border)" fill="none"/>`;});
  nodes.forEach(n=>{const leaf=!(n.children&&n.children.length);const sel=SEL===n.id;const coll=!leaf&&GCOLL[n.id];const act=isActive(n.id);
   const ico=act?'⏳':(coll?'▸🌿':(leaf?'🍃':'🌿'));
   const tail=coll?` +${countDesc(n)}`:'';
@@ -2722,10 +2853,21 @@ function graphSVG(){
   const tip=badgeTips(n.episodes);
   s+=`<g class=gnode data-id="${n.id}" transform="translate(${X(n)},${Y(n)})" style="cursor:pointer">`+
      (tip?`<title>${esc(tip)}</title>`:'')+
-     `<rect width="${BW}" height="${BH}" rx="5" fill="${n.pending?'#3a2e12aa':(act?'#3a2a1255':(sel?'#1f6feb55':(leaf?'#161b22':'#13251a')))}" stroke="${n.pending?'#e3a008':(act?'#e3b341':(sel?'#1f6feb':(leaf?'#30363d':'#3fb950')))}"${(act||n.pending)?' stroke-dasharray="4 3"':''}/>`+
-     `<text x="7" y="15" fill="#c9d1d9" font-size="11">${ico} ${n.pending?'⏳':(n.technical?'⚙️':(n.attached?'📌':''))}${esc(n.id).slice(0,14)}${tail}</text>`+
+     `<rect width="${BW}" height="${BH}" rx="5" fill="${n.pending?'color-mix(in srgb,var(--warn) 30%,transparent)':(act?'color-mix(in srgb,var(--warn) 18%,transparent)':(sel?'color-mix(in srgb,var(--accent) 33%,transparent)':(leaf?'var(--panel)':'var(--ok-bg)')))}" stroke="${n.pending?'var(--warn)':(act?'var(--warn)':(sel?'var(--accent)':(leaf?'var(--border)':'var(--ok)')))}"${(act||n.pending)?' stroke-dasharray="4 3"':''}/>`+
+     `<text x="7" y="15" fill="var(--fg)" font-size="11">${ico} ${n.pending?'⏳':(n.technical?'⚙️':(n.attached?'📌':''))}${esc(n.id).slice(0,14)}${tail}</text>`+
      (bdg?`<text x="${BW-5}" y="14" text-anchor="end" font-size="8">${bdg}</text>`:'')+`</g>`;});
- s+='</svg>';return '<div style="overflow:auto;border:1px solid #21262d;border-radius:6px;padding:6px">'+s+'</div>'+legendHTML();
+ s+='</svg>';return '<div style="overflow:auto;border:1px solid var(--panel-2);border-radius:6px;padding:6px">'+s+'</div>'+legendHTML();
+}
+
+// SINGLE source of truth for event health (used by BOTH the node summary
+// boxes and the events table). Never duplicate this classification: a verdict
+// is BAD if REJECT/FAIL/ERROR; it is 'fixed' when a later event (by tick) on
+// the SAME gate passed, otherwise 'open'. Returns '' | 'open' | 'fixed'.
+function evBad(v){return ['REJECT','FAIL','ERROR'].includes(String(v));}
+function evStatus(e,all){
+ if(!evBad(e.verdict))return '';
+ const g=e.gate,t=Number(e.tick)||0;
+ return (g&&all.some(x=>x.gate===g&&String(x.verdict)==='PASS'&&(Number(x.tick)||0)>t))?'fixed':'open';
 }
 
 function renderNode(){
@@ -2743,10 +2885,8 @@ function renderNode(){
  // a bad verdict followed by a later PASS on the SAME gate is fixed history,
  // not a live problem — show the two groups apart so badges and boxes agree
  const evs=nd.events||[];
- const isBad=e=>['REJECT','FAIL','ERROR'].includes(String(e.verdict));
- const fixedBy=i=>{const g=evs[i].gate;return g&&evs.some((x,j)=>j>i&&x.gate===g&&String(x.verdict)==='PASS');};
- const open=[],fixed=[];
- evs.forEach((e,i)=>{if(isBad(e))(fixedBy(i)?fixed:open).push(e);});
+ const open=evs.filter(e=>evStatus(e,evs)==='open');
+ const fixed=evs.filter(e=>evStatus(e,evs)==='fixed');
  if(open.length){
   h+='<div class=errbox><b>❌ незакрытые проблемы ('+open.length+'):</b><ul>'+
    open.map(e=>`<li><span class=dim>#${e.tick??''}</span> <b>${esc(e.gate||e.phase||'')}</b> → ${esc(e.verdict)}: ${esc(e.detail||e.action||'')}</li>`).join('')+
@@ -2778,12 +2918,13 @@ async function renderNodeBody(nd){
    // ❌ red = still OPEN (no later PASS on that gate). So the table itself shows
    // WHERE a problem occurred and whether a rework closed it.
    const all=(nd.events||[]);
-   const isBad=e=>['REJECT','FAIL','ERROR'].includes(String(e.verdict));
-   const fixed=e=>{const g=e.gate;if(!g)return false;return all.some(x=>x.gate===g&&String(x.verdict)==='PASS'&&(Number(x.tick)||0)>(Number(e.tick)||0));};
    const evs=[...all].sort((a,b)=>(Number(b.tick)||0)-(Number(a.tick)||0));
-   b.innerHTML='<div class=dim style="margin:4px 0">❌ незакрытая · 🔧 исправлена доработкой</div>'+
-   '<table><thead><tr><th title="номер события в полном журнале">соб.№ ↓</th><th>фаза</th><th>роль</th><th>LLM/агент</th><th>действие</th><th>гейт</th><th>вердикт</th><th>детали</th></tr></thead><tbody>'+
-   evs.map(e=>{const bad=isBad(e);const fx=bad&&fixed(e);const bg=bad?(fx?'#3a2f17':'#3a1d1d'):'';const mark=bad?(fx?'🔧 ':'❌ '):'';return `<tr${bg?(' style="background:'+bg+'"'):''}><td>${e.tick??''}</td><td>${esc(e.phase)}</td><td>${esc(e.profile)}</td><td>${esc(e.model||'')}</td><td>${esc(e.action)}</td><td>${esc(e.gate)}</td><td>${mark}${e.verdict?('<b>'+esc(e.verdict)+'</b>'):''}</td><td>${esc(e.detail||'')}</td></tr>`;}).join('')+'</tbody></table>';
+   // Row colour comes from evStatus(): RED (.evbad) = still-open problem,
+   // GREEN (.evfix) = resolved by a later PASS on the same gate. The colour
+   // alone tells WHERE it broke and whether a rework closed it.
+   b.innerHTML='<div class=dim style="margin:4px 0">🟥 незакрытая · 🟩 исправлена доработкой</div>'+
+   '<div class=cmpscroll style="max-height:calc(100vh - 200px)"><table><thead><tr><th title="номер события в полном журнале">соб.№ ↓</th><th>фаза</th><th>роль</th><th>LLM/агент</th><th>действие</th><th>гейт</th><th>вердикт</th><th>детали</th></tr></thead><tbody>'+
+   evs.map(e=>{const st=evStatus(e,all);const cls=st==='open'?'evbad':(st==='fixed'?'evfix':'');const mark=st==='open'?'❌ ':(st==='fixed'?'🔧 ':'');return `<tr${cls?(' class='+cls):''}><td>${e.tick??''}</td><td>${esc(e.phase)}</td><td>${esc(e.profile)}</td><td>${esc(e.model||'')}</td><td>${esc(e.action)}</td><td>${esc(e.gate)}</td><td>${mark}${e.verdict?('<b>'+esc(e.verdict)+'</b>'):''}</td><td>${esc(e.detail||'')}</td></tr>`;}).join('')+'</tbody></table></div>';
  }
  else if(NTAB==='versions'){
    // ordered: v1..vN (superseded) then current spec = newest
