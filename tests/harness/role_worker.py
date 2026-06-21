@@ -1695,6 +1695,13 @@ of the product's own modules, or a SMOKE-only test. Acceptance must demand REAL
 observable behaviour (concrete inputs → concrete outputs through the public
 surface), so a hollow implementation cannot pass it. "It imports", "it returns
 something", "no error" are NOT acceptable criteria.
+
+When the header carries a 'Covers human requirement:' line, the authored
+acceptance criteria MUST verify THAT requirement directly — exercise the exact
+surface it names (the route/command/behaviour the human asked for) end-to-end.
+A spec that restates the requirement but offers no check that would FAIL when
+that surface is absent is INCOMPLETE — REJECT it (the check must be derived from
+the requirement, not invented around it).
 Reply with ONLY: {{"verdict": "PASS"|"REJECT", "reasons": ["..."]}}"""
 
 
@@ -1756,6 +1763,10 @@ def make_reviewer() -> Callable[[dict], dict]:
             constitution="; ".join(ctx.get("constitution") or []),
             repo_map=_review_repo_map(ctx.get("workspace_root")),
             refusals=_review_refusals(ctx.get("node")))
+        # 453: always inject prior decisions — the reviewer's recurring reject
+        # patterns + project decisions ride into every review (no-op when memory
+        # is off), so a constraint learned once is not re-litigated each node.
+        prompt += memory.recall_block_for("reviewer", ctx["spec"])
         raw = _call_model(prompt, system=system, allowed=allowed,
                           disallowed=disallowed, cwd=ctx.get("workspace_root"),
                           model=model, role="reviewer",

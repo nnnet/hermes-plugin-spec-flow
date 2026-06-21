@@ -1208,6 +1208,17 @@ class Workspace:
                  f"- **Node:** `{node_id}`  ·  **Level:** L{depth}  ·  **Decision:** `{verdict}`",
                  f"- **Traces-to:** {parent or 'L0 goal'}",
                  f"- **leaf_check reason:** {reasons or 'within all thresholds'}"]
+        # 442: the node carries its coverage criterion — the exact human
+        # requirement it answers — so the spec (and the reviewer who reads it)
+        # can derive the acceptance check FROM the requirement, not guess it.
+        # Model-independent: surfaces whatever statement the engine attached.
+        requirement = str(node.get("requirement") or "").strip()
+        if requirement:
+            lines += [
+                f"- **Covers human requirement:** {' '.join(requirement.split())[:300]}",
+                "- **Acceptance (coverage criterion):** a real check exercises the"
+                " exact surface this requirement names end-to-end; the node stays"
+                " RED until that check passes (a stub/mock must not satisfy it)."]
         if target:
             lines.append(f"- **Project acceptance target:** {target}")
         if m:

@@ -415,7 +415,7 @@ level_attempts, last_causeset, nonshrink_rounds, open{}}`.
 - Тесты только через harness spec-flow на free OpenRouter / живой Bifrost, как
   принято; никаких прямых curl мимо ask().
 
-## Чек-лист выполнения
+##  
 
 Ссылки на код — пути от корня плагина `spec-flow/`. Свежие файлы доктора Serena
 ещё не проиндексировала (LSP-кэш), номера строк взяты по живому коду (grep).
@@ -437,10 +437,15 @@ level_attempts, last_causeset, nonshrink_rounds, open{}}`.
 - [ ] Дельта как условие приёмки (`verify` + `testable_criteria`)
   → частично: детектор `empty_delta` `spec_flow_diagnosers.py` `_scope_findings`;
     отдельного приёмочного гейта пустой дельты нет (pending)
-- [ ] Проверка выводится из требования (авто-контракт + промпт ревью)
-  → авто-контракт `tests/harness/contract_from_smoke.py:1`; промпт-ревью — pending
-- [ ] Цель + критерий покрытия привязаны к узлу (`Traces-to`)
-  → НЕТ (pending); шаблон спеки `Workspace.spec`
+- [x] Проверка выводится из требования (авто-контракт + промпт ревью)
+  → авто-контракт `tests/harness/contract_from_smoke.py:1`; узел несёт требование
+    в спеку (`Covers human requirement`/`Acceptance` `spec_flow_runner.py:1211`);
+    `_REVIEW_TASK` `tests/harness/role_worker.py` требует проверку, выводимую ИЗ
+    требования (REJECT если её нет); тест `test_spec_coverage_criterion.py`
+- [x] Цель + критерий покрытия привязаны к узлу (`Traces-to`)
+  → `Workspace.spec` `spec_flow_runner.py:1211`: `Covers human requirement:` +
+    `Acceptance (coverage criterion)` из `node["requirement"]`; модель-независимо
+    (эхо человеческого текста, без web/app-литералов). Тест coverage_criterion
 - [x] `depends_on` от декомпозера + топо-порядок запуска
   → `_topo_order` `spec_flow_runner.py:2949`
 - [x] Низкая температура + N голосов по умолчанию для всех воркеров
