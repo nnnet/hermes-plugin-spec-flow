@@ -9,3 +9,7 @@ tests/runs-out/
 
 # git worktrees created for parallel subagents
 .claude/worktrees/
+
+# tooling caches / scratch
+.serena/
+tmp/
