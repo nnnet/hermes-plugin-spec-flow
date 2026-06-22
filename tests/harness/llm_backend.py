@@ -122,6 +122,8 @@ def configure_workers(cfg: dict | None) -> None:
                 WORKERS_CFG[_key] = _scfg
         WORKERS_CFG.pop("stages", None)
     _calls_made = 0          # a fresh case starts with a fresh budget
+    _MODEL_5XX.clear()       # fresh per-model health for the new run
+    _MODEL_DOWN.clear()
     # A case workers block overrides the transport floor (.test.env) ONLY for
     # keys it explicitly carries — an absent key leaves the current value
     # untouched (preserving the import-time floor and any test monkeypatch).
@@ -158,6 +160,15 @@ _calls_made = 0
 # workers.cycle_models; off → every call starts at the primary (legacy).
 _cycle_n = 0
 _counters_lock = threading.Lock()
+
+# Per-model run-scoped circuit breaker. A model that returns 5xx (504 gateway
+# timeout / 503 unavailable) repeatedly in a run is degraded for the rest of the
+# run — keep paying its full per-call timeout on every later call is the v063
+# cost sink (mimo-v2.5 504'd ~121s each, on dozens of calls). After N 5xx the
+# model is dropped from the chain so calls go straight to the healthy fallback.
+# Reset per run in configure(). Threshold: workers.model_breaker_5xx (default 2).
+_MODEL_5XX: "dict[str, int]" = {}
+_MODEL_DOWN: "set[str]" = set()
 
 
 def _next_cycle() -> int:
@@ -651,7 +662,12 @@ def ask(prompt: str, *, model: str, role: str, step: str,
                              "detail": str(last_exc)[:160]})
                 if consecutive_error_rounds >= max_error_rounds:
                     break
-        for i, m in enumerate(chain):
+        # drop models the run already saw 5xx out repeatedly — they cost a full
+        # timeout per call for nothing. Keep the last as a desperate try if the
+        # whole chain is down (better one attempt than a no-op round).
+        live = [m for m in chain if m not in _MODEL_DOWN] or chain[-1:]
+        _brk = int((cfg or {}).get("model_breaker_5xx", 2))
+        for i, m in enumerate(live):
             _spend_call()
             try:
                 if gate is not None:
@@ -666,9 +682,19 @@ def ask(prompt: str, *, model: str, role: str, step: str,
                 # config errors (ValueError: paid gate, unknown
                 # provider) abort the call
                 last_exc = exc
+                # per-model breaker: count 5xx (gateway down) and retire the
+                # model for the rest of the run once it crosses the threshold,
+                # so later calls skip it instead of paying its timeout again
+                if _failure_reason(exc) in ("5xx", "timeout"):
+                    _MODEL_5XX[m] = _MODEL_5XX.get(m, 0) + 1
+                    if _MODEL_5XX[m] >= _brk and m not in _MODEL_DOWN:
+                        _MODEL_DOWN.add(m)
+                        _log_event({"event": "model_circuit_open", "model": m,
+                                    "reason": "repeated 5xx",
+                                    "count": _MODEL_5XX[m]})
                 # record the fallback hop so the dashboard shows which model
                 # failed (and why) and what was tried next
-                _nxt = chain[i + 1] if i + 1 < len(chain) else (
+                _nxt = live[i + 1] if i + 1 < len(live) else (
                     rotation[0] if rotation else None)
                 _log_event({"event": "llm_fallback", "from_model": m,
                             "to_model": _nxt, "reason": _failure_reason(exc),
