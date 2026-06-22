@@ -366,3 +366,19 @@ def test_late_requirements_ride_into_assembly_spec(tmp_path):
         assert "Late human requirements" in node["spec_markdown"]
     finally:
         _os.environ.pop("SPEC_FLOW_PRE_GATE", None)
+
+
+def test_contract_exposes_all_declared_routes_for_boot_probe():
+    # The product contract must surface EVERY declared route (incl. late ones
+    # absorbed into existing modules), not just the curated boot triple, so the
+    # boot oracle can probe each for 'is it actually wired'. Regression for v062:
+    # a late GET /about was marked DONE yet 404'd, slipping through READY because
+    # only /health,/notes,/ui were probed.
+    cons = ["HTTP via WSGI; src/app.py exposes `wsgi_app`; sqlite3 in src/db.py.",
+            "POST /notes -> {id}; GET /notes -> {items}; GET /health 200; GET /ui."]
+    standing = lambda: [("about_req", "Serve GET /about as an HTML page.")]  # noqa: E731
+    c = _bare_engine(cons, "notes", standing)._product_contract()
+    paths = {p for _m, p in c.get("routes", [])}
+    assert "/about" in paths, f"late /about not in probe route list: {c.get('routes')}"
+    # templated paths are skipped (can't be probed literally)
+    assert not any("{" in p for _m, p in c.get("routes", []))

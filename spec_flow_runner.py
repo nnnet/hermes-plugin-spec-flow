@@ -1563,6 +1563,18 @@ if json_roundtrip:
         fail("GET %s body not JSON: %r" % (json_roundtrip, exc))
     if "rootboot" not in texts:
         fail("POST then GET %s did not round-trip" % json_roundtrip)
+# Every OTHER declared route must be wired too (e.g. a late GET /about absorbed
+# into an existing module). 404 here = the route was promised but never routed in
+# the assembled entry — exactly the false-green the curated triple let slip.
+for _spec in (cfg.get("extra_routes") or []):
+    try:
+        _method, _path = _spec[0], _spec[1]
+    except Exception:
+        continue
+    _st, _ = call(_method, _path)
+    if _st == 404:
+        fail("%s %s -> 404 (declared route never wired in the entry)"
+             % (_method, _path))
 print("BOOTGATE_OK")
 '''
 
@@ -2361,7 +2373,17 @@ class Engine:
                 if "GET" in methods:
                     boot["ok_route"] = path
                     break
-        return {"entry": entry, "callable": callables, "boot": boot}
+        # Every OTHER declared route (e.g. a late-injected GET /about absorbed
+        # into an existing module) must also be live in the assembled entry. The
+        # curated triple alone let unwired late routes 404 while the product was
+        # marked READY. Probe each non-triple, non-templated path for "is it
+        # routed at all" (GET -> not 404; a POST-only route answers 405, still
+        # wired). Templated paths ({id}) can't be probed literally — skip them.
+        covered = {p for p in boot.values() if p}
+        extra = [["GET", p] for p in routes
+                 if p not in covered and "{" not in p]
+        return {"entry": entry, "callable": callables, "boot": boot,
+                "routes": extra}
 
     def _assembly_node(self, force: bool = False) -> "Optional[dict]":
         """B2 mechanism 3: an ENGINE-generated assembly leaf.
@@ -4523,7 +4545,8 @@ class Engine:
             "entry_stem": Path(c["entry"]).stem,
             "ok_route": boot.get("ok_route", ""),
             "html_route": boot.get("html_route", ""),
-            "json_roundtrip": boot.get("json_roundtrip", "")})
+            "json_roundtrip": boot.get("json_roundtrip", ""),
+            "extra_routes": c.get("routes", [])})
         try:
             proc = subprocess.run(
                 ["python3", "-c", _ROOT_BOOT_PROBE, str(ws.root), probe_cfg],
