@@ -1,0 +1,21 @@
+spec_flow_runner.py
+  s_a7f45290e91181::t_96f9ca9fe73dcc 2008-2060
+tests/coverage/test_late_req_delta_gate.py
+  s_a7f45290e91181::t_6b7867a3b9f022 67-107
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.9",
+  "base_commit_sha": "2424752bd48223424c0b6b008c1eb76325b6395d",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
