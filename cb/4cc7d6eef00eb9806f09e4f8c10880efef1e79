@@ -1,0 +1,25 @@
+tests/coverage/test_prune_stale_causes.py
+  s_a7f45290e91181::t_93e6185cd3a77e 1-139
+spec_flow_runner.py
+  s_a7f45290e91181::t_d405d74d8f152c 2024,2065
+  s_a7f45290e91181::t_55c0dc415c42db 2066-2068
+  s_a7f45290e91181::t_112256514890ff 2251-2323
+  s_a7f45290e91181::t_77d5b1851e63d4 3028-3031
+  s_a7f45290e91181::t_7c882d2d26ef51 2021-2023,2025-2026
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.9",
+  "base_commit_sha": "cb4cc7d6eef00eb9806f09e4f8c10880efef1e79",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
