@@ -4615,15 +4615,32 @@ class Engine:
         no_entry_note = ("no runnable entrypoint — only stub modules exist; "
                          "cannot assert at runtime")
         entry_fail_note = "entrypoint did not run cleanly (returncode != 0)"
+        # When the case declares no explicit entrypoint but the human spec DOES
+        # declare a runnable web product (a derivable contract), the engine has
+        # its own un-mockable runner: boot the assembled entry in a subprocess
+        # and probe its contract routes (_assembled_product_boots). Use that as
+        # the runtime oracle so smoke/e2e checks are REALLY exercised instead of
+        # dead-ending on 'no entrypoint'. This is the same oracle the root boot
+        # gate uses — no per-case boilerplate, no stub pass, no solution leak.
+        boot_ok = None
+        boot_detail = ""
+        if not entrypoint and self._product_contract():
+            boot_ok, boot_detail = self._assembled_product_boots()
         for kind in ("smoke", "e2e", "metrics"):
             for check in acceptance.get(kind, []) or []:
-                if not entrypoint:
-                    record(kind, check, False, no_entry_note)
-                elif not entry_ok:
-                    record(kind, check, False, entry_fail_note)
+                if entrypoint:
+                    if entry_ok:
+                        record(kind, check, True, "entrypoint ran cleanly")
+                    else:
+                        record(kind, check, False, entry_fail_note)
+                elif boot_ok is True:
+                    record(kind, check, True,
+                           "assembled product boots and serves its contract")
+                elif boot_ok is False:
+                    record(kind, check, False,
+                           boot_detail or "product does not serve its contract")
                 else:
-                    # Entrypoint ran cleanly — accept the check as satisfied.
-                    record(kind, check, True, "entrypoint ran cleanly")
+                    record(kind, check, False, no_entry_note)
 
         ready = bool(lines) and not failed
         verdict = "READY" if ready else "NOT READY"
