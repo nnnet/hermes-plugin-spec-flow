@@ -49,3 +49,29 @@ def test_no_team_no_solo_empty(monkeypatch):
     monkeypatch.setattr(rw.llm_log, "log", lambda rec: seen.append(rec))
     assert rw._select_team({"node": "n"}) == []
     assert not [r for r in seen if r.get("event") == "process_tier"]
+
+
+# --- _leaf_landed_ok: did the solo pass deliver a compiling module? ----------
+
+def test_landed_ok_valid_module(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "foo.py").write_text("def f():\n    return 1\n")
+    assert rw._leaf_landed_ok(str(tmp_path), "foo") is True
+
+
+def test_landed_ok_missing_file(tmp_path):
+    assert rw._leaf_landed_ok(str(tmp_path), "foo") is False
+
+
+def test_landed_ok_empty_file(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "foo.py").write_text("   \n")
+    assert rw._leaf_landed_ok(str(tmp_path), "foo") is False
+
+
+def test_landed_ok_syntax_error(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "foo.py").write_text("def (:\n")
+    assert rw._leaf_landed_ok(str(tmp_path), "foo") is False
+
+

@@ -931,6 +931,27 @@ def _select_team(ctx: dict) -> list[dict]:
     return _implementer_team()
 
 
+def _leaf_landed_ok(ws_root: str, fn: str) -> bool:
+    """True when the leaf produced a syntactically valid module on disk.
+    Used to decide whether a SOLO pass actually delivered: an empty or
+    non-compiling src/<fn>.py means the single coder pass failed (model 429/
+    timeout/garbage reply), regardless of why. A missing foundational module
+    cascades every dependent leaf to RED, so a failed solo pass must NOT be
+    accepted silently — the caller escalates to the orchestra."""
+    try:
+        src = (Path(ws_root) / "src" / f"{fn}.py").read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001 — absent file == not landed
+        return False
+    if not src.strip():
+        return False
+    try:
+        import ast as _ast
+        _ast.parse(src)
+        return True
+    except SyntaxError:
+        return False
+
+
 def _normalise_team(raw: Any) -> list[dict]:
     """Normalise a raw team value into a specialist LIST. Accepts the canonical
     `{specialists: [...]}` dict and the legacy bare list — a JSON env value, a
@@ -1508,6 +1529,25 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         else:
             out = (_implement_chat(ctx, ws_root, nid, fn) if _chat_only()
                    else _implement_claude(ctx, ws_root, nid, fn))
+            # Process tiering is an OPTIMISTIC fast path: a simple leaf gets ONE
+            # coder pass. But solo drops the orchestra's architect/coder/tester/
+            # fixer redundancy, so a single flaky/failed call (429, timeout,
+            # garbage reply) can leave the leaf with NO compiling module — and a
+            # missing foundational module cascades every dependent leaf to RED.
+            # If solo did not land a compiling module AND a real orchestra is
+            # configured, escalate to it. Reliability is a property, not a hope:
+            # the speed win is kept when solo works, never at the cost of an
+            # empty leaf when it doesn't. Parallelism is untouched.
+            if ctx.get("solo") and not _leaf_landed_ok(ws_root, fn):
+                orchestra = _implementer_team()
+                if orchestra:
+                    llm_log.log({"event": "process_tier", "node": nid,
+                                 "mode": "escalate",
+                                 "reason": "solo pass left no compiling "
+                                           "module — escalating to orchestra"})
+                    out = _orchestra_run(ctx, ws_root, nid, fn, system=system,
+                                         allowed=allowed, disallowed=disallowed,
+                                         channel=channel, team=orchestra)
         if claim is not None:
             claims.BOARD.complete(nid, claim["hash"])
         return out
