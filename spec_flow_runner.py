@@ -2018,6 +2018,12 @@ class Engine:
             self._doctor_advise(node, nid, depth, "delta_gate", "FAIL",
                                 {"scope_findings": [
                                     f"{code_rel} adds no new symbol — empty delta"]})
+            # remember WHICH artifact this cause is about so completion can
+            # re-validate it (a later rework may make the delta real on a path
+            # that does not re-run this gate — see _prune_stale_causes).
+            _ds = (getattr(self, "_doctor_states", None) or {}).get(nid)
+            if isinstance(_ds, dict):
+                _ds["delta_path"] = code_rel
             return False
         # Route-level delta: a non-empty owner module is NOT enough when the
         # requirement declares an HTTP route. The leaf must add a HANDLER for it
@@ -2056,6 +2062,10 @@ class Engine:
                                 {"scope_findings": [
                                     f"{code_rel} adds no new route handler for "
                                     f"{missing} — empty delta"]})
+            _ds = (getattr(self, "_doctor_states", None) or {}).get(nid)
+            if isinstance(_ds, dict):
+                _ds["delta_path"] = code_rel
+                _ds["delta_routes"] = list(routes)
             return False
         # The delta is real now (module present, route handlers in place). If an
         # EARLIER pass on this leaf opened an empty_delta cause (the leaf first
@@ -2237,6 +2247,79 @@ class Engine:
             if cause and cause != "(none)":
                 out.append((nid, cause))
         return out
+
+    def _module_has_real_code(self, rel: str, routes=None) -> bool:
+        """True when `rel` (relative to the workspace) is a real, parseable
+        module: non-blank, more than comments, with at least one def/class/
+        assignment — and, when `routes` are given, a handler for EACH (the
+        literal path OR a def whose name carries the route token). The same
+        artifact check the empty_delta gate applies, used to re-validate a stale
+        cause against the FINAL file."""
+        try:
+            src = (Path(self.workspace.root) / rel).read_text(encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            return False
+        if not src.strip():
+            return False
+        try:
+            import ast as _ast
+            tree = _ast.parse(src)
+        except SyntaxError:
+            return False
+        has_sym = any(isinstance(n, (_ast.FunctionDef, _ast.AsyncFunctionDef,
+                                     _ast.ClassDef, _ast.Assign))
+                      for n in _ast.walk(tree))
+        if not has_sym:
+            return False
+        low = src.lower()
+        for r in (routes or []):
+            token = str(r).rstrip("/").rsplit("/", 1)[-1].lower()
+            if not token or "{" in token:
+                continue
+            if str(r).lower() in low:
+                continue
+            if re.search(r"def\s+\w*" + re.escape(token) + r"\w*", low):
+                continue
+            return False                     # a declared route still has no handler
+        return True
+
+    def _prune_stale_causes(self) -> None:
+        """Re-validate each OPEN doctor cause against the FINAL artifact and close
+        the ones that no longer reflect a real defect. A cause is the engine's
+        journal of a problem seen DURING the run; by completion the doctor may
+        have reworked the leaf so the deliverable is now real, but some remedy
+        paths (reject_empty, reconcile_check) don't re-run the gate that opened
+        the cause — leaving it falsely 'open' and vetoing a product that actually
+        works (v067/v068: every route served, product gate READY, yet integrate
+        RED on stale empty_delta/vague_spec). Honest: a cause is dropped ONLY when
+        the artifact now POSITIVELY satisfies what it complained about — the
+        owned module is real (+ its declared routes have handlers), or the
+        assembled product genuinely boots. Never a blanket clear."""
+        doc = getattr(self, "_doctor", None)
+        if doc is None or not getattr(doc, "enabled", False):
+            return
+        if not getattr(getattr(self, "workspace", None), "root", None):
+            return
+        for nid, st in list((self._doctor_states or {}).items()):
+            if not isinstance(st, dict):
+                continue
+            cause = str(st.get("last_cause") or "")
+            if not cause or cause == "(none)":
+                continue
+            if "delta" in cause.lower():
+                # the leaf's owned artifact is no longer hollow / now has handlers
+                path = st.get("delta_path") or f"src/{self._module_for(nid)}.py"
+                if self._module_has_real_code(path, st.get("delta_routes")):
+                    self._doctor_resolve({}, nid, "revalidate(delta)")
+            elif cause == "vague_spec" and nid == "product_entry":
+                # the assembled product demonstrably boots and serves its
+                # contract -> the entry spec was sufficient after all
+                try:
+                    boots, _ = self._assembled_product_boots()
+                except Exception:  # noqa: BLE001
+                    boots = False
+                if boots:
+                    self._doctor_resolve({}, nid, "revalidate(boot)")
 
     def _remedy_reconcile_check(self, entry: str, escalate: bool = False) -> bool:
         """Executable reconcile_check (Ф6): the integrate gate found the assembled
@@ -2942,7 +3025,10 @@ class Engine:
                        for lp in self.loops)
         # Honour the doctor's verdict: an unresolved diagnosed cause anywhere
         # must also block a green COMPLETE (advisory-only let v044 ship green
-        # with an open task_check_mismatch over a broken build).
+        # with an open task_check_mismatch over a broken build). FIRST re-validate
+        # open causes against the FINAL artifact — a cause reworked real on a path
+        # that never re-ran its gate is stale and must not veto a working product.
+        self._prune_stale_causes()
         _open = self._doctor_open_causes()
         if _open:
             root_red = True
