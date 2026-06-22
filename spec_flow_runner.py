@@ -2005,21 +2005,59 @@ class Engine:
         meaningful = sum(1 for ln in body.splitlines()
                          if ln.strip() and not ln.strip().startswith("#"))
         floor = int((self.review_policy or {}).get("min_delta_lines", 1))
-        if meaningful >= floor:
-            return True
-        self.loops.append({"type": "empty-delta", "task": nid,
-                           "detail": f"late requirement produced no delta "
-                                     f"in {code_rel} ({meaningful} code line(s))"})
-        self.emit("review", "engine", "", nid,
-                  "delta gate: late requirement produced no real change",
-                  f"{code_rel}: {meaningful} code line(s) < {floor}",
-                  "delta_gate", "FAIL", level=L_MILESTONE)
-        # feed the empty_delta detector verbatim (its scope_findings reader keys
-        # on 'adds no new symbol' / 'no new route')
-        self._doctor_advise(node, nid, depth, "delta_gate", "FAIL",
-                            {"scope_findings": [
-                                f"{code_rel} adds no new symbol — empty delta"]})
-        return False
+        if meaningful < floor:
+            self.loops.append({"type": "empty-delta", "task": nid,
+                               "detail": f"late requirement produced no delta "
+                                         f"in {code_rel} ({meaningful} code line(s))"})
+            self.emit("review", "engine", "", nid,
+                      "delta gate: late requirement produced no real change",
+                      f"{code_rel}: {meaningful} code line(s) < {floor}",
+                      "delta_gate", "FAIL", level=L_MILESTONE)
+            # feed the empty_delta detector verbatim (its scope_findings reader
+            # keys on 'adds no new symbol' / 'no new route')
+            self._doctor_advise(node, nid, depth, "delta_gate", "FAIL",
+                                {"scope_findings": [
+                                    f"{code_rel} adds no new symbol — empty delta"]})
+            return False
+        # Route-level delta: a non-empty owner module is NOT enough when the
+        # requirement declares an HTTP route. The leaf must add a HANDLER for it
+        # — else it 'ran', the module stayed non-empty (its other handlers), and
+        # the route 404s end-to-end (v062: about_page declared GET /about but
+        # added nothing to web_ui.py, passing the line floor on the existing /ui
+        # code). Deterministic: each declared route needs the literal path OR a
+        # def whose name carries the route token in the owned module.
+        routes = _amend_routes(str(node.get("title") or ""))
+        try:
+            routes |= _amend_routes(
+                (Path(self.workspace.root) / f"specs/{Path(code_rel).stem}.md")
+                .read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 — spec optional; title is the floor
+            pass
+        low = body.lower()
+        missing = []
+        for r in routes:
+            token = r.rstrip("/").rsplit("/", 1)[-1].lower()
+            if not token or "{" in token:
+                continue
+            if r.lower() in low:
+                continue
+            if re.search(r"def\s+\w*" + re.escape(token) + r"\w*", low):
+                continue
+            missing.append(r)
+        if missing:
+            self.loops.append({"type": "empty-delta", "task": nid,
+                               "detail": f"late requirement declares {missing} "
+                                         f"but {code_rel} implements no handler"})
+            self.emit("review", "engine", "", nid,
+                      "delta gate: declared route has no handler in owner module",
+                      f"{code_rel}: no handler for {missing}",
+                      "delta_gate", "FAIL", level=L_MILESTONE)
+            self._doctor_advise(node, nid, depth, "delta_gate", "FAIL",
+                                {"scope_findings": [
+                                    f"{code_rel} adds no new route handler for "
+                                    f"{missing} — empty delta"]})
+            return False
+        return True
 
     def _missing_decisions(self, node: dict, nid: str) -> list:
         """462 (memory_loss data source): decisions the engine already RECORDED

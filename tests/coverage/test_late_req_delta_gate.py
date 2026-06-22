@@ -64,3 +64,44 @@ def test_real_code_passes():
         ok = e._late_req_delta_gate({"_late_req": True}, "n", 4, "src/real.py")
         assert ok is True
         assert e.loops == [] and e._doctor_calls == []
+
+
+def test_declared_route_without_handler_is_empty_delta():
+    # v062 regression: a late req declares GET /about but the owned module (with
+    # existing /ui code) gains NO about handler -> the line floor passes yet the
+    # route 404s. The route-level delta check must reject it.
+    with tempfile.TemporaryDirectory() as tmp:
+        e = _engine(tmp)
+        _write(tmp, "src/web_ui.py",
+               "def render_notes_html(notes):\n    return '<html>'\n"
+               "def handle_get_ui(environ, sr):\n    sr('200 OK', [])\n    return [b'x']\n")
+        node = {"_late_req": True,
+                "title": "ADD AN ABOUT PAGE. Serve GET /about as an HTML page."}
+        ok = e._late_req_delta_gate(node, "about_page", 4, "src/web_ui.py")
+        assert ok is False
+        assert any("/about" in str(lp.get("detail", "")) for lp in e.loops)
+        assert e._doctor_calls and e._doctor_calls[-1][0][3] == "delta_gate"
+
+
+def test_declared_route_with_handler_passes():
+    with tempfile.TemporaryDirectory() as tmp:
+        e = _engine(tmp)
+        _write(tmp, "src/web_ui.py",
+               "def handle_get_ui(environ, sr):\n    return [b'x']\n"
+               "def about_handler(environ, sr):\n    sr('200 OK', [])\n    return [b'about']\n")
+        node = {"_late_req": True,
+                "title": "ADD AN ABOUT PAGE. Serve GET /about as an HTML page."}
+        ok = e._late_req_delta_gate(node, "about_page", 4, "src/web_ui.py")
+        assert ok is True
+        assert e.loops == []
+
+
+def test_late_req_without_route_is_inert_when_nonempty():
+    # a late req that declares NO HTTP route (e.g. 'make notes nicer') only needs
+    # a non-empty delta — the route check must not false-fire.
+    with tempfile.TemporaryDirectory() as tmp:
+        e = _engine(tmp)
+        _write(tmp, "src/web_ui.py", "def prettify(n):\n    return n.upper()\n")
+        node = {"_late_req": True, "title": "MAKE THE NOTES NICER TO READ."}
+        ok = e._late_req_delta_gate(node, "nice", 4, "src/web_ui.py")
+        assert ok is True and e.loops == []
