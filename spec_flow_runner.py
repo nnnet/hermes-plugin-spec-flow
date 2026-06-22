@@ -3645,6 +3645,86 @@ class Engine:
                 self._parallel_sem.acquire()
                 self._sem_state.held = True
 
+    def _late_req_waves(self, placements: list) -> list:
+        """Order late-requirement nodes into parallel WAVES. Two requirements
+        that EDIT THE SAME owner module (same ``code_target``) must NOT run
+        together — they write the same file and would clobber each other under
+        worktree merge; they fall into separate waves (sequential). Requirements
+        that target DIFFERENT modules, or each create a NEW module, are
+        independent and share a wave (run in parallel under worktree isolation).
+        ``depends_on`` is honoured too — a dependent waits for its dependency's
+        wave. A blocked-only remainder degrades to one wave rather than
+        deadlocking. Deterministic, model-independent: decided purely by the
+        engine-resolved code_target + declared deps, never the model."""
+        ids = {p.get("id") for p in placements}
+        done: set = set()
+        waves: list = []
+        remaining = list(placements)
+        while remaining:
+            wave: list = []
+            used_targets: set = set()
+            leftover: list = []
+            for p in remaining:
+                deps = {d for d in (p.get("depends_on") or [])
+                        if d in ids and d != p.get("id")}
+                tgt = p.get("code_target") or ""
+                if deps <= done and (not tgt or tgt not in used_targets):
+                    wave.append(p)
+                    if tgt:
+                        used_targets.add(tgt)
+                else:
+                    leftover.append(p)
+            if not wave:                  # only blocked items left — run together
+                wave, leftover = remaining, []
+            waves.append(wave)
+            done |= {p.get("id") for p in wave}
+            remaining = leftover
+        return waves
+
+    def _attach_late_req(self, extra: dict, node: dict, depth: int, title: str,
+                         nid: str, ancestors: tuple, child_ids: list) -> None:
+        """Prepare ONE late-requirement node for execution (no LLM): route it to
+        EDIT an existing owner module when it refines an owned surface (sets
+        ``code_target`` + an in-place EDIT spec), else attach it as a new child;
+        emit the placement; register it under the parent. Cheap + sequential —
+        only the subsequent ``_visit`` is heavy, so this runs before any pooling
+        so the wave grouping can see every node's resolved code_target."""
+        where = ("inside its scoped branch" if extra.pop("_scoped", False)
+                 else "at root level")
+        # B3: deterministically route a same-surface requirement to EDIT the
+        # existing owner module (code_target). The node keeps its own spec; only
+        # its code output goes into the owner file. Nodes with a fixed engine
+        # target (the assembly entry) are exempt — they own a declared path.
+        amend = None if extra.get("_no_amend") else self._amend_target(extra)
+        if amend:
+            extra["code_target"] = amend
+            try:
+                cur = (Path(self.workspace.root) / amend).read_text(
+                    encoding="utf-8", errors="replace")
+            except Exception:  # noqa: BLE001
+                cur = ""
+            new_req = str(extra.get("requirement") or extra.get("title"))
+            extra["spec_markdown"] = (
+                "## EDIT AN EXISTING FILE IN PLACE (do not fork a "
+                "second module)\n\n"
+                f"`{amend}` already serves this surface. EXTEND that "
+                "same file to satisfy the requirement below WITHOUT "
+                "breaking its current behaviour; do not duplicate what "
+                "is already there.\n\n"
+                f"### Current `{amend}`\n```python\n{cur}\n```\n\n"
+                f"### Requirement to fold in\n{new_req}\n")
+            self.emit("decompose", "engine", "", extra["id"],
+                      "late requirement routed to EDIT existing surface",
+                      f"writes into {amend} (no parallel module)",
+                      "requirement", "AMEND", level=L_MILESTONE)
+        else:
+            self.emit("decompose", "engine", "", extra["id"],
+                      f"late requirement materialized {where}",
+                      extra["title"], "requirement", "ATTACHED",
+                      level=L_MILESTONE)
+        node.setdefault("children", []).append(extra)
+        child_ids.append(extra["id"])
+
     def _dedup_children(self, node: dict, nid: str, title: str,
                         ancestors: tuple) -> None:
         """Dedup gate: prune proposed children that duplicate an existing
@@ -3897,6 +3977,7 @@ class Engine:
             #    direct ROOT child: the level whose integrate sees the
             #    assembled product the acceptance exercises.
             placements = list(self._requirement_nodes(scope=nid))
+            asm = None
             if depth == 0:
                 placements += [x for x in self._requirement_nodes()
                                if x["id"] not in {p["id"] for p in placements}]
@@ -3910,48 +3991,36 @@ class Engine:
                 if asm and asm["id"] not in {p["id"] for p in placements} \
                         and asm["id"] not in self.tasks:
                     placements.append(asm)
-            for extra in placements:
-                where = ("inside its scoped branch" if extra.pop("_scoped",
-                                                                 False)
-                         else "at root level")
-                # B3: deterministically route a same-surface requirement to
-                # EDIT the existing owner module (code_target). The node keeps
-                # its own spec; only its code output goes into the owner file.
-                # Nodes with a fixed engine target (the assembly entry) are
-                # exempt — they own a declared path and must not be re-routed.
-                amend = None if extra.get("_no_amend") else self._amend_target(extra)
-                if amend:
-                    extra["code_target"] = amend
-                    try:
-                        cur = (Path(self.workspace.root) / amend).read_text(
-                            encoding="utf-8", errors="replace")
-                    except Exception:  # noqa: BLE001
-                        cur = ""
-                    new_req = str(extra.get("requirement")
-                                  or extra.get("title"))
-                    extra["spec_markdown"] = (
-                        "## EDIT AN EXISTING FILE IN PLACE (do not fork a "
-                        "second module)\n\n"
-                        f"`{amend}` already serves this surface. EXTEND that "
-                        "same file to satisfy the requirement below WITHOUT "
-                        "breaking its current behaviour; do not duplicate what "
-                        "is already there.\n\n"
-                        f"### Current `{amend}`\n```python\n{cur}\n```\n\n"
-                        f"### Requirement to fold in\n{new_req}\n")
-                    self.emit("decompose", "engine", "", extra["id"],
-                              "late requirement routed to EDIT existing surface",
-                              f"writes into {amend} (no parallel module)",
-                              "requirement", "AMEND", level=L_MILESTONE)
-                else:
-                    self.emit("decompose", "engine", "", extra["id"],
-                              f"late requirement materialized {where}",
-                              extra["title"], "requirement", "ATTACHED",
-                              level=L_MILESTONE)
-                node.setdefault("children", []).append(extra)
-                self._visit(extra, depth + 1, child_contract_ctx, phase,
-                            parent=title,
-                            ancestors=ancestors + ((nid, title),))
-                child_ids.append(extra["id"])
+            # Lever #1: late requirements that touch DIFFERENT modules are
+            # independent and run in PARALLEL (worktree isolation); ones that
+            # EDIT THE SAME owner module stay sequential (write conflict). The
+            # engine assembly entry, if present, wires every module and so must
+            # run strictly LAST and alone, after every other late requirement.
+            asm_extra = placements.pop() if (asm is not None and placements
+                                             and placements[-1] is asm) else None
+            for extra in placements:        # cheap prep first (no LLM) so the
+                self._attach_late_req(      # wave grouping sees every code_target
+                    extra, node, depth, title, nid, ancestors, child_ids)
+            _kids = ancestors + ((nid, title),)
+            if (self._parallel_children > 1
+                    and depth <= self._parallel_depth_limit
+                    and len(placements) >= 2):
+                for wave in self._late_req_waves(placements):
+                    if len(wave) >= 2:
+                        self._run_child_pool(wave, depth, child_contract_ctx,
+                                             phase, title, nid, ancestors)
+                    else:
+                        self._visit(wave[0], depth + 1, child_contract_ctx,
+                                    phase, parent=title, ancestors=_kids)
+            else:
+                for extra in placements:
+                    self._visit(extra, depth + 1, child_contract_ctx, phase,
+                                parent=title, ancestors=_kids)
+            if asm_extra is not None:
+                self._attach_late_req(asm_extra, node, depth, title, nid,
+                                      ancestors, child_ids)
+                self._visit(asm_extra, depth + 1, child_contract_ctx, phase,
+                            parent=title, ancestors=_kids)
 
             # a branch delegates impl to its children, then integrates them
             drv.go(EV_BRANCH_INTEGRATE)
