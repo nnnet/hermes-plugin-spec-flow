@@ -65,3 +65,23 @@ def test_failure_reason_classifies_http_codes():
     assert lb._failure_reason("rate limited 429 quota") == "429"
     assert lb._failure_reason("connection timed out") == "timeout"
     assert lb._failure_reason("some opaque failure") == "error"
+
+
+def test_5xx_fails_over_fast_without_retrying_same_model(fake_openai):
+    """v063 hang: mimo-v2.5 returned 504 (~121s) and was retried 6x (~12min)
+    before the chain advanced. A 5xx means THIS model/gateway is down — try it
+    once and raise so ask() falls over to the next chain model immediately."""
+    import pytest
+    srv = fake_openai([(504, "gateway timeout")], retries=6)
+    with pytest.raises(RuntimeError, match="HTTP 504"):
+        lb._ask_openai("hi", "m")
+    assert srv.call_count == 1, \
+        f"5xx must NOT retry the same model; made {srv.call_count} calls"
+
+
+def test_429_still_retries_after_5xx_change(fake_openai):
+    """Regression guard: the 5xx fast-fail must not break 429 backoff/retry —
+    a throttled (not down) model is fine, just rate-limited."""
+    srv = fake_openai([(429, "rate"), (200, ok("recovered"))], retries=6)
+    assert lb._ask_openai("hi", "m") == "recovered"
+    assert srv.call_count == 2

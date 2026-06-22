@@ -967,6 +967,15 @@ def _ask_openai(prompt: str, model: str, system: str | None = None,
                     "status": status, "latency_s": latency,
                     "slept_s": round(slept, 2), "abnormal": True,
                     "error": err})
+        # A 5xx (esp. 504 gateway timeout) means THIS model/gateway is down or
+        # overloaded — retrying the SAME model just burns another full timeout
+        # (v063: mimo-v2.5 returned 504 ~121s each, hammered 6x = ~12min before
+        # the chain advanced). Stop retrying and let ask() fall over to the next
+        # model in the chain immediately. 429 (quota) still backs off/retries —
+        # there the model is fine, only throttled.
+        if 500 <= status < 600:
+            last = f"HTTP {status} (gateway/server error): {body[-160:]}"
+            break
         time.sleep(slept)
     if throttled:
         # ANY 429 among the attempts is a quota signal (the per-minute
