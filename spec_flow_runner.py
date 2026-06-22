@@ -2057,6 +2057,17 @@ class Engine:
                                     f"{code_rel} adds no new route handler for "
                                     f"{missing} — empty delta"]})
             return False
+        # The delta is real now (module present, route handlers in place). If an
+        # EARLIER pass on this leaf opened an empty_delta cause (the leaf first
+        # ran hollow, the doctor reworked it, and this re-run now passes), CLOSE
+        # it — otherwise the stale cause stays "open" forever and the integrate
+        # gate records a FALSE RED on a product that actually serves every route.
+        # Honest: the artifact genuinely satisfies the gate, so the cause is
+        # resolved, not suppressed. Guarded to the delta cause family so a
+        # different, still-real open cause on this node is never falsely closed.
+        _st = (getattr(self, "_doctor_states", {}) or {}).get(nid) or {}
+        if "delta" in str(_st.get("last_cause") or "").lower():
+            self._doctor_resolve(node, nid, "delta_gate")
         return True
 
     def _missing_decisions(self, node: dict, nid: str) -> list:

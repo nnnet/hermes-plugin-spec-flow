@@ -105,3 +105,39 @@ def test_late_req_without_route_is_inert_when_nonempty():
         node = {"_late_req": True, "title": "MAKE THE NOTES NICER TO READ."}
         ok = e._late_req_delta_gate(node, "nice", 4, "src/web_ui.py")
         assert ok is True and e.loops == []
+
+
+class _DoctorOn:
+    enabled = True
+
+
+def test_pass_closes_stale_empty_delta_cause():
+    # FALSE-RED root (v067): a late-req leaf first ran hollow -> empty_delta cause
+    # opened; the doctor reworked it; this re-run now passes -> the gate MUST
+    # close the stale cause, else integrate records a false RED on a working product.
+    with tempfile.TemporaryDirectory() as tmp:
+        e = _engine(tmp)
+        e._doctor = _DoctorOn()
+        e._doctor_states = {"about_page": {"last_cause": "empty_delta"}}
+        _write(tmp, "src/about_page.py",
+               "def about_handler(environ, sr):\n"
+               "    sr('200 OK', [])\n    return [b'about']\n")
+        node = {"_late_req": True,
+                "title": "ADD AN ABOUT PAGE. Serve GET /about as an HTML page."}
+        ok = e._late_req_delta_gate(node, "about_page", 4, "src/web_ui_about.py"
+                                    if False else "src/about_page.py")
+        assert ok is True
+        assert e._doctor_states["about_page"]["last_cause"] is None
+
+
+def test_pass_does_not_close_unrelated_cause():
+    # if the open cause is NOT a delta cause, a passing delta gate must leave it
+    # alone (it is a different, still-real problem).
+    with tempfile.TemporaryDirectory() as tmp:
+        e = _engine(tmp)
+        e._doctor = _DoctorOn()
+        e._doctor_states = {"n": {"last_cause": "weak_implementer"}}
+        _write(tmp, "src/real.py", "def handler(req):\n    return 200, {}\n")
+        ok = e._late_req_delta_gate({"_late_req": True}, "n", 4, "src/real.py")
+        assert ok is True
+        assert e._doctor_states["n"]["last_cause"] == "weak_implementer"
