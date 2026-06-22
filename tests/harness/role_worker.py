@@ -707,6 +707,15 @@ def _candidate_compiles(raw: str) -> "tuple[bool, int, str]":
             compile(content, str(path), "exec")
         except SyntaxError as e:
             return (False, len(files), f"{path}: {str(e)[:60]}")
+        # semantic gate: a module that defines a CREATE-TABLE-only initialiser
+        # but never invokes it (while running SQL) ships the 'no such table' bug
+        try:
+            from spec_flow_tools import schema_init_uninvoked as _siu
+            why = _siu(content)
+        except Exception:  # noqa: BLE001 — never let the gate crash generation
+            why = None
+        if why:
+            return (False, len(files), f"{path}: {why}")
     return (True, len(files), "")
 
 

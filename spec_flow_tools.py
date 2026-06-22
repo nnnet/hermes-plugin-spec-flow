@@ -37,6 +37,7 @@ of crashing the agent loop), so the plugin loads cleanly in a sandbox.
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import os
@@ -84,6 +85,59 @@ MAX_TASKS = _leaf_env("SPEC_FLOW_LEAF_MAX_TASKS", 5)         # bite-sized tasks
 MAX_INTERFACES = _leaf_env("SPEC_FLOW_LEAF_MAX_INTERFACES", 2)  # interface surfaces
 MAX_LOC = _leaf_env("SPEC_FLOW_LEAF_MAX_LOC", 100)          # ~one commit
 MAX_DELTAS = _leaf_env("SPEC_FLOW_LEAF_MAX_DELTAS", 1)      # one delta per leaf
+
+_DDL_RE = re.compile(r"CREATE\s+TABLE", re.IGNORECASE)
+_SQL_OP_RE = re.compile(r"\b(INSERT|UPDATE|DELETE|SELECT)\b", re.IGNORECASE)
+
+
+def schema_init_uninvoked(content: str) -> Optional[str]:
+    """Detect a stateful module that defines a DEDICATED schema initializer
+    (a function whose body runs ``CREATE TABLE`` and nothing else) yet never
+    calls it, while separately running SQL operations on that table.
+
+    This is the exact 'sqlite no such table' class: e.g. notes_api defines
+    ``init_db()`` (CREATE TABLE) but ``create_note()`` does the INSERT without
+    ever invoking ``init_db`` -> a fresh DB has no table and the first write
+    raises OperationalError. Returns a reason string, or None if clean.
+
+    Deterministic, model-independent: a CREATE-TABLE-only function that is never
+    referenced in its own module is almost always a forgotten initialiser. A
+    function that does CREATE TABLE *and* the operation in one body is
+    self-contained and never flagged; a top-level CREATE TABLE (run at import)
+    is fine too.
+    """
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return None
+    if not _SQL_OP_RE.search(content):
+        return None  # not a stateful SQL module — nothing to guard
+
+    dedicated_initialisers: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        src = ast.get_source_segment(content, node) or ""
+        if _DDL_RE.search(src) and not _SQL_OP_RE.search(src):
+            dedicated_initialisers.append(node.name)
+    if not dedicated_initialisers:
+        return None
+
+    called: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            fn = node.func
+            if isinstance(fn, ast.Name):
+                called.add(fn.id)
+            elif isinstance(fn, ast.Attribute):
+                called.add(fn.attr)
+    orphaned = [n for n in dedicated_initialisers if n not in called]
+    if orphaned:
+        return (f"schema initialiser {orphaned[0]}() runs CREATE TABLE but is "
+                f"never called in this module, which separately executes SQL "
+                f"operations — a fresh database will raise 'no such table'. "
+                f"Invoke it (at import or before the first query).")
+    return None
 
 # contract_check: validator command templates. ``{contract}`` and ``{code}``
 # are substituted with the contract artifact path and a code path/dir. Swap in
