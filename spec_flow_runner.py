@@ -4329,28 +4329,99 @@ class Engine:
         reason = " — ".join(p for p in (head, tail) if p)
         return reason[:240] or "tests failed (see TEST-RESULTS.md)"
 
-    def _attempt_integrate_repair(self, reason: str) -> bool:
+    def _blamed_module_from_failure(self, text: str, entry_stem: str = "") -> "Optional[str]":
+        """Extract the feature module a failing pytest traceback blames, so the
+        doctor can rework THAT module rather than only the entry. Walks the
+        traceback for ``src/<name>.py`` frames and returns the deepest one that is
+        a real, owned leaf and is NOT the entry or a test file. Returns None when
+        the failure points only at the entry / tests (entry-level repair). Pure
+        string surgery — model-independent."""
+        if not text:
+            return None
+        stems: list[str] = []
+        for m in re.finditer(r"\bsrc/([A-Za-z_][A-Za-z0-9_]*)\.py", text):
+            stems.append(m.group(1))
+        if not stems:
+            return None
+        # deepest frame last in a pytest traceback; prefer a known leaf that is
+        # neither the entry nor a test, scanning from the deepest frame upward.
+        for stem in reversed(stems):
+            if stem in ("", entry_stem) or stem.startswith("test_"):
+                continue
+            if stem in self.tasks or stem == "product_entry":
+                if stem != "product_entry":
+                    return stem
+        return None
+
+    def _remedy_rework_module(self, module: str, reason: str) -> bool:
+        """Module-targeted heal: the integrate acceptance failed inside a FEATURE
+        module (e.g. notes_api raising 'no such table'), not the entry. Re-run the
+        implementer on that module's existing spec with the failure as a repair
+        directive, on the strong tier (the weaker build already shipped the bug).
+        Returns True iff a rebuild was attempted (caller re-verifies). Legitimate:
+        the directive carries the integrate failure signal, never a hand-written
+        fix — the worker still writes the code."""
+        ws = self.workspace
+        if not (getattr(ws, "enabled", False) and getattr(ws, "root", None)
+                and "implementer" in self.agents):
+            return False
+        spec_rel = f"specs/{module}.md"
+        sp = Path(ws.root) / spec_rel
+        if not sp.is_file():
+            return False
+        try:
+            base = sp.read_text(encoding="utf-8")
+            directive = (
+                "\n\n### Repair directive (integrate acceptance RED)\n"
+                f"The assembled product's acceptance run failed inside this "
+                f"module:\n\n    {reason.strip()[:240]}\n\n"
+                "Fix THIS module so the failing behaviour works end-to-end "
+                "(e.g. ensure any required state — a DB schema/table — is "
+                "initialised before it is used). Keep the existing public API. "
+                "Do NOT weaken or edit the tests.\n")
+            if "Repair directive (integrate acceptance RED)" not in base:
+                sp.write_text(base + directive, encoding="utf-8")
+        except OSError:
+            return False
+        self.emit("integrate", "doctor", "spec-implement", "L0:integrate",
+                  f"module repair: rework {module} (acceptance blamed it)",
+                  reason[:160], "integrate_verify", "", level=L_MILESTONE)
+        ictx = {"node": module, "title": f"Repair {module}",
+                "depth": self.depth, "workspace": ws,
+                "spec": spec_rel, "module": module, "tier": "strong"}
+        try:
+            self._invoke_implementer(ictx, module, module)
+        except Exception as exc:        # noqa: BLE001
+            self.emit("integrate", "doctor", "", "L0:integrate",
+                      "module repair raised", str(exc)[:140],
+                      "integrate_verify", "FAIL", level=L_MILESTONE)
+            return False
+        return True
+
+    def _attempt_integrate_repair(self, reason: str, out: str = "") -> bool:
         """если падает → нужен рабочий доктор: a RED assembled product is
-        ANALYSED and a fix is ATTEMPTED, not merely recorded. Consults the doctor
-        on the integrate failure; if it prescribes reconcile_check, the engine
-        re-builds the declared entry through the real worker and re-boots. Returns
-        True iff the product now boots green. No-op when no product contract is
-        derivable from the human spec (non-web project / sim with no entry)."""
+        ANALYSED and a fix is ATTEMPTED, not merely recorded. The doctor's lever
+        depends on WHERE the failure lives: a traceback blaming a FEATURE module
+        (e.g. notes_api 'no such table') is reworked at that module; otherwise the
+        engine rebuilds the declared ENTRY (reconcile_check) and re-boots. Returns
+        True iff a fix was attempted (caller re-verifies). No-op for a non-web
+        project / sim with no derivable contract and no blamed module."""
         c = self._product_contract()
         entry = c.get("entry") if c else None
-        if not entry:
-            return False
+        entry_stem = Path(entry).stem if entry else ""
         act = self._doctor_advise(
             {"id": "L0:integrate"}, "L0:integrate", 0,
             "integrate_verify", "FAIL", {"reasons": reason})
         remedy = getattr(act, "kind", "") if act is not None else ""
-        # At the integrate gate the engine's ONLY physical lever is to rebuild
-        # the assembled entry through a real worker and re-boot. reconcile_check
-        # IS that action; rework / escalate_tier reduce to the SAME thing here
-        # (re-run the builder), so honour the whole rebuild-family — otherwise a
-        # fail diagnosed as weak_implementer (ladder: rework→escalate) would be
-        # analysed but never acted on, leaving the product RED (v050).
-        if remedy in ("reconcile_check", "rework", "escalate_tier"):
+        if remedy not in ("reconcile_check", "rework", "escalate_tier"):
+            return False
+        # 1) feature-module bug: rework the module the traceback blames. The entry
+        #    is fine; rebuilding it would loop forever (v059 notes_api).
+        blamed = self._blamed_module_from_failure(out or reason, entry_stem)
+        if blamed and self._remedy_rework_module(blamed, reason):
+            return True
+        # 2) entry-level repair: rebuild the assembled entry + re-boot.
+        if entry:
             return self._remedy_reconcile_check(entry, escalate=(remedy == "escalate_tier"))
         return False
 
@@ -4400,7 +4471,7 @@ class Engine:
                                "detail": reason})
             # 2) ANALYSE + ATTEMPT A FIX (doctor → reconcile_check rebuilds the
             #    entry through a real worker), then RE-VERIFY once.
-            if self._attempt_integrate_repair(reason):
+            if self._attempt_integrate_repair(reason, out):
                 passed, out = _run_suite()
                 if passed:
                     b_ok, b_detail = self._assembled_product_boots()
