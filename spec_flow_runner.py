@@ -3460,6 +3460,20 @@ class Engine:
         return _sp.resolve_specialty(node, self._project_meta,
                                      self._impl_specialties, self._auto_specialty)
 
+    def _node_complexity_label(self, node: dict) -> str:
+        """The node's structural complexity class — 'branch' / 'leaf_small' /
+        'leaf_big'. Pure and model-independent: a branch has children; a leaf is
+        'small' only when its estimated LoC is under the simple cap AND it has no
+        open decisions, else 'big'. ('product_entry' is handled by callers as a
+        special case — its difficulty is integration breadth, not line count.)"""
+        if node.get("children"):
+            return "branch"
+        m = node.get("metrics") or {}
+        cap = int((self.review_policy or {}).get("simple_max_loc", 60))
+        loc = int(m.get("estimated_loc", 0) or 0)
+        od = int(m.get("open_decisions", 0) or 0)
+        return "leaf_small" if (loc <= cap and od == 0) else "leaf_big"
+
     def _node_tier(self, node: dict) -> str:
         """424: map the node's leaf_check complexity to a power TIER name, so the
         implementer spawns on a chain matched to difficulty — a hard node on the
@@ -3481,15 +3495,26 @@ class Engine:
             # module. Route it to the strongest available tier deterministically.
             return str(cmap.get("branch", "") or cmap.get("leaf_big", "")
                        or "strong")
-        m = node.get("metrics") or {}
-        if node.get("children"):
-            label = "branch"
-        else:
-            cap = int((self.review_policy or {}).get("simple_max_loc", 60))
-            loc = int(m.get("estimated_loc", 0) or 0)
-            od = int(m.get("open_decisions", 0) or 0)
-            label = "leaf_small" if (loc <= cap and od == 0) else "leaf_big"
+        label = self._node_complexity_label(node)
         return str(cmap.get(label, "") or "")
+
+    def _node_solo(self, node: dict) -> bool:
+        """Process tiering: True when this leaf is simple enough to build with a
+        SINGLE coder pass (TDD generate + one repair) instead of the full
+        architect->coder->tester->fixer orchestra. The orchestra's four LLM
+        calls are reserved for branches and large/undecided leaves; a trivial
+        single-concern leaf does not earn them. Decided purely by the node's
+        structural label (config: workers.solo_for_labels, default leaf_small),
+        never by the model — deterministic and model-independent. The assembly
+        entry (product_entry) and branches are never solo."""
+        if node.get("id") == "product_entry" or node.get("children"):
+            return False
+        try:
+            import spec_flow_remedies as _rem
+            labels = _rem.solo_for_labels(self._project_meta)
+        except Exception:  # noqa: BLE001 — tiering is best-effort, never fatal
+            return False
+        return self._node_complexity_label(node) in set(labels or [])
 
     def _resolve_executor(self, node: dict) -> tuple:
         """C1: route a leaf to an executor. Returns (domain, team) where team is
@@ -4216,6 +4241,17 @@ class Engine:
                                   f"executor routing: {domain} → team",
                                   ", ".join(s.get("role", "?") for s in team),
                                   "executor", level=L_DETAIL)
+                # Process tiering: a simple single-concern leaf builds with one
+                # coder pass, not the four-call orchestra — unless the engine has
+                # already routed it to an explicit executor team (that decision
+                # wins). Cuts LLM calls on the long tail of trivial leaves; the
+                # leaf is still verified by the same gates.
+                if "team" not in ictx and self._node_solo(node):
+                    ictx["solo"] = True
+                    self.emit("implement", "engine", "spec-implement",
+                              f"{nid}:route",
+                              "process tiering → solo coder (simple leaf)",
+                              "solo", "tier", level=L_DETAIL)
                 if self._leaf_seconds:
                     ictx["deadline"] = time.time() + self._leaf_seconds
                 try:

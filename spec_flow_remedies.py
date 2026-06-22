@@ -187,3 +187,31 @@ def complexity_to_tier(project: Optional[dict] = None,
     _deep_merge(base, workers.get("complexity_to_tier"))
     _deep_merge(base, (overrides or {}).get("complexity_to_tier"))
     return base
+
+
+def solo_for_labels(project: Optional[dict] = None,
+                    overrides: Optional[dict] = None) -> list:
+    """Node-complexity labels that run a SINGLE coder pass (TDD: generate +
+    one repair) instead of the full architect->coder->tester->fixer orchestra
+    — process tiering. A simple leaf does not earn four LLM calls; the orchestra
+    is reserved for branches and large/undecided leaves. Decided purely by the
+    node's structural label (never the model), so it stays deterministic and
+    model-independent. Default: only ``leaf_small``. Overridable via
+    ``workers.solo_for_labels`` in the case YAML or ``SPEC_FLOW_SOLO_LABELS``
+    (JSON list) in the environment. An empty list restores today's
+    always-orchestra behaviour."""
+    workers = (project or {}).get("workers") or {}
+    val = workers.get("solo_for_labels")
+    raw = os.environ.get("SPEC_FLOW_SOLO_LABELS", "").strip()
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                val = parsed
+        except (ValueError, TypeError):
+            pass
+    if (overrides or {}).get("solo_for_labels") is not None:
+        val = (overrides or {})["solo_for_labels"]
+    if val is None:
+        val = list(_DEFAULTS.get("solo_for_labels", ["leaf_small"]))
+    return [str(x) for x in (val or [])]

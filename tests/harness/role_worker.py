@@ -913,6 +913,24 @@ def _implementer_team() -> list[dict]:
     return _normalise_team(raw)
 
 
+def _select_team(ctx: dict) -> list[dict]:
+    """Pick the implementer path for a leaf. Precedence (process tiering):
+      1. an explicit per-leaf executor team on the ctx (C1 domain routing) — wins;
+      2. else, if the engine flagged the leaf solo (a simple single-concern
+         leaf), [] — the single-coder path (one generate + one repair), NOT the
+         four-call orchestra;
+      3. else the globally configured implementer team (the orchestra) or [].
+    Pure + offline; the speed/cost lever lives entirely in this choice."""
+    ctx_team = _normalise_team(ctx.get("team"))
+    if ctx_team:
+        return ctx_team
+    if ctx.get("solo"):
+        llm_log.log({"event": "process_tier", "node": ctx.get("node", ""),
+                     "mode": "solo", "reason": "simple leaf — single coder path"})
+        return []
+    return _implementer_team()
+
+
 def _normalise_team(raw: Any) -> list[dict]:
     """Normalise a raw team value into a specialist LIST. Accepts the canonical
     `{specialists: [...]}` dict and the legacy bare list — a JSON env value, a
@@ -1479,7 +1497,10 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         # path, byte-for-byte unchanged. C1: a per-leaf executor team on the
         # ctx (the engine routed this leaf to a domain executor) takes
         # precedence over the globally-configured implementer team.
-        team = _normalise_team(ctx.get("team")) or _implementer_team()
+        # Pick the implementer path: an explicit per-leaf executor team (C1)
+        # wins; else the engine's process-tiering flag routes a simple leaf to
+        # the single-coder path; else the configured orchestra. See _select_team.
+        team = _select_team(ctx)
         if team:
             out = _orchestra_run(ctx, ws_root, nid, fn, system=system,
                                  allowed=allowed, disallowed=disallowed,
