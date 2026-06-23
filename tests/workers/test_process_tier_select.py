@@ -75,3 +75,31 @@ def test_landed_ok_syntax_error(tmp_path):
     assert rw._leaf_landed_ok(str(tmp_path), "foo") is False
 
 
+# --- creator ensemble scaled by node complexity ------------------------------
+
+def test_ensemble_leaf_small_is_one(monkeypatch):
+    # a trivial single-concern leaf generates ONE candidate even when 2 configured
+    monkeypatch.setattr(rw.llm_backend, "WORKERS_CFG", {"creator_ensemble": 2})
+    assert rw._ensemble_size("leaf_small") == 1
+
+
+def test_ensemble_leaf_big_keeps_configured(monkeypatch):
+    monkeypatch.setattr(rw.llm_backend, "WORKERS_CFG", {"creator_ensemble": 2})
+    assert rw._ensemble_size("leaf_big") == 2
+
+
+def test_ensemble_branch_keeps_configured(monkeypatch):
+    monkeypatch.setattr(rw.llm_backend, "WORKERS_CFG", {"creator_ensemble": 3})
+    assert rw._ensemble_size("branch") == 3
+
+
+def test_ensemble_unknown_keeps_configured(monkeypatch):
+    monkeypatch.setattr(rw.llm_backend, "WORKERS_CFG", {"creator_ensemble": 2})
+    assert rw._ensemble_size("") == 2
+
+
+def test_ensemble_clamped_to_four(monkeypatch):
+    monkeypatch.setattr(rw.llm_backend, "WORKERS_CFG", {"creator_ensemble": 9})
+    assert rw._ensemble_size("branch") == 4
+
+

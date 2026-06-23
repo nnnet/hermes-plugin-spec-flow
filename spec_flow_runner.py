@@ -616,12 +616,17 @@ def _wrap_external_teams(agents: Optional[dict], transport=None) -> Optional[dic
 #   ask_human — route to the approver (HITL): approved -> record & continue,
 #               not approved -> halt
 DEFAULT_REVIEW_POLICY = {"on_reject": "rework", "max_rework": 2,
-                         # A1 review tiering (default OFF — p4/p5 unchanged):
-                         # a SIMPLE leaf that passes the deterministic spec lint
-                         # skips the LLM reviewer + rework loop entirely. Review
-                         # is the largest measured time sink (~47%); a small,
-                         # decision-free leaf does not need an opinion round.
-                         "tiering": False, "simple_max_loc": 60,
+                         # A1 review tiering (default ON): a SIMPLE leaf that
+                         # passes the deterministic spec lint skips the LLM
+                         # reviewer + rework loop entirely. Review is the largest
+                         # measured time sink (~37% of calls in v069); a small,
+                         # decision-free leaf does not need an opinion round. The
+                         # same `simple_max_loc` also classifies a leaf as
+                         # leaf_small for process tiering (solo coder) — so one
+                         # threshold scales BOTH the review and the build path to
+                         # task size. Lifted 60 -> 120 because a 20-40 line module
+                         # was being rated 'medium' and paying the full orchestra.
+                         "tiering": True, "simple_max_loc": 120,
                          # A3 escalation (default OFF): the model to use for ONE
                          # final review attempt after the rework budget is spent
                          # on REJECTs — a stronger opinion instead of an endless
@@ -4407,6 +4412,12 @@ class Engine:
                                   f"executor routing: {domain} → team",
                                   ", ".join(s.get("role", "?") for s in team),
                                   "executor", level=L_DETAIL)
+                # Carry the node's structural complexity label so the worker can
+                # scale effort to task size (e.g. creator-ensemble size): a
+                # leaf_small earns one candidate, leaf_big/branch keep the
+                # configured ensemble. Model-independent (label from metrics).
+                if not node.get("children"):
+                    ictx["complexity"] = self._node_complexity_label(node)
                 # Process tiering: a simple single-concern leaf builds with one
                 # coder pass, not the four-call orchestra — unless the engine has
                 # already routed it to an explicit executor team (that decision

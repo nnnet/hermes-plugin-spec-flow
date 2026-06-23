@@ -1,7 +1,8 @@
 """A1 review tiering: a SIMPLE leaf that passes the deterministic spec lint
 skips the LLM reviewer + rework loop entirely; a COMPLEX node still gets the
 full review. The classification is deterministic (node metrics), so the saved
-review round does not depend on the model. Default OFF — p4/p5 unchanged.
+review round does not depend on the model. Default ON (speed lever) — a simple
+leaf skips the LLM reviewer; complex nodes keep the full review.
 """
 import pathlib
 import sys
@@ -55,9 +56,13 @@ def test_simple_leaf_skips_the_reviewer_when_tiering_on(tmp_path):
                if e.task == "disc")
 
 
-def test_tiering_off_by_default_consults_reviewer(tmp_path):
-    res, consulted = _run(tmp_path)           # no review_policy → default off
-    assert "disc" in consulted
+def test_tiering_on_by_default_skips_simple_leaf(tmp_path):
+    # speed default: tiering is ON, so a simple decision-free leaf skips the
+    # LLM reviewer without any explicit policy
+    res, consulted = _run(tmp_path)           # no review_policy → default ON
+    assert "disc" not in consulted
+    assert any("review tiering" in e.action for e in res.events
+               if e.task == "disc")
 
 
 def test_large_leaf_still_reviewed_under_tiering(tmp_path):

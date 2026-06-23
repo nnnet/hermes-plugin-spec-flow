@@ -678,13 +678,22 @@ def make_decomposer(workspace_dir: Optional[str] = None,
 # default (size 1 == today's single call); set SPEC_FLOW_CREATOR_ENSEMBLE=2..4.
 
 
-def _ensemble_size() -> int:
+def _ensemble_size(complexity: str = "") -> int:
+    """Number of creator candidates to generate. Scaled to node complexity: a
+    trivial single-concern leaf (leaf_small) gets ONE candidate — the ensemble's
+    cross-model insurance is wasted on it and doubles every coder call — while
+    leaf_big / branch nodes keep the configured size (a weak free model is far
+    likelier to emit broken code there). Decided by the node's structural label,
+    never the model. Falls back to the configured size when complexity unknown."""
     try:
         n = int(llm_backend.WORKERS_CFG.get("creator_ensemble")
                 or config.env("CREATOR_ENSEMBLE", int))
     except (ValueError, TypeError):
         n = 1
-    return max(1, min(n, 4))
+    n = max(1, min(n, 4))
+    if complexity == "leaf_small":
+        return 1
+    return n
 
 
 def _candidate_compiles(raw: str) -> "tuple[bool, int, str]":
@@ -721,16 +730,17 @@ def _candidate_compiles(raw: str) -> "tuple[bool, int, str]":
 
 def _ensemble_generate(prompt: str, *, node: str, system: str, allowed: list,
                        disallowed: list, cwd: str, model: str, channel: Any,
-                       specialty: str, tier: str = "",
+                       specialty: str, tier: str = "", complexity: str = "",
                        meta: Optional[dict] = None,
                        params: Optional[dict] = None) -> str:
     """Generate up to N candidate implementations from different free models
     and return the reply of the first that compiles clean (else the best by
     (compiles, n_files)). Stops early on the first clean candidate to spare
-    the free-pool quota. N==1 is exactly the legacy single call. ``meta`` is
-    forwarded to the universal call log (step/mode/...). ``params`` carries a
-    specialist's sampling config to every candidate call."""
-    n = _ensemble_size()
+    the free-pool quota. N==1 is exactly the legacy single call. ``complexity``
+    is the node's structural label — a leaf_small generates ONE candidate (see
+    _ensemble_size). ``meta`` is forwarded to the universal call log
+    (step/mode/...). ``params`` carries a specialist's sampling config."""
+    n = _ensemble_size(complexity)
     if n <= 1:
         return _dialog_round(prompt, role="implementer", node=node,
                              system=system, allowed=allowed,
@@ -1138,7 +1148,7 @@ def _orchestra_run(ctx: dict, ws_root: str, nid: str, fn: str, *,
                     prompt, node=nid, system=s_system, allowed=allowed,
                     disallowed=disallowed, cwd=ws_root, model=s_model,
                     channel=channel, specialty=specialty, meta=step_meta,
-                    params=s_params)
+                    params=s_params, complexity=ctx.get("complexity", ""))
                 try:
                     out = _extract_json(raw)
                 except ValueError:
@@ -1643,7 +1653,8 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         raw = _ensemble_generate(prompt, node=nid, system=system,
                                  allowed=allowed, disallowed=disallowed,
                                  cwd=ws_root, model=model, channel=channel,
-                                 specialty=specialty, tier=tier)
+                                 specialty=specialty, tier=tier,
+                                 complexity=ctx.get("complexity", ""))
         try:
             parsed = _extract_json(raw)
         except ValueError:

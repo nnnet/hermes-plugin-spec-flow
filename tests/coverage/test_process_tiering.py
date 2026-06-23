@@ -97,6 +97,25 @@ def test_label_set_can_widen_to_big():
 
 # --- complexity label helper (shared by tier + solo) --------------------------
 
+def test_default_review_policy_tiering_on():
+    # speed default: review tiering ON, simple_max_loc lifted so a small module
+    # is rated simple (skips LLM review) AND classified leaf_small (solo build)
+    import spec_flow_runner as sfr
+    assert sfr.DEFAULT_REVIEW_POLICY["tiering"] is True
+    assert sfr.DEFAULT_REVIEW_POLICY["simple_max_loc"] >= 120
+
+
+def test_100_line_leaf_is_small_under_default_cap():
+    # at the lifted cap, a ~100-line single-concern leaf is leaf_small (was
+    # leaf_big at the old cap 60 -> paid the full orchestra)
+    r = Engine.__new__(Engine)
+    r._project_meta = {}
+    import spec_flow_runner as sfr
+    r.review_policy = dict(sfr.DEFAULT_REVIEW_POLICY)
+    node = {"id": "n", "metrics": {"estimated_loc": 100, "open_decisions": 0}}
+    assert r._node_complexity_label(node) == "leaf_small"
+
+
 def test_complexity_label_values():
     r = _runner()
     assert r._node_complexity_label(
