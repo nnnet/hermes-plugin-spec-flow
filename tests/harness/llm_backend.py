@@ -268,7 +268,16 @@ def _is_free_model(model: str) -> bool:
         prov = _provider_for(model)
     except ValueError:
         return False
-    return bool(prov and prov.get("requests_per_day"))
+    if not prov:
+        return False
+    # A LOCAL self-hosted provider (e.g. LMStudio) is free by nature: it has no
+    # daily quota to declare, so `requests_per_day` is absent — but it is NOT a
+    # paid API. The paid-model guard exists to block accidental paid OpenRouter
+    # models, not an operator-declared local backend. Honor an explicit
+    # `local: true` marker on the provider.
+    if prov.get("local"):
+        return True
+    return bool(prov.get("requests_per_day"))
 
 
 def chain_for(role: str, specialty: str = "", tier: str = "") -> list[str]:

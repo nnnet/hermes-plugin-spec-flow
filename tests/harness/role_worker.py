@@ -1537,27 +1537,41 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
                                  allowed=allowed, disallowed=disallowed,
                                  channel=channel, team=team)
         else:
-            out = (_implement_chat(ctx, ws_root, nid, fn) if _chat_only()
-                   else _implement_claude(ctx, ws_root, nid, fn))
             # Process tiering is an OPTIMISTIC fast path: a simple leaf gets ONE
             # coder pass. But solo drops the orchestra's architect/coder/tester/
-            # fixer redundancy, so a single flaky/failed call (429, timeout,
-            # garbage reply) can leave the leaf with NO compiling module — and a
-            # missing foundational module cascades every dependent leaf to RED.
-            # If solo did not land a compiling module AND a real orchestra is
-            # configured, escalate to it. Reliability is a property, not a hope:
-            # the speed win is kept when solo works, never at the cost of an
-            # empty leaf when it doesn't. Parallelism is untouched.
-            if ctx.get("solo") and not _leaf_landed_ok(ws_root, fn):
+            # fixer redundancy, so a single FAILED call — an exception (a tier
+            # model rejected/unreachable, e.g. the free-pool guard or a 504) OR a
+            # reply that leaves NO compiling module — would otherwise leave the
+            # leaf empty, and a missing foundational module cascades every
+            # dependent leaf to RED. Catch BOTH failure shapes and, if a real
+            # orchestra is configured, escalate to it. Reliability is a property,
+            # not a hope: the speed win is kept when solo works, never at the
+            # cost of an empty leaf when it doesn't. Parallelism is untouched.
+            try:
+                out = (_implement_chat(ctx, ws_root, nid, fn) if _chat_only()
+                       else _implement_claude(ctx, ws_root, nid, fn))
+                solo_err = None
+            except Exception as _exc:  # noqa: BLE001 — surface to escalation
+                out, solo_err = None, _exc
+            escalated = False
+            if ctx.get("solo") and (solo_err is not None
+                                    or not _leaf_landed_ok(ws_root, fn)):
                 orchestra = _implementer_team()
                 if orchestra:
                     llm_log.log({"event": "process_tier", "node": nid,
                                  "mode": "escalate",
-                                 "reason": "solo pass left no compiling "
-                                           "module — escalating to orchestra"})
+                                 "reason": ("solo call errored — escalating to "
+                                            "orchestra" if solo_err is not None
+                                            else "solo pass left no compiling "
+                                            "module — escalating to orchestra")})
                     out = _orchestra_run(ctx, ws_root, nid, fn, system=system,
                                          allowed=allowed, disallowed=disallowed,
                                          channel=channel, team=orchestra)
+                    escalated = True
+            # A solo error with NO orchestra to fall back to must NOT be
+            # swallowed — propagate it as before (the leaf genuinely failed).
+            if solo_err is not None and not escalated:
+                raise solo_err
         if claim is not None:
             claims.BOARD.complete(nid, claim["hash"])
         return out

@@ -124,6 +124,29 @@ def test_paid_model_still_forbidden(monkeypatch):
         lb.ask("q", model="openrouter/gpt-4o", role="decomposer", step="")
 
 
+def test_local_provider_is_free(monkeypatch):
+    # a LOCAL self-hosted provider (no daily quota to declare) is free, not paid
+    # — it must not trip the paid-model guard (regression: solo leaves route to
+    # the weak tier led by local lmstudio, which was wrongly rejected as paid)
+    monkeypatch.setattr(lb, "WORKERS_CFG", {"providers": [
+        {"name": "lmstudio", "kind": "openai",
+         "model_prefix": "lmstudio/", "local": True},
+        {"name": "xiaomimimo", "kind": "openai",
+         "model_prefix": "xiaomimimo/", "requests_per_day": 1000},
+    ]})
+    assert lb._is_free_model("lmstudio/gpt-oss-20b") is True
+    assert lb._is_free_model("xiaomimimo/mimo-v2.5") is True
+
+
+def test_non_local_no_quota_provider_still_paid(monkeypatch):
+    # a declared provider WITHOUT local and WITHOUT requests_per_day is still
+    # treated as paid (the guard's protection is preserved)
+    monkeypatch.setattr(lb, "WORKERS_CFG", {"providers": [
+        {"name": "vendor", "kind": "openai", "model_prefix": "vendor/"},
+    ]})
+    assert lb._is_free_model("vendor/some-model") is False
+
+
 # ─── run-wide LLM-call budget (quota limiter, off by default) ─────────
 
 def _serve_ok(fake_openai):

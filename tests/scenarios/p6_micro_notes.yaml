@@ -247,7 +247,7 @@ workers:
     - {name: xiaomimimo, kind: openai, model_prefix: "xiaomimimo/", requests_per_day: 1000}
     # LMStudio gpt-oss-20b — LOCAL, weak, NO quota. Leads the heavy roles so the
     # run carries on a WEAK model (model-independence intact) WITHOUT 429 waits.
-    - {name: lmstudio, kind: openai, model_prefix: "lmstudio/"}
+    - {name: lmstudio, kind: openai, model_prefix: "lmstudio/", local: true}
     - {name: openrouter-free, kind: openai, model_prefix: "openrouter/", require_suffix: ":free", requests_per_day: 1000}
     - {name: claude-cli, kind: claude, model_prefix: "claude/"}
   # ── SPEC-PIPELINE STAGES ────────────────────────────────────────────────
