@@ -1,0 +1,34 @@
+tests/gates/test_review_tiering.py
+  s_a7f45290e91181::t_377e718b13d324 4-5
+  s_a7f45290e91181::t_fc7eb0278a612f 59-65
+tests/.test.env
+  s_a7f45290e91181::t_e1f2c9cd5cc458 16
+tests/workers/test_process_tier_select.py
+  s_a7f45290e91181::t_9d81fe12be8e20 78-105
+tests/coverage/test_process_tiering.py
+  s_a7f45290e91181::t_1057f47ce0d74d 100-118
+tests/harness/role_worker.py
+  s_a7f45290e91181::t_e8b8792ba74509 681-687,693-696
+  s_a7f45290e91181::t_73af4dc800a59c 1151
+  s_a7f45290e91181::t_0c12cde91e27aa 1656-1657
+  s_a7f45290e91181::t_90117e740d04b1 733,739-743
+spec_flow_runner.py
+  s_a7f45290e91181::t_73aa9a47e664af 619-629
+  s_a7f45290e91181::t_7b873c2dfef8f1 4415-4420
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.9",
+  "base_commit_sha": "d9c18d3a3b34b780aa6e8b832c3b3ba83ac3ede1",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
