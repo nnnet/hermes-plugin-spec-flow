@@ -4548,8 +4548,16 @@ class Engine:
                 # shell and 404s every route. Recording the CLAIM here lets
                 # integrate cross-check the FINAL tree and fail loudly (never
                 # green-wash a product whose feature modules were dropped).
-                if code_rel:
-                    self.__dict__.setdefault("_built_leaf_code", {})[nid] = code_rel
+                # Record ONLY leaves that actually MATERIALISED their code file
+                # on the tree (post worktree merge-back). A decomposer-invented
+                # meta leaf — e.g. one the model named "integrate_verify" — whose
+                # derived code_rel was never written to disk must NOT be tracked,
+                # else the integrate gate fails on a module the product never
+                # needed. A leaf that wrote an EMPTY/stub file IS tracked (file
+                # exists) so the integrate check still flags it as lost.
+                if code_rel and (Path(self.workspace.root) / code_rel).is_file():
+                    self.__dict__.setdefault(
+                        "_built_leaf_code", {})[nid] = code_rel
         elif self.depth >= DEPTH_SCAFFOLD:
             code_rel = self.workspace.code(nid, title)
             test_rel = self.workspace.test(nid, title)
