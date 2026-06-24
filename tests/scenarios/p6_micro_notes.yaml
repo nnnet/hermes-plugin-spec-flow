@@ -233,16 +233,16 @@ workers:
   # LLM power tiers (doctor escalate_tier + complexity->tier routing). Only
   # free / no-quota models, per project rule. ONE place that defines power.
   tiers:
-    # weak leads with a FREE OpenRouter coder (per project rule: free OpenRouter
-    # primary, haiku only as fallback). History of leaders dropped here:
-    #   - lmstudio/gpt-oss-20b: EMPTY content via Bifrost (reasoning model, no
-    #     usable completion) — 0 usable replies in 20 calls (v071).
-    #   - qwen/qwen3-coder:free: HTTP 429 on every attempt (v072) — the most
-    #     popular free coder id is the most congested bucket on the shared pool.
-    # qwen3-next-80b-a3b-instruct:free is a different (less hammered) bucket and
-    # is already proven routable in this file (decompose stage). haiku fallback
-    # still catches a pool-wide 429 so the run degrades gracefully, never stalls.
-    weak:   {models: [openrouter/qwen/qwen3-next-80b-a3b-instruct:free, claude/haiku], temperature: 0.2}
+    # weak leads with claude/haiku. NOTE on the project "free OpenRouter primary"
+    # rule: the shared free pool is ACCOUNT-exhausted (daily quota) — EVERY :free
+    # id 429s right now, proven twice: qwen3-coder:free (v072) and
+    # qwen3-next-80b-a3b-instruct:free (v073, 68 attempts / 0 ok). A dead free
+    # leader does not "prefer free", it just burns ~60s of quota-wait
+    # (quota_retries 3 × quota_wait_s 20) before every weak call falls to haiku,
+    # which does 100% of the real work anyway. So lead with the sanctioned
+    # fallback (haiku) to drop the tax. RESTORE a free leader here once the daily
+    # free quota resets — e.g. openrouter/qwen/qwen3-next-80b-a3b-instruct:free.
+    weak:   {models: [claude/haiku], temperature: 0.2}
     medium: {models: [xiaomimimo/mimo-v2.5, claude/haiku],  temperature: 0.1}
     strong: {models: [xiaomimimo/mimo-v2.5-pro, claude/haiku], temperature: 0.0}
   complexity_to_tier: {leaf_small: weak, leaf_big: medium, branch: strong}
