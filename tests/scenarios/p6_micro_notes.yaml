@@ -308,9 +308,9 @@ workers:
       team:
         specialists:
           - {role: architect, model: "claude/haiku", params: {temperature: 0.2}}        # hard → weak
-          - {role: coder,     model: "lmstudio/gpt-oss-20b", params: {temperature: 0.4, max_tokens: 6000}}  # hard → weak, LOCAL (no quota)
+          - {role: coder,     model: "claude/haiku", params: {temperature: 0.4, max_tokens: 6000}}  # was lmstudio/gpt-oss-20b — LMStudio dead post-reboot (http_400) + empty in v071; haiku is the reliable leader
           - {role: tester,    provider: hermes,          agent: "tester",
-             gateway: "http://127.0.0.1:8642", model: "lmstudio/gpt-oss-20b"}  # check; degrades to LOCAL if gateway down (no 429)
+             gateway: "http://127.0.0.1:8642", model: "claude/haiku"}  # check via hermes seam; model haiku (lmstudio dead → http_400)
           - {role: fixer,     provider: mission-control, agent_template: "fixer",
              api: "http://127.0.0.1:3000", model: "claude/haiku"}                         # hard → weak; mc key from env
     # CHECK stages lead with the 3 strongest VERIFIED-RESPONDING free OpenRouter
