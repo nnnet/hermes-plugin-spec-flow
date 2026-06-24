@@ -233,7 +233,12 @@ workers:
   # LLM power tiers (doctor escalate_tier + complexity->tier routing). Only
   # free / no-quota models, per project rule. ONE place that defines power.
   tiers:
-    weak:   {models: [lmstudio/gpt-oss-20b, claude/haiku], temperature: 0.2}
+    # weak leads with a FREE OpenRouter coder (per project rule: free OpenRouter
+    # primary, haiku only as fallback). lmstudio/gpt-oss-20b was the local leader
+    # but returns EMPTY content via Bifrost (a reasoning model with no usable
+    # completion) — it produced 0 usable replies in 20 calls (v071), so it is
+    # dropped from the chain rather than wasting a call + timeout on every leaf.
+    weak:   {models: [openrouter/qwen/qwen3-coder:free, claude/haiku], temperature: 0.2}
     medium: {models: [xiaomimimo/mimo-v2.5, claude/haiku],  temperature: 0.1}
     strong: {models: [xiaomimimo/mimo-v2.5-pro, claude/haiku], temperature: 0.0}
   complexity_to_tier: {leaf_small: weak, leaf_big: medium, branch: strong}
