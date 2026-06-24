@@ -1,0 +1,21 @@
+tests/coverage/test_requirement_amend_routing.py
+  s_a7f45290e91181::t_2ee7a8b7f7f14c 161-216
+spec_flow_runner.py
+  s_a7f45290e91181::t_b4d4ad6e13bc87 1938-1959
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.11",
+  "base_commit_sha": "0275009f34b6e0f00db4ed48a5796548ec62c6c4",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "nvidia/nemotron-3-super-120b-a12b-20230311:free"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
