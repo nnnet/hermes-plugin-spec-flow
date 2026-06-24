@@ -213,6 +213,18 @@ acceptance:
 workers:
   backend: openai                       # Bifrost speaks the OpenAI protocol
   base_url: http://127.0.0.1:8080/v1
+  # ARCHITECTURE RULE: every provider goes through Bifrost — claude too. claude/*
+  # routes via this gateway (Bifrost anthropic provider → Meridian :3456 →
+  # subscription), NOT a direct `claude -p` CLI. Bifrost serialises the anthropic
+  # provider (concurrency:1 in infra/hermes/bifrost/config.json) so concurrent
+  # claude calls queue instead of throttling each other into timeouts (v074/v075).
+  # The runner preflight (run_cases.py) refuses to start if any provider bypasses
+  # Bifrost or if this gateway / Meridian is unreachable.
+  claude_gateway:
+    base_url: http://127.0.0.1:8080/v1
+    model_map:
+      claude/sonnet: anthropic/claude-sonnet-4-6
+      sonnet: anthropic/claude-sonnet-4-6
   retries: 6
   leaf_depth: 3
   max_children: 3

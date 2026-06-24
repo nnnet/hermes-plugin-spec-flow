@@ -216,6 +216,31 @@ def _concurrency_gate() -> "threading.Semaphore | None":
     return _llm_slots
 
 
+# Per-provider gate for the claude SUBSCRIPTION CLI. The `claude -p` subprocess
+# does NOT tolerate the run's parallelism: concurrent CLIs throttle each other
+# (subscription rate + per-call model/MCP load), so under fan-out every sonnet
+# call timed out — v075 logged 0/18 claude_ok, all timeouts. Unlike mimo (HTTP via
+# Bifrost, concurrency-safe), the CLI must be SERIALISED. This gate is the harness
+# equivalent of a Bifrost provider `concurrency: 1` — except sonnet bypasses
+# Bifrost (direct CLI), so the queue lives here. Default 1 = strictly sequential:
+# each claude call starts only after the previous returns. It is PER-PROVIDER, NOT
+# a global parallelism switch — mimo and the engine's leaf pool stay parallel.
+# Tune via workers.claude_cli_concurrency (0 = unbounded, restores old behaviour).
+_claude_cli_slots: "threading.Semaphore | None" = None
+_claude_cli_slots_for = -1
+
+
+def _claude_cli_gate() -> "threading.Semaphore | None":
+    global _claude_cli_slots, _claude_cli_slots_for
+    want = int(WORKERS_CFG.get("claude_cli_concurrency", 1))
+    if want <= 0:
+        return None
+    if _claude_cli_slots is None or _claude_cli_slots_for != want:
+        _claude_cli_slots = threading.BoundedSemaphore(want)
+        _claude_cli_slots_for = want
+    return _claude_cli_slots
+
+
 def _budget() -> int:
     if WORKERS_CFG.get("budget") is not None:
         return int(WORKERS_CFG["budget"])
@@ -235,6 +260,100 @@ def _spend_call() -> None:
                 f"run budget of {limit} LLM calls is spent — refusing the"
                 " call")
         _calls_made += 1
+
+
+def assert_provider_chain(*, smoke: bool = True) -> None:
+    """Preflight invariant (ARCHITECTURE RULE): every LLM provider the run can
+    call MUST route through Bifrost; claude additionally through the Bifrost
+    anthropic provider -> Meridian -> subscription, NEVER a direct `claude -p`
+    CLI. Raises RuntimeError (the runner turns it into a hard refusal) if any
+    model bypasses Bifrost, or if the chain is configured but not LIVE — the
+    v074/v075 trap was a healthy-looking Bifrost in front of a DEAD Meridian, so
+    config alone is not enough: we smoke one claude call end-to-end."""
+    import urllib.parse as _up
+
+    def _netloc(url: str) -> str:
+        try:
+            return _up.urlsplit(url if "://" in url else "http://" + url).netloc
+        except Exception:
+            return ""
+
+    cfg = WORKERS_CFG or {}
+    bif = (cfg.get("base_url") or BASE_URL or "").rstrip("/")
+    if not bif:
+        raise RuntimeError("provider-chain preflight: workers.base_url (Bifrost) is unset")
+    bif_host = _netloc(bif)
+    gw = cfg.get("claude_gateway") if isinstance(cfg.get("claude_gateway"), dict) else None
+    gw_url = ((gw or {}).get("base_url") or "").rstrip("/")
+    model_map = (gw or {}).get("model_map") or {}
+
+    # 1) every model id the run can call (tiers + flattened stages + defaults +
+    #    fallback + implement-team specialists that are raw models)
+    models: set = set()
+    for tier in (cfg.get("tiers") or {}).values():
+        models.update((tier or {}).get("models") or [])
+    for key in ("decomposer", "implementer", "reviewer", "verifier", "defaults"):
+        models.update(((cfg.get(key) or {}).get("models")) or [])
+    models.update(cfg.get("fallback_models") or [])
+    for sp in (((cfg.get("implementer") or {}).get("team") or {}).get("specialists") or []):
+        # agent-platform seams (provider: hermes / mission-control) call their OWN
+        # llm internally — not a direct Bifrost model in THIS harness; skip them.
+        if sp.get("provider") in ("hermes", "mission-control"):
+            continue
+        if sp.get("model"):
+            models.add(sp["model"])
+
+    # 2) claude must ride the Bifrost gateway, never the direct CLI
+    claude_models = sorted(m for m in models if str(m).startswith("claude/"))
+    if claude_models:
+        if not gw_url:
+            raise RuntimeError(
+                "provider-chain preflight: claude models would use the direct CLI "
+                f"(no workers.claude_gateway). Route them via Bifrost {bif}. "
+                f"Offending: {claude_models}")
+        if _netloc(gw_url) != bif_host:
+            raise RuntimeError(
+                f"provider-chain preflight: claude_gateway {gw_url} is not Bifrost ({bif})")
+        for m in claude_models:
+            short = m.split("/", 1)[1] if "/" in m else m
+            if m not in model_map and short not in model_map:
+                raise RuntimeError(
+                    f"provider-chain preflight: claude model '{m}' has no "
+                    "claude_gateway.model_map entry; Bifrost cannot resolve it")
+
+    # 3) a provider that overrode base_url to a non-Bifrost host is a bypass
+    for prov in (cfg.get("providers") or []):
+        pburl = prov.get("base_url")
+        if pburl and _netloc(pburl) != bif_host:
+            raise RuntimeError(
+                f"provider-chain preflight: provider '{prov.get('name')}' base_url "
+                f"{pburl} bypasses Bifrost ({bif})")
+
+    # 4) the chain must be LIVE — smoke one claude call all the way through
+    if smoke and claude_models:
+        m = claude_models[0]
+        short = m.split("/", 1)[1] if "/" in m else m
+        target = model_map.get(m) or model_map.get(short)
+        data = json.dumps({"model": target, "max_tokens": 5,
+                           "messages": [{"role": "user", "content": "ping"}]}).encode()
+        try:
+            req = urllib.request.Request(
+                gw_url + "/chat/completions", data=data,
+                headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                payload = json.loads(r.read().decode("utf-8"))
+        except Exception as exc:
+            raise RuntimeError(
+                f"provider-chain preflight: claude smoke through Bifrost failed "
+                f"({gw_url} -> {target}): {exc}. Is Meridian (:3456) up?") from exc
+        if isinstance(payload, dict) and (payload.get("error") or not payload.get("choices")):
+            raise RuntimeError(
+                f"provider-chain preflight: Bifrost gave no completion for {target}: "
+                f"{str(payload)[:200]} — chain (Bifrost->Meridian->sub) is broken")
+
+    print(f"[preflight] provider-chain OK — all models via Bifrost {bif}"
+          + (f"; claude->gateway->Meridian (smoked {claude_models[0]})"
+             if (smoke and claude_models) else ""))
 
 
 def _provider_for(model: str) -> dict | None:
@@ -841,6 +960,12 @@ def _ask_claude(prompt: str, model: str, system: str | None = None,
     # RETRIES). Skip MCP for chat → the claude fallback stays ~5s.
     mcp = claude_cli.mcp_args_no_serena() if (allowed or disallowed) else []
     for attempt in range(1, RETRIES + 1):
+        # serialise the subscription CLI (see _claude_cli_gate): concurrent
+        # `claude -p` processes throttle each other into timeouts. The queue wait
+        # sits OUTSIDE t0 so recorded latency is the call itself, not the wait.
+        _cli_gate = _claude_cli_gate()
+        if _cli_gate is not None:
+            _cli_gate.acquire()
         t0 = time.monotonic()
         try:
             proc = subprocess.run(
@@ -861,6 +986,9 @@ def _ask_claude(prompt: str, model: str, system: str | None = None,
             last = f"spawn failed: {exc}"
             _attempt(attempt, t0, "spawn_error", True, "spawn")
             continue
+        finally:
+            if _cli_gate is not None:
+                _cli_gate.release()
         if proc.returncode == 0 and proc.stdout.strip():
             _attempt(attempt, t0, 0, False)
             return claude_cli.strip_headroom_banner(proc.stdout)

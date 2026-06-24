@@ -220,6 +220,12 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
         # per-role provider/model from the case YAML (env vars override);
         # MUST happen before the factories capture their models
         llm_backend.configure_workers(case.get("workers"))
+        # PREFLIGHT (architecture rule): refuse to start unless EVERY provider
+        # routes through Bifrost, and the claude -> Bifrost(anthropic) -> Meridian
+        # -> subscription chain is LIVE (not just configured). Fails loud HERE
+        # instead of mid-run — v074/v075 burned whole runs on a dead Meridian
+        # behind a healthy-looking Bifrost.
+        llm_backend.assert_provider_chain()
         # memory tiers (role craft / project decisions) + start-of-run
         # modes (fresh/resume/readonly/off) from the case YAML
         memory_mod.configure(case.get("memory"), case.get("name", ""))
