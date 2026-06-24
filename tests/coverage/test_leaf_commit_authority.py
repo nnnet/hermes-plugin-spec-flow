@@ -144,3 +144,31 @@ def test_integrate_fails_loud_when_a_leaf_module_is_lost(tmp_path, monkeypatch):
            and "notes_api" in (getattr(e, "detail", "") or "")]
     assert hit, ("integrate did not fail loud on the lost notes_api module — "
                  "a dropped feature module would green-wash as READY")
+
+
+# ── the AUTHORITY fix: a worktree merges back code committed INSIDE it ──────
+def test_worktree_merges_code_committed_inside_it(tmp_path):
+    """leaf_worktree must merge a branch whose commits were made INSIDE the
+    worktree by the leaf's OWN ws_tx.transaction (the orchestra / write+bar
+    path) — not only when leaf_worktree itself committed. The old gate merged
+    only on its own commit, so a leaf that committed internally left nothing
+    staged, _integrate() was skipped and _cleanup() deleted the branch —
+    orphaning the leaf's real src (v078/v079 NOT-READY root cause)."""
+    root = tmp_path / "wsroot"
+    root.mkdir(parents=True)
+    ws_tx.ensure_repo(str(root))
+    with ws_tx.leaf_worktree(str(root), "cart_api", "leaf:cart_api") as wt:
+        # the LEAF commits its own code INSIDE the worktree, exactly as the
+        # orchestra/solo role_worker does (ws_tx.transaction on the wt path)
+        srcd = pathlib.Path(wt.path) / "src"
+        srcd.mkdir(parents=True, exist_ok=True)
+        (srcd / "cart_api.py").write_text(
+            "def cart_api():\n    return 'ok'\n", encoding="utf-8")
+        with ws_tx.transaction(wt.path, "leaf:cart_api", "write+bar"):
+            pass
+
+    assert wt.merged, ("branch carrying the leaf's internally-committed code "
+                       "was not merged back into the workspace")
+    assert _head_has(root, "src/cart_api.py"), (
+        "leaf code committed inside the worktree never reached master — "
+        "the merge-back was skipped and the branch deleted")

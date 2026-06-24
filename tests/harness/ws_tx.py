@@ -53,6 +53,25 @@ def ensure_repo(root: str) -> bool:
     _git(root, "add", "-A")
     _git(root, "-c", "user.name=spec-flow", "-c", "user.email=tx@spec.flow",
          "commit", "-q", "-m", "workspace baseline", "--allow-empty")
+    # DEBUG (SPEC_FLOW_GIT_TRACE): a reference-transaction hook logs every
+    # committed move of master/HEAD with its reflog action — reveals WHO resets
+    # the ref (commit / reset / checkout / branch) when a leaf's code is orphaned.
+    import os
+    if os.environ.get("SPEC_FLOW_GIT_TRACE"):
+        hooks = r / ".git" / "hooks"
+        hooks.mkdir(parents=True, exist_ok=True)
+        hk = hooks / "reference-transaction"
+        _log_abs = str((r / ".git" / "ref-trace.log").resolve())
+        hk.write_text(
+            "#!/bin/sh\n"
+            '[ "$1" = committed ] || exit 0\n'
+            "while read old new ref; do\n"
+            '  case "$ref" in *master|HEAD)\n'
+            '    printf "%s %s %s->%s [%s]\\n" "$(date +%H:%M:%S)" "$ref" '
+            f'"$old" "$new" "$GIT_REFLOG_ACTION" >> "{_log_abs}" ;;\n'
+            "  esac\n"
+            "done\n", encoding="utf-8")
+        os.chmod(hk, 0o755)
     return True
 
 
@@ -189,15 +208,29 @@ class leaf_worktree:
         if not self._ok:
             return False
         try:
-            # commit whatever the leaf wrote to its own branch
+            # Commit whatever the leaf left UNCOMMITTED to its own branch.
             _git(self.path, "add", "-A")
             rc, _ = _git(self.path, "diff", "--cached", "--quiet")
-            has_changes = rc != 0
-            if has_changes and exc_type is None:
+            if rc != 0 and exc_type is None:
                 _git(self.path, "-c", f"user.name={self.who}",
                      "-c", "user.email=tx@spec.flow",
                      "commit", "-q", "-m", f"{self.who}: leaf work")
-                self._integrate()
+            # Integrate when the branch carries ANY work ahead of the workspace
+            # HEAD. This covers BOTH the changes just committed above AND the
+            # commits the leaf's OWN ws_tx.transaction already made INSIDE the
+            # worktree (the orchestra / write+bar path commits there directly).
+            # The former gate merged only when leaf_worktree ITSELF committed —
+            # so a leaf that committed its code internally left `git add -A`
+            # with nothing staged, _integrate() was skipped, and _cleanup()
+            # then deleted the branch, orphaning the leaf's real src before it
+            # ever reached master. That is the v078/v079 NOT-READY root cause:
+            # master kept only the runner's spec-only `feat:` commits while
+            # every leaf's code was silently dropped.
+            if exc_type is None:
+                _, ahead = _git(self.root, "rev-list", "--count",
+                                f"HEAD..{self.branch}")
+                if ahead.strip().isdigit() and int(ahead.strip()) > 0:
+                    self._integrate()
         finally:
             self._cleanup()
         return False                  # never swallow the leaf's exception
