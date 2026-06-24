@@ -1,0 +1,19 @@
+tests/.test.env
+  s_a7f45290e91181::t_f06921a029ceef 16-21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.11",
+  "base_commit_sha": "13716f05daf09a8188c862454dc1065f57de81f3",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "nvidia/nemotron-3-super-120b-a12b-20230311:free"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
