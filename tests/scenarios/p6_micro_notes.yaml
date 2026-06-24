@@ -229,97 +229,55 @@ workers:
   # a free fallback is hit. A short wait beats minutes of idle (was 300×11 ≈ 55m).
   quota_wait_s: 20
   quota_retries: 3
-  fallback_models: [claude/haiku]
-  # LLM power tiers (doctor escalate_tier + complexity->tier routing). Only
-  # free / no-quota models, per project rule. ONE place that defines power.
+  fallback_models: [claude/sonnet]
+  # LLM power tiers. Model set RESTRICTED to THREE by operator request
+  # (2026-06-24): claude/sonnet + xiaomimimo/mimo-v2.5 + xiaomimimo/mimo-v2.5-pro.
+  # No haiku, no OpenRouter :free, no local lmstudio. claude/sonnet runs via the
+  # subscription CLI (strong, reliable, NO quota/429 — spends no API budget, so it
+  # passes the paid-model guard exactly like haiku did). mimo runs via Bifrost
+  # (xiaomimimo provider, quota-bearing/free-class). Sonnet leads HARD generative
+  # work; mimo leads CHECK gates (pro = the strongest, used by the final verify).
   tiers:
-    # weak leads with claude/haiku. NOTE on the project "free OpenRouter primary"
-    # rule: the shared free pool is ACCOUNT-exhausted (daily quota) — EVERY :free
-    # id 429s right now, proven twice: qwen3-coder:free (v072) and
-    # qwen3-next-80b-a3b-instruct:free (v073, 68 attempts / 0 ok). A dead free
-    # leader does not "prefer free", it just burns ~60s of quota-wait
-    # (quota_retries 3 × quota_wait_s 20) before every weak call falls to haiku,
-    # which does 100% of the real work anyway. So lead with the sanctioned
-    # fallback (haiku) to drop the tax. RESTORE a free leader here once the daily
-    # free quota resets — e.g. openrouter/qwen/qwen3-next-80b-a3b-instruct:free.
-    weak:   {models: [claude/haiku], temperature: 0.2}
-    medium: {models: [xiaomimimo/mimo-v2.5, claude/haiku],  temperature: 0.1}
-    strong: {models: [xiaomimimo/mimo-v2.5-pro, claude/haiku], temperature: 0.0}
+    weak:   {models: [claude/sonnet, xiaomimimo/mimo-v2.5], temperature: 0.2}
+    medium: {models: [xiaomimimo/mimo-v2.5, claude/sonnet], temperature: 0.1}
+    strong: {models: [xiaomimimo/mimo-v2.5-pro, claude/sonnet], temperature: 0.0}
   complexity_to_tier: {leaf_small: weak, leaf_big: medium, branch: strong}
   providers:
     # Xiaomi MiMo — its OWN Bifrost provider "xiaomimimo" (custom OpenAI-compatible,
-    # base_url xiaomimimo.com, keys XIAOMIMIMO_API_KEY), NOT OpenRouter. Bifrost
-    # routes by the "xiaomimimo/" model prefix to that provider. It is AVAILABLE
-    # but deliberately NOT the primary on any role: p6 measures the engine on
-    # WEAK free models (model-independence), so a strong model must not carry the
-    # run. It appears only as one last-ditch fallback in the heaviest role.
+    # base_url xiaomimimo.com, keys XIAOMIMIMO_API_KEY), routed by "xiaomimimo/" prefix.
     - {name: xiaomimimo, kind: openai, model_prefix: "xiaomimimo/", requests_per_day: 1000}
-    # LMStudio gpt-oss-20b — LOCAL, weak, NO quota. Leads the heavy roles so the
-    # run carries on a WEAK model (model-independence intact) WITHOUT 429 waits.
-    - {name: lmstudio, kind: openai, model_prefix: "lmstudio/", local: true}
-    - {name: openrouter-free, kind: openai, model_prefix: "openrouter/", require_suffix: ":free", requests_per_day: 1000}
+    # claude/* → subscription CLI (spends no API budget); used here for claude/sonnet.
     - {name: claude-cli, kind: claude, model_prefix: "claude/"}
   # ── SPEC-PIPELINE STAGES ────────────────────────────────────────────────
-  # A spec flows through FOUR stages, each one link of the chain (a STAGE, not a
-  # team role): decompose → implement → review → verify. `defaults` is the
-  # shared chain; each stage may override it with its own `models:` list
-  # (primary first, quota fallbacks after). The `implement` stage additionally
-  # runs a TEAM of specialists (architect/coder/tester/fixer) — those are roles
-  # WITHIN the stage, a separate axis. Legacy flat keys (decomposer/…) still
-  # work; this `stages:` grouping is the clean, standard-aligned shape.
-  #
-  # MODELS — deliberately asymmetric by task DIFFICULTY (p6 tests the engine's
-  # MODEL-INDEPENDENCE). Strength ladder (weak→strong):
-  #   claude/haiku  — COMPACT, weak (fast, 200k ctx)
-  #   xiaomimimo/mimo-v2.5     — FLAGSHIP MoE (~1T params / 42B active), STRONG
-  #   xiaomimimo/mimo-v2.5-pro — the STRONGEST
-  #   (openrouter qwen:free is weaker still, but the pool currently 429s).
-  # Placement:
-  #   * HARD generative work (decompose, implement, architect, coder, fixer) →
-  #     lead with the WEAK model (claude/haiku). A weak BUILDER that still yields
-  #     a correct product proves the ENGINE carries quality, not the model.
-  #   * CHECKS / gates (review, verify, tester) → lead with the STRONG model
-  #     (mimo-v2.5; the final verify gate uses the strongest, mimo-v2.5-pro) so the
-  #     judge of the weak builder's output is sharp.
-  # NB claude/haiku runs via the CLI/Meridian (NOT Bifrost); mimo runs via Bifrost
-  # — so the Xiaomi traffic visible in Bifrost is the CHECK calls (review/verify/
-  # tester), by design.
-  # RULE OF THUMB for picking a model per STAGE and per ROLE:
-  #   difficulty of the work  →  model strength
-  #   ───────────────────────────────────────────
-  #   HARD (build/design/repair: decompose, implement, architect, coder, fixer)
-  #        → WEAK model (claude/haiku) leads; stronger model only as fallback.
-  #   CHECK (judge/gate: review, verify, tester)
-  #        → STRONG model (mimo-v2.5) leads; the final verify gate uses the
-  #          STRONGEST (mimo-v2.5-pro). Weak model only as fallback.
-  #   The 3rd entry in each list is the quota fallback (OpenRouter ':free').
+  # decompose → implement → review → verify. HARD generative work (decompose,
+  # implement, architect, coder, fixer) leads claude/sonnet; CHECK gates (review,
+  # verify, tester) lead mimo (verify = the strongest, mimo-v2.5-pro). Only the 3
+  # allowed models appear; each list is primary-first with the others as fallback.
+  # NB all three are STRONG, so this run does NOT test model-independence on a weak
+  # builder — it prioritises reliability + green nodes (operator request).
   defaults:                             # shared chain when a stage adds no override
-    models: ["claude/haiku", "xiaomimimo/mimo-v2.5", "openrouter/qwen/qwen3-coder:free"]
+    models: ["claude/sonnet", "xiaomimimo/mimo-v2.5", "xiaomimimo/mimo-v2.5-pro"]
   stages:
-    decompose:                          # HARD (build the tree) → weak (haiku) leads; mimo fallback
-      models: ["claude/haiku", "xiaomimimo/mimo-v2.5", "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"]
-    implement:                          # HARD (write the leaf) → weak (haiku) leads; mimo fallback
-      models: ["claude/haiku", "xiaomimimo/mimo-v2.5", "openrouter/qwen/qwen3-coder:free"]
-      # MIXED team, difficulty-based: architect/coder/fixer (build/repair = HARD)
-      # lead WEAK (haiku); tester (a CHECK) leads STRONG (mimo-v2.5). tester runs
-      # on a HERMES agent, fixer on a MISSION-CONTROL agent (provider seam, §3/§4);
-      # secrets are NEVER in this file — an unreachable service degrades to the
-      # listed `model:`.
+    decompose:                          # HARD (build the tree) → sonnet leads; mimo fallback
+      models: ["claude/sonnet", "xiaomimimo/mimo-v2.5"]
+    implement:                          # HARD (write the leaf) → sonnet leads; mimo fallback
+      models: ["claude/sonnet", "xiaomimimo/mimo-v2.5"]
+      # team specialists: architect/coder/fixer (build/repair = HARD) → sonnet;
+      # tester (a CHECK) → mimo. tester runs on a HERMES agent, fixer on a
+      # MISSION-CONTROL agent (provider seam, §3/§4); secrets are NEVER in this
+      # file — an unreachable service degrades to the listed `model:`.
       team:
         specialists:
-          - {role: architect, model: "claude/haiku", params: {temperature: 0.2}}        # hard → weak
-          - {role: coder,     model: "claude/haiku", params: {temperature: 0.4, max_tokens: 6000}}  # was lmstudio/gpt-oss-20b — LMStudio dead post-reboot (http_400) + empty in v071; haiku is the reliable leader
+          - {role: architect, model: "claude/sonnet", params: {temperature: 0.2}}        # hard → sonnet
+          - {role: coder,     model: "claude/sonnet", params: {temperature: 0.4, max_tokens: 6000}}  # hard → sonnet
           - {role: tester,    provider: hermes,          agent: "tester",
-             gateway: "http://127.0.0.1:8642", model: "claude/haiku"}  # check via hermes seam; model haiku (lmstudio dead → http_400)
+             gateway: "http://127.0.0.1:8642", model: "xiaomimimo/mimo-v2.5"}  # check via hermes seam → mimo
           - {role: fixer,     provider: mission-control, agent_template: "fixer",
-             api: "http://127.0.0.1:3000", model: "claude/haiku"}                         # hard → weak; mc key from env
-    # CHECK stages lead with the 3 strongest VERIFIED-RESPONDING free OpenRouter
-    # models (model-independence: the gates are carried by free models, not a
-    # single paid/Bifrost provider). cycle_models:false ⇒ the lead really runs.
-    review:                             # CHECK → strong; mimo leads (works, no quota), free models fall back
-      models: ["xiaomimimo/mimo-v2.5", "openrouter/nvidia/nemotron-3-super-120b-a12b:free", "openrouter/google/gemma-4-31b-it:free", "claude/haiku"]
-    verify:                             # CHECK / final gate → STRONGEST: gpt-oss-120b leads
-      models: ["xiaomimimo/mimo-v2.5-pro", "openrouter/openai/gpt-oss-120b:free", "openrouter/nvidia/nemotron-3-super-120b-a12b:free", "claude/haiku"]
+             api: "http://127.0.0.1:3000", model: "claude/sonnet"}                        # repair = hard → sonnet
+    review:                             # CHECK → mimo leads (sharp judge); sonnet fallback
+      models: ["xiaomimimo/mimo-v2.5", "claude/sonnet"]
+    verify:                             # CHECK / final gate → STRONGEST mimo-v2.5-pro leads; sonnet fallback
+      models: ["xiaomimimo/mimo-v2.5-pro", "claude/sonnet"]
   #
   #  review: # CHECK → strong (mimo-v2.5) leads; haiku fallback
   #    models: [ "xiaomimimo/mimo-v2.5", "claude/haiku", "openrouter/qwen/qwen3-next-80b-a3b-instruct:free" ]
