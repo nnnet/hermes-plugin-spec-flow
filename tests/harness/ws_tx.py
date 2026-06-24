@@ -53,25 +53,6 @@ def ensure_repo(root: str) -> bool:
     _git(root, "add", "-A")
     _git(root, "-c", "user.name=spec-flow", "-c", "user.email=tx@spec.flow",
          "commit", "-q", "-m", "workspace baseline", "--allow-empty")
-    # DEBUG (SPEC_FLOW_GIT_TRACE): a reference-transaction hook logs every
-    # committed move of master/HEAD with its reflog action — reveals WHO resets
-    # the ref (commit / reset / checkout / branch) when a leaf's code is orphaned.
-    import os
-    if os.environ.get("SPEC_FLOW_GIT_TRACE"):
-        hooks = r / ".git" / "hooks"
-        hooks.mkdir(parents=True, exist_ok=True)
-        hk = hooks / "reference-transaction"
-        _log_abs = str((r / ".git" / "ref-trace.log").resolve())
-        hk.write_text(
-            "#!/bin/sh\n"
-            '[ "$1" = committed ] || exit 0\n'
-            "while read old new ref; do\n"
-            '  case "$ref" in *master|HEAD)\n'
-            '    printf "%s %s %s->%s [%s]\\n" "$(date +%H:%M:%S)" "$ref" '
-            f'"$old" "$new" "$GIT_REFLOG_ACTION" >> "{_log_abs}" ;;\n'
-            "  esac\n"
-            "done\n", encoding="utf-8")
-        os.chmod(hk, 0o755)
     return True
 
 
