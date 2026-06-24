@@ -1,0 +1,25 @@
+tests/harness/llm_backend.py
+  s_a7f45290e91181::t_125ed52a114795 219-243
+  s_a7f45290e91181::t_798ea0d03b14cc 265-358
+  s_a7f45290e91181::t_b01808f3c4c624 963-968,989-991
+tests/lib/run_cases.py
+  s_a7f45290e91181::t_1c6abaad1dcd13 223-228
+tests/scenarios/p6_micro_notes.yaml
+  s_a7f45290e91181::t_ba55600d442d81 216-227
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.11",
+  "base_commit_sha": "d1ea732c4f2f5c1754844c4a045523434aa48d64",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
