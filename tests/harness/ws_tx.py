@@ -239,6 +239,20 @@ class leaf_worktree:
         """Serialized, pre-flighted merge of this leaf's branch into the
         workspace. A conflict is reported, NOT forced."""
         with commit_queue.exclusive(self.who, "leaf merge"):
+            # The workspace tree may carry the runner's freshly-written but
+            # still-UNTRACKED files (e.g. specs/<leaf>.md the engine drops on
+            # the main tree). `git merge` refuses to overwrite untracked files
+            # and aborts ("would be overwritten by merge") — which silently
+            # orphaned the leaf branch again. Commit the current workspace
+            # state first so the merge is a clean 3-way against tracked content
+            # (identical specs collapse to a no-op; a genuine clash is then
+            # surfaced by the pre-flight, not a raw merge abort).
+            _git(self.root, "add", "-A")
+            _rc, _ = _git(self.root, "diff", "--cached", "--quiet")
+            if _rc != 0:
+                _git(self.root, "-c", f"user.name={self.who}",
+                     "-c", "user.email=tx@spec.flow", "commit", "-q", "-m",
+                     f"workspace state before {self.branch} merge")
             pf = merge_tree_preflight(self.root, "HEAD", self.branch)
             if not pf["clean"]:
                 self.conflicts = pf["conflicts"]
