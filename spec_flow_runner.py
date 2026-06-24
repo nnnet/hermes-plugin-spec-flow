@@ -3033,6 +3033,48 @@ class Engine:
                 if _act is not None and getattr(_act, "kind", "") == "reconcile_check":
                     self._remedy_reconcile_check(entry)
 
+            # Single-authority invariant: every leaf that delivered a real code
+            # file must STILL have it present (non-trivial) in the assembled
+            # tree. The v078 NOT READY root cause was leaf code orphaned in git
+            # (two commit authorities diverged) so feature modules vanished
+            # before the boot-gate while only specs + an entry stub reached the
+            # tree. Without this, the boot-gate sees an entry that imports
+            # nothing and the product 404s every route — a silent green-wash of
+            # a product whose real modules were dropped. A missing module is a
+            # ROOT integrate FAIL naming it, recorded so the completion gate
+            # blocks; the same is fed to the doctor so reconcile rebuilds the
+            # real module (it never accepts a stub).
+            _built = self.__dict__.get("_built_leaf_code") or {}
+            _lost = []
+            for _nid, _rel in _built.items():
+                _fp = Path(self.workspace.root) / _rel
+                try:
+                    _body = _fp.read_text(encoding="utf-8") if _fp.is_file() else ""
+                except Exception:  # noqa: BLE001 — unreadable == lost
+                    _body = ""
+                _code_lines = [ln for ln in _body.splitlines()
+                               if ln.strip() and not ln.strip().lstrip().startswith("#")]
+                if len(_code_lines) < 3:
+                    _lost.append((_nid, _rel))
+            if _lost:
+                _names = ", ".join(f"{n}->{r}" for n, r in _lost)
+                self.emit("integrate", "engine", "spec-integrate",
+                          "L0:integrate",
+                          "delivered leaf code missing from assembled tree",
+                          f"feature modules built by a leaf are absent/empty on "
+                          f"the final tree (orphaned before integrate): {_names}",
+                          "integrate_verify", "FAIL", level=L_MILESTONE)
+                _rid2 = str((project.get("tree") or {}).get("id", "L0"))
+                self.loops.append({
+                    "type": "integrate-fail", "task": _rid2,
+                    "detail": f"leaf code missing on final tree: {_names}"})
+                # Feed the doctor so it can re-open integrate and rebuild the
+                # lost modules through the real implementer (never a stub).
+                self._doctor_advise(
+                    {"id": "L0:integrate"}, "L0:integrate", 0,
+                    "integrate_verify", "FAIL",
+                    {"reasons": f"delivered leaf code missing: {_names}"})
+
         # Sweep: fire any declared revision that did not meet its in-run
         # trigger condition (back-compat + nothing declared is silently dropped).
         self._revision_sweep()
@@ -4496,6 +4538,18 @@ class Engine:
                 # failure). Inert for ordinary nodes.
                 self._late_req_delta_gate(node, nid, depth, code_rel)
                 self._judge_leaf(nid, title, fn, code_rel, test_rel)
+                # Single-authority invariant (root cause of the v078 NOT READY):
+                # record the real code file THIS leaf delivered so the root
+                # integrate can verify it survived into the assembled tree. The
+                # leaf's code is committed by one git authority (ws_tx) while the
+                # engine commits a `feat:` by another; when the two histories
+                # diverge the leaf module is orphaned and vanishes from the tree
+                # the boot-gate reads — the product then boots an empty/stub
+                # shell and 404s every route. Recording the CLAIM here lets
+                # integrate cross-check the FINAL tree and fail loudly (never
+                # green-wash a product whose feature modules were dropped).
+                if code_rel:
+                    self.__dict__.setdefault("_built_leaf_code", {})[nid] = code_rel
         elif self.depth >= DEPTH_SCAFFOLD:
             code_rel = self.workspace.code(nid, title)
             test_rel = self.workspace.test(nid, title)
