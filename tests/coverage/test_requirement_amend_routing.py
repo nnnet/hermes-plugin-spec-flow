@@ -158,3 +158,59 @@ def test_flag_off_keeps_separate_modules(tmp_path, monkeypatch):
     assert not [e for e in res.events
                 if e.gate == "requirement" and e.verdict == "AMEND"]
     assert seen.get("nice_ui") == "nice_ui"     # own module, not routed
+
+
+# ── route-to-entry rule ────────────────────────────────────────────────────
+# A late requirement that adds a NEW HTTP route shares no surface with any
+# existing module, so plain surface-overlap forks a second web module — the
+# web_ui / ping_text miss where the handler was correctly folded into the single
+# WSGI app (src/app.py) but the forked file stayed EMPTY and the delta gate then
+# checked that empty fork. When the project declares a WSGI entry, a route-bearing
+# requirement must route INTO that entry so code_target (hence the gate, the
+# implementer module, and tests/test_<entry>.py) all act on the entry file.
+import spec_flow_runner as _sfr            # noqa: E402
+
+
+class _EntryStub:
+    """Only the collaborators _amend_target touches: a declared web entry and
+    (for the no-route path) an empty surface-module set."""
+    def _product_contract(self):
+        return {"entry": "src/app.py", "callable": "wsgi_app"}
+
+    def _surface_modules(self, own):
+        return []
+
+
+def test_late_route_requirement_routes_into_declared_entry(monkeypatch):
+    monkeypatch.setenv("SPEC_FLOW_REQ_AMEND", "1")
+    node = {"id": "ping_text",
+            "requirement": "Serve GET /ping returning the plain text pong"}
+    assert _sfr.Engine._amend_target(_EntryStub(), node) == "src/app.py"
+
+
+def test_late_web_ui_route_routes_into_declared_entry(monkeypatch):
+    monkeypatch.setenv("SPEC_FLOW_REQ_AMEND", "1")
+    node = {"id": "web_ui",
+            "requirement": "Serve a server-rendered HTML page at GET /ui"}
+    assert _sfr.Engine._amend_target(_EntryStub(), node) == "src/app.py"
+
+
+def test_non_route_requirement_does_not_force_entry(monkeypatch):
+    # no HTTP route in the text ⇒ route-rule is silent; with no overlapping
+    # module it falls through to None (keeps its own module, as before).
+    monkeypatch.setenv("SPEC_FLOW_REQ_AMEND", "1")
+    node = {"id": "nicer", "requirement": "make the notes nicer to read"}
+    assert _sfr.Engine._amend_target(_EntryStub(), node) is None
+
+
+def test_route_rule_silent_without_declared_entry(monkeypatch):
+    # a project that declares no HTTP service yields no entry ⇒ a route-bearing
+    # refinement is NOT forced to a non-existent entry (library / CLI projects).
+    monkeypatch.setenv("SPEC_FLOW_REQ_AMEND", "1")
+
+    class _NoEntry(_EntryStub):
+        def _product_contract(self):
+            return {}
+
+    node = {"id": "thing", "requirement": "Serve GET /ui as HTML"}
+    assert _sfr.Engine._amend_target(_NoEntry(), node) is None
