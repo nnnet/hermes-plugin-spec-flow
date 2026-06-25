@@ -1,0 +1,24 @@
+tests/coverage/test_product_check_boot_oracle.py
+  s_a7f45290e91181::t_016ae39fc31e29 64-122
+tests/coverage/test_assembly_node.py
+  s_a7f45290e91181::t_acbb3c42b4ac0c 277-281
+spec_flow_runner.py
+  s_a7f45290e91181::t_721f4bca8d4f09 1532-1536
+  s_a7f45290e91181::t_d87bf15eaca469 1574-1590
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.13",
+  "base_commit_sha": "a8346c50748dc3ede2fbb958cb757914c0d6fbe5",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
