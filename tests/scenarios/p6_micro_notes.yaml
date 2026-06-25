@@ -249,10 +249,16 @@ workers:
   # passes the paid-model guard exactly like haiku did). mimo runs via Bifrost
   # (xiaomimimo provider, quota-bearing/free-class). Sonnet leads HARD generative
   # work; mimo leads CHECK gates (pro = the strongest, used by the final verify).
+  # B (2026-06-25): sonnet LEADS generation at EVERY complexity tier — a
+  # mimo-led leaf split the WSGI app across two entries (v084 RED). Sonnet is
+  # the strongest builder available and carries no quota/429, so it leads
+  # weak/medium/strong generation; mimo stays as fallback AND still leads the
+  # review/verify CHECK stages (stage overrides below), keeping Xiaomi traffic
+  # visible in Bifrost.
   tiers:
     weak:   {models: [claude/sonnet, xiaomimimo/mimo-v2.5], temperature: 0.2}
-    medium: {models: [xiaomimimo/mimo-v2.5, claude/sonnet], temperature: 0.1}
-    strong: {models: [xiaomimimo/mimo-v2.5-pro, claude/sonnet], temperature: 0.0}
+    medium: {models: [claude/sonnet, xiaomimimo/mimo-v2.5], temperature: 0.1}
+    strong: {models: [claude/sonnet, xiaomimimo/mimo-v2.5-pro], temperature: 0.0}
   complexity_to_tier: {leaf_small: weak, leaf_big: medium, branch: strong}
   providers:
     # Xiaomi MiMo — its OWN Bifrost provider "xiaomimimo" (custom OpenAI-compatible,
