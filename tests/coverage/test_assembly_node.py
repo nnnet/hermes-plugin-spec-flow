@@ -274,7 +274,11 @@ def wsgi_app(environ, start_response):
     if p == "/ui": return reply(200, b"<html>notes</html>", "text/html")
     if p == "/notes" and m == "POST":
         n = environ["wsgi.input"].read(int(environ.get("CONTENT_LENGTH") or 0))
-        _N.append({"id": len(_N)+1, "text": json.loads(n)["text"]}); return reply(201, _N[-1])
+        try:
+            text = json.loads(n)["text"]
+        except Exception:
+            return reply(400, {"error": "bad json"})
+        _N.append({"id": len(_N)+1, "text": text}); return reply(201, _N[-1])
     if p == "/notes": return reply(200, {"items": list(reversed(_N))})
     return reply(404, {"error": "no route"})
 '''

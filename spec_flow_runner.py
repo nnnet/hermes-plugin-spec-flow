@@ -1529,8 +1529,11 @@ if wsgi is None:
     fail("no module under src/ exposes a callable %s" % "/".join(callables)
          + ((" (last import error: " + last_err + ")") if last_err else ""))
 
-def call(method, path, payload=None, query=""):
-    body = json.dumps(payload).encode() if payload is not None else b""
+def call(method, path, payload=None, query="", raw_body=None):
+    if raw_body is not None:
+        body = raw_body
+    else:
+        body = json.dumps(payload).encode() if payload is not None else b""
     environ = {"REQUEST_METHOD": method, "PATH_INFO": path,
                "QUERY_STRING": query, "CONTENT_LENGTH": str(len(body)),
                "wsgi.input": io.BytesIO(body), "wsgi.errors": sys.stderr,
@@ -1568,6 +1571,23 @@ if json_roundtrip:
         fail("GET %s body not JSON: %r" % (json_roundtrip, exc))
     if "rootboot" not in texts:
         fail("POST then GET %s did not round-trip" % json_roundtrip)
+    # Robustness (binding): a MALFORMED request body must be REJECTED with a
+    # 4xx, never crash the app with a 5xx. A handler that pipes the body
+    # straight into json.loads without a guard 500s on bad input — that is not
+    # a real product (v085 shipped exactly this: POST /notes 'not-json{' raised
+    # JSONDecodeError -> 500). Catch BOTH a raised exception (the app let the
+    # parse escape) and a >=500 status.
+    try:
+        st, _ = call("POST", json_roundtrip, raw_body=b"not-json{")
+    except Exception as exc:  # noqa: BLE001 — the app crashed on bad input
+        fail("POST %s with a malformed body crashed the app: %r — it must "
+             "return a 4xx, not let the parse raise" % (json_roundtrip, exc))
+    if st >= 500 or st == 0:
+        fail("POST %s with a malformed body -> %s — must be a 4xx rejection, "
+             "never a 5xx crash" % (json_roundtrip, st))
+    if not (400 <= st < 500):
+        fail("POST %s with a malformed body -> %s — expected a 4xx rejection"
+             % (json_roundtrip, st))
 # Every OTHER declared route must be wired too (e.g. a late GET /about absorbed
 # into an existing module). 404 here = the route was promised but never routed in
 # the assembled entry — exactly the false-green the curated triple let slip.
