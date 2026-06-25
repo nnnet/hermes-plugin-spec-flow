@@ -382,3 +382,53 @@ def test_contract_exposes_all_declared_routes_for_boot_probe():
     assert "/about" in paths, f"late /about not in probe route list: {c.get('routes')}"
     # templated paths are skipped (can't be probed literally)
     assert not any("{" in p for _m, p in c.get("routes", []))
+
+
+# ── rival WSGI entry detector (A: consolidate a split product) ──────────────
+import spec_flow_runner as _sfr        # noqa: E402
+
+
+class _WSRootStub:
+    def __init__(self, root):
+        self.workspace = type("W", (), {"root": str(root)})()
+
+
+def test_rival_wsgi_entry_detected(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text(
+        "def application(environ, start_response):\n    return []\n",
+        encoding="utf-8")
+    (src / "wsgi_app.py").write_text(
+        "def wsgi_app(environ, start_response):\n    return []\n",
+        encoding="utf-8")
+    (src / "db.py").write_text("def save(x):\n    return 1\n", encoding="utf-8")
+    rivals = _sfr.Engine._rival_wsgi_entries(_WSRootStub(tmp_path), "src/app.py")
+    names = {f for f, _ in rivals}
+    assert "wsgi_app.py" in names          # a second WSGI entry → rival
+    assert "db.py" not in names            # plain storage module → not a rival
+    assert "app.py" not in names           # the declared entry is excluded
+
+
+def test_function_signature_wsgi_entry_detected(tmp_path):
+    # a rival need not be NAMED wsgi_app/application/app — a (environ,
+    # start_response) function is a WSGI app too
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("def app(e, s):\n    return []\n",
+                                encoding="utf-8")
+    (src / "server.py").write_text(
+        "def serve(environ, start_response):\n    return []\n", encoding="utf-8")
+    rivals = _sfr.Engine._rival_wsgi_entries(_WSRootStub(tmp_path), "src/app.py")
+    assert "server.py" in {f for f, _ in rivals}
+
+
+def test_no_rival_when_single_entry(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text(
+        "def wsgi_app(environ, start_response):\n    return []\n",
+        encoding="utf-8")
+    (src / "db.py").write_text("def save(x):\n    return 1\n", encoding="utf-8")
+    assert _sfr.Engine._rival_wsgi_entries(_WSRootStub(tmp_path),
+                                           "src/app.py") == []

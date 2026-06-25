@@ -2566,8 +2566,13 @@ class Engine:
         if not c:
             return None
         entry = c["entry"]
-        if not force and (Path(self.workspace.root) / entry).is_file():
+        _rivals = self._rival_wsgi_entries(entry)
+        if (not force and (Path(self.workspace.root) / entry).is_file()
+                and not _rivals):
             return None             # a feature leaf already built the entry
+        # else: entry absent OR the product is split across a rival WSGI entry
+        # (e.g. routes in src/wsgi_app.py while the declared src/app.py serves
+        # nothing) — the assembly must run to consolidate into the declared entry.
         callable_name = c["callable"][0]
         ok_route = str(c["boot"].get("ok_route") or "")
         api = self._existing_src_api()
@@ -2616,7 +2621,21 @@ class Engine:
             # /ping or /ui surface) — they are NOT in the constitution but are
             # real endpoints the assembled entry must route, else the boot-gate
             # 404s them (the v054 RED: app.py existed but never routed /ping).
-            + _standing_lines)
+            + _standing_lines
+            # CONSOLIDATE a split product: if the coder put a second WSGI app in
+            # another module, fold its routes into the SINGLE declared entry so
+            # the boot-gate (which loads the declared entry) serves the whole
+            # contract (live v084 RED: routes in wsgi_app.py, app.py served 404).
+            + ((f"\n\n### Consolidate the split product (binding)\n"
+                f"The product is currently SPLIT across more than one WSGI "
+                f"entry: "
+                + ", ".join(f"`src/{f}` (exposes `{s}`)" for f, s in _rivals)
+                + f". `{entry}` is the SINGLE declared entry. FOLD every route "
+                f"from those module(s) into `{entry}` so `{entry}` exposes "
+                f"`{callable_name}` and dispatches the WHOLE contract itself — "
+                f"import their handlers, do not leave a second module exposing "
+                f"a WSGI app callable as the product's entry.") if _rivals
+               else ""))
         return {"id": "product_entry",
                 "title": "Assemble product entry (" + entry + ")",
                 "spec_markdown": spec_md, "atomic": True,
@@ -2666,6 +2685,49 @@ class Engine:
             return ""
         return ("### Modules already built under `src/` "
                 "(import these, do NOT reimplement)\n" + "\n".join(lines))
+
+    def _rival_wsgi_entries(self, entry: str) -> list:
+        """Non-entry modules under src/ that expose a module-level WSGI app
+        callable (`wsgi_app`/`application`/`app`, or a function whose first two
+        params are `(environ, start_response)`). A weak coder sometimes SPLITS
+        the product into the declared entry PLUS a second WSGI module — the
+        boot-gate loads the declared entry (entry-first), which lacks the
+        routes, and 404s the contract (live v084: routes lived in wsgi_app.py
+        while the declared app.py served nothing). Detecting a rival entry
+        (pure AST, no import) lets the assembly FOLD it into the declared entry
+        so a SINGLE entry serves the whole contract. Returns [(filename, sym)].
+        """
+        root = Path(self.workspace.root) / "src"
+        if not root.is_dir():
+            return []
+        entry_name = Path(entry).name
+        names = {"wsgi_app", "application", "app"}
+        rivals: list = []
+        for py in sorted(root.glob("*.py")):
+            if py.name in (entry_name, "__init__.py"):
+                continue
+            try:
+                tree = ast.parse(py.read_text(encoding="utf-8",
+                                              errors="replace"))
+            except (OSError, SyntaxError):
+                continue
+            hit = None
+            for n in tree.body:
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    params = [a.arg for a in n.args.args]
+                    if n.name in names or params[:2] == [
+                            "environ", "start_response"]:
+                        hit = n.name
+                        break
+                elif isinstance(n, ast.Assign):
+                    if any(isinstance(t, ast.Name) and t.id in names
+                           for t in n.targets):
+                        hit = next(t.id for t in n.targets
+                                   if isinstance(t, ast.Name) and t.id in names)
+                        break
+            if hit:
+                rivals.append((py.name, hit))
+        return rivals
 
     def _node_driver(self, node: dict, kind: str) -> _NodeDriver:
         """Build the lifecycle guard for one node under the active engine."""
