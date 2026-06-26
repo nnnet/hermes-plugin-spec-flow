@@ -90,6 +90,48 @@ _DDL_RE = re.compile(r"CREATE\s+TABLE", re.IGNORECASE)
 _SQL_OP_RE = re.compile(r"\b(INSERT|UPDATE|DELETE|SELECT)\b", re.IGNORECASE)
 
 
+def json_parse_unguarded(content: str) -> Optional[str]:
+    """Detect a WSGI handler that parses the request body with ``json.loads`` /
+    ``json.load`` OUTSIDE any try/except. A malformed body then raises
+    ``JSONDecodeError`` and the app answers 500 instead of a 4xx — the M1 class
+    (live v086). Returns a reason string, or None if clean / not applicable.
+
+    Deterministic, model-independent: only fires for a module that reads
+    ``wsgi.input`` (a body-reading entry) and only for an UNGUARDED json parse;
+    a parse inside a surrounding try is fine. Used to bias the creator ensemble
+    toward a robust candidate (defense in depth — the engine's entry synthesis
+    and the AST hardening net are the hard backstops)."""
+    if "wsgi.input" not in content:
+        return None                    # not a body-reading WSGI handler
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return None
+
+    class _V(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.try_depth = 0
+            self.bad: Optional[str] = None
+
+        def visit_Try(self, node: ast.Try) -> None:
+            self.try_depth += 1
+            self.generic_visit(node)
+            self.try_depth -= 1
+
+        def visit_Call(self, node: ast.Call) -> None:
+            f = node.func
+            if (isinstance(f, ast.Attribute) and f.attr in ("loads", "load")
+                    and isinstance(f.value, ast.Name) and f.value.id == "json"
+                    and self.try_depth == 0 and self.bad is None):
+                self.bad = ("json.%s on the request body is not wrapped in "
+                            "try/except -> 500 on a malformed body" % f.attr)
+            self.generic_visit(node)
+
+    v = _V()
+    v.visit(tree)
+    return v.bad
+
+
 def schema_init_uninvoked(content: str) -> Optional[str]:
     """Detect a stateful module that defines a DEDICATED schema initializer
     (a function whose body runs ``CREATE TABLE`` and nothing else) yet never

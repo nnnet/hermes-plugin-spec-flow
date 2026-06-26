@@ -725,6 +725,16 @@ def _candidate_compiles(raw: str) -> "tuple[bool, int, str]":
             why = None
         if why:
             return (False, len(files), f"{path}: {why}")
+        # semantic gate (Phase 4 selector bias): a WSGI entry that parses the body
+        # without try/except ships the malformed-body 500 (M1). Prefer a candidate
+        # that guards it; the engine's synthesis/hardening remain the backstops.
+        try:
+            from spec_flow_tools import json_parse_unguarded as _jpu
+            why = _jpu(content)
+        except Exception:  # noqa: BLE001 — never let the gate crash generation
+            why = None
+        if why:
+            return (False, len(files), f"{path}: {why}")
     return (True, len(files), "")
 
 

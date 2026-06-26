@@ -294,6 +294,34 @@ def test_harden_entry_wraps_unguarded_json_loads(tmp_path):
     assert (src / "app.py").read_text().count("_spec_flow_hardened") == 1
 
 
+def test_json_parse_unguarded_detector():
+    """Phase 4 selector bias: flag an entry that parses the body without a guard,
+    pass one that wraps it (or that does not read the body at all)."""
+    import spec_flow_tools as sft
+    unguarded = (
+        "import json\n"
+        "def wsgi_app(environ, start_response):\n"
+        "    body = environ['wsgi.input'].read()\n"
+        "    data = json.loads(body)\n"
+        "    return []\n"
+    )
+    assert sft.json_parse_unguarded(unguarded) is not None
+    guarded = (
+        "import json\n"
+        "def wsgi_app(environ, start_response):\n"
+        "    body = environ['wsgi.input'].read()\n"
+        "    try:\n"
+        "        data = json.loads(body)\n"
+        "    except Exception:\n"
+        "        data = {}\n"
+        "    return []\n"
+    )
+    assert sft.json_parse_unguarded(guarded) is None
+    # a non-body module (a pure handler leaf) is never flagged
+    leaf = "def get_notes(payload, query):\n    return (200, {'items': []})\n"
+    assert sft.json_parse_unguarded(leaf) is None
+
+
 def test_neutralize_rival_entries_strips_duplicate_app(tmp_path):
     """Phase 3 split-elimination: a second module exposing a WSGI callable beside
     the declared entry (live v089 notes_api.py) is stripped of that callable while
