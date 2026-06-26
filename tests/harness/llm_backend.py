@@ -258,6 +258,38 @@ def _claude_cli_gate() -> "threading.Semaphore | None":
     return _claude_cli_slots
 
 
+# Per-provider gate for claude reached over the LIVE path — Bifrost anthropic
+# provider -> Meridian -> subscription. It is subscription-rate-limited exactly
+# like the CLI, so concurrent claude calls throttle each other server-side: a
+# single call is fast (~28s) but THREE in flight (the run's fan-out) each balloon
+# past the per-call timeout (live v097: 0/9 claude_ok, all 75s timeouts -> the
+# whole run fell onto a weak model -> weak_implementer). The old _claude_cli_gate
+# only covered the `claude -p` subprocess, which the live config no longer uses
+# (claude now MUST ride Bifrost), so claude-over-HTTP was ungated. This gate
+# serialises claude at the ask() layer regardless of backend, so each call gets
+# full bandwidth and returns before the timeout. Default 1 = strictly sequential;
+# tune via workers.claude_concurrency (0 = unbounded). PER-PROVIDER, not global —
+# mimo and the leaf pool stay parallel.
+_claude_slots: "threading.Semaphore | None" = None
+_claude_slots_for = -1
+
+
+def _is_claude_model(model: str) -> bool:
+    return "claude" in (model or "").lower()
+
+
+def _claude_gate() -> "threading.Semaphore | None":
+    global _claude_slots, _claude_slots_for
+    want = int(WORKERS_CFG.get("claude_concurrency",
+                               WORKERS_CFG.get("claude_cli_concurrency", 1)))
+    if want <= 0:
+        return None
+    if _claude_slots is None or _claude_slots_for != want:
+        _claude_slots = threading.BoundedSemaphore(want)
+        _claude_slots_for = want
+    return _claude_slots
+
+
 def _budget() -> int:
     if WORKERS_CFG.get("budget") is not None:
         return int(WORKERS_CFG["budget"])
@@ -814,9 +846,14 @@ def ask(prompt: str, *, model: str, role: str, step: str,
         _brk = int((cfg or {}).get("model_breaker_5xx", 2))
         for i, m in enumerate(live):
             _spend_call()
+            # claude rides a subscription-rate-limited path (Bifrost -> Meridian
+            # -> Max): serialise it with its own gate so parallel calls do not
+            # throttle each other into timeouts (v097). mimo and the leaf pool
+            # keep the global concurrency gate and stay parallel.
+            eff_gate = _claude_gate() if _is_claude_model(m) else gate
             try:
-                if gate is not None:
-                    with gate:
+                if eff_gate is not None:
+                    with eff_gate:
                         _raw = _ask_one(prompt, m, system, fallback=i > 0,
                                         **extra)
                 else:

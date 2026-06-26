@@ -236,6 +236,12 @@ workers:
   max_decompose_calls: 40
   creator_ensemble: 2
   max_concurrent_llm_requests: 3   # cap of simultaneous in-flight LLM calls
+  # claude rides a subscription-rate-limited path (Bifrost -> Meridian -> Max):
+  # a single codegen call is ~28s but THREE in flight throttle each other past
+  # the 75s timeout (v097: 0/9 claude_ok -> weak fallback -> weak_implementer).
+  # Serialise claude so each call gets full bandwidth and lands well under 75s;
+  # mimo and the leaf pool stay parallel under max_concurrent_llm_requests.
+  claude_concurrency: 1
   # cycle_models: false  → STRICT primary-first: each chain's first model
   # (xiaomimimo/mimo-v2.5) is tried on every call, fallbacks only on failure. We
   # want mimo to carry the run so Xiaomi traffic is consistently visible IN

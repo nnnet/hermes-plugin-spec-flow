@@ -137,6 +137,25 @@ def test_proven_model_timeout_waits_threshold_dead_one_retired():
     lb._MODEL_OK.clear()
 
 
+def test_claude_gate_serialises_only_claude():
+    """v097 fix: claude rides a subscription-rate-limited path, so parallel
+    claude calls throttle each other into timeouts. A dedicated claude gate
+    serialises them (default concurrency 1) while mimo/leaf-pool keep the global
+    gate. The gate is claude-specific and distinct from the global one."""
+    lb.configure_workers({"claude_concurrency": 1,
+                          "max_concurrent_llm_requests": 3})
+    assert lb._is_claude_model("claude/sonnet") is True
+    assert lb._is_claude_model("anthropic/claude-sonnet-4-6") is True
+    assert lb._is_claude_model("xiaomimimo/mimo-v2.5") is False
+    cg = lb._claude_gate()
+    assert cg is not None and cg._value == 1          # serialised
+    assert cg is not lb._concurrency_gate()           # not the global gate
+    # 0 disables the gate (unbounded), restoring old behaviour
+    lb.configure_workers({"claude_concurrency": 0})
+    assert lb._claude_gate() is None
+    lb.configure_workers(None)
+
+
 def test_http_post_wraps_socket_timeout_as_runtimeerror():
     """Run-killer regression (live v093/v095 died here): a socket TimeoutError /
     an unreachable endpoint raised by urllib is an OSError subclass — ask() only
