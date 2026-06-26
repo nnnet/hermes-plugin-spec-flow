@@ -124,6 +124,7 @@ def configure_workers(cfg: dict | None) -> None:
     _calls_made = 0          # a fresh case starts with a fresh budget
     _MODEL_5XX.clear()       # fresh per-model health for the new run
     _MODEL_DOWN.clear()
+    _MODEL_OK.clear()        # fresh per-model success ledger for the new run
     # A case workers block overrides the transport floor (.test.env) ONLY for
     # keys it explicitly carries — an absent key leaves the current value
     # untouched (preserving the import-time floor and any test monkeypatch).
@@ -169,6 +170,22 @@ _counters_lock = threading.Lock()
 # Reset per run in configure(). Threshold: workers.model_breaker_5xx (default 2).
 _MODEL_5XX: "dict[str, int]" = {}
 _MODEL_DOWN: "set[str]" = set()
+# models that produced at least one real answer THIS run. A model with a track
+# record is the workhorse — a single transient timeout under load must not
+# retire it for the rest of the run (live v096: claude/sonnet timed out once at
+# 75s and was retired @1, forcing every later call onto a weak model -> 40 min +
+# weak_implementer). retire@1-on-timeout therefore applies ONLY to a model that
+# never worked this run (dead from the start, like a 401'ing provider).
+_MODEL_OK: "set[str]" = set()
+
+
+def _retire_after_one(reason: str, model: str) -> bool:
+    """A failure that will not heal this run -> retire the model after a SINGLE
+    occurrence. AUTH (401/403, a stale key) never heals. A TIMEOUT is fatal @1
+    only for a model that has not produced one answer this run (a provider dead
+    from the start); a PROVEN model's timeout is a transient blip under load and
+    waits the configured threshold instead (live v096 regression guard)."""
+    return reason == "auth" or (reason == "timeout" and model not in _MODEL_OK)
 
 
 def _next_cycle() -> int:
@@ -800,9 +817,12 @@ def ask(prompt: str, *, model: str, role: str, step: str,
             try:
                 if gate is not None:
                     with gate:
-                        return _ret(_ask_one(prompt, m, system, fallback=i > 0,
-                                             **extra), m)
-                return _ret(_ask_one(prompt, m, system, fallback=i > 0, **extra), m)
+                        _raw = _ask_one(prompt, m, system, fallback=i > 0,
+                                        **extra)
+                else:
+                    _raw = _ask_one(prompt, m, system, fallback=i > 0, **extra)
+                _MODEL_OK.add(m)        # produced a real answer -> a workhorse
+                return _ret(_raw, m)
             except (QuotaExhausted, RuntimeError,
                     subprocess.SubprocessError) as exc:
                 # the chain exists to absorb PROVIDER failure of any
@@ -816,16 +836,19 @@ def ask(prompt: str, *, model: str, role: str, step: str,
                 _reason = _failure_reason(exc)
                 if _reason in ("5xx", "timeout", "auth"):
                     _MODEL_5XX[m] = _MODEL_5XX.get(m, 0) + 1
-                    # a client TIMEOUT means we already paid a full per-call wait
-                    # for nothing and a hung gateway almost never heals mid-run —
-                    # retire the model after ONE so the rest of the run skips it.
                     # An AUTH failure (401/403) is a stale/missing gateway key: it
-                    # NEVER heals mid-run, so retire after ONE too (live v094:
+                    # NEVER heals mid-run, so retire after ONE (live v094:
                     # xiaomimimo 401'd 16x, each an instant but wasted fallback).
-                    # A discrete 5xx may be a transient blip, so it waits the
-                    # configured threshold. (live v091: mimo 504s cost ~120s each;
-                    # capping the timeout turns them into timeouts dropped at 1.)
-                    _retire_at = 1 if _reason in ("timeout", "auth") else _brk
+                    # A TIMEOUT is retired @1 ONLY for a model that has NEVER
+                    # answered this run — a provider dead from the start (e.g. a
+                    # gateway that hangs every call). A model WITH a track record
+                    # (_MODEL_OK) is the workhorse: a single transient timeout
+                    # under load must not retire it for the rest of the run (live
+                    # v096: claude/sonnet timed out once at 75s and was retired,
+                    # forcing every later call onto a weak model -> 40 min +
+                    # weak_implementer). A proven model's timeout, like a discrete
+                    # 5xx, waits the configured threshold instead.
+                    _retire_at = 1 if _retire_after_one(_reason, m) else _brk
                     if _MODEL_5XX[m] >= _retire_at and m not in _MODEL_DOWN:
                         _MODEL_DOWN.add(m)
                         _log_event({"event": "model_circuit_open", "model": m,

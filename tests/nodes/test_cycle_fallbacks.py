@@ -120,6 +120,23 @@ def test_auth_failure_classified_and_retired_after_one():
         == "http 404"
 
 
+def test_proven_model_timeout_waits_threshold_dead_one_retired():
+    """v096 regression: retire@1-on-timeout must spare the WORKHORSE. A model
+    that has answered this run (_MODEL_OK) is retired only at the configured
+    threshold on a transient timeout — retiring claude/sonnet after one 75s blip
+    forced every later call onto a weak model (40 min + weak_implementer). A
+    model that never answered (dead from the start) is still retired @1, and an
+    AUTH failure is always fatal."""
+    lb._MODEL_OK.clear()
+    assert lb._retire_after_one("timeout", "dead:model") is True
+    assert lb._retire_after_one("auth", "dead:model") is True
+    lb._MODEL_OK.add("good:model")
+    assert lb._retire_after_one("timeout", "good:model") is False
+    assert lb._retire_after_one("auth", "good:model") is True   # auth never heals
+    assert lb._retire_after_one("5xx", "good:model") is False   # waits threshold
+    lb._MODEL_OK.clear()
+
+
 def test_http_post_wraps_socket_timeout_as_runtimeerror():
     """Run-killer regression (live v093/v095 died here): a socket TimeoutError /
     an unreachable endpoint raised by urllib is an OSError subclass — ask() only
