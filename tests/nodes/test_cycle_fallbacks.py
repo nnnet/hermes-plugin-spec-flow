@@ -120,5 +120,23 @@ def test_auth_failure_classified_and_retired_after_one():
         == "http 404"
 
 
+def test_http_post_wraps_socket_timeout_as_runtimeerror():
+    """Run-killer regression (live v093/v095 died here): a socket TimeoutError /
+    an unreachable endpoint raised by urllib is an OSError subclass — ask() only
+    catches RuntimeError/QuotaExhausted/SubprocessError, so a raw TimeoutError
+    on the very first call crashed the ENTIRE run instead of falling back.
+    _http_post must re-raise the provider taxonomy as RuntimeError so the chain
+    absorbs it (and _failure_reason maps it to 'timeout' -> retire + fallback)."""
+    saved = lb.TIMEOUT
+    lb.TIMEOUT = 0.2
+    try:
+        with pytest.raises(RuntimeError):
+            # 203.0.113.0/24 is TEST-NET-3 (RFC 5737) — guaranteed unroutable,
+            # so the connect times out / is refused without hitting a real host.
+            lb._http_post("http://203.0.113.1:81/x", {"a": 1}, {})
+    finally:
+        lb.TIMEOUT = saved
+
+
 def test_reset_after_module():
     _reset()

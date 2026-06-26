@@ -1019,6 +1019,21 @@ def _http_post(url: str, payload: dict, headers: dict) -> tuple[int, str]:
             return resp.status, resp.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:                       # non-2xx
         return e.code, e.read().decode("utf-8", "replace")
+    except (TimeoutError, urllib.error.URLError, OSError) as e:
+        # A socket read/connect timeout (the gateway hung past TIMEOUT) or an
+        # unreachable endpoint is a PROVIDER failure the chain must absorb — NOT
+        # a crash. urllib raises a raw TimeoutError/URLError here (both OSError
+        # subclasses), which ask()'s except clause did NOT catch, so a SINGLE
+        # hung Bifrost/claude call killed the whole run (live v093/v095 died on
+        # an UNCAUGHT TimeoutError on the very first decompose call). Re-raise as
+        # the RuntimeError taxonomy ask() understands: a timeout -> reason
+        # 'timeout' (retire after one + fall back), an unreachable endpoint ->
+        # a legible error the next model in the chain absorbs.
+        reason = getattr(e, "reason", e)
+        if isinstance(e, TimeoutError) or "timed out" in str(reason).lower():
+            raise RuntimeError(
+                f"openai backend timed out after {TIMEOUT}s") from e
+        raise RuntimeError(f"openai backend unreachable: {reason}") from e
 
 
 # OpenAI chat-completions sampling/generation fields we forward from a
