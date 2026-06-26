@@ -106,6 +106,7 @@ def configure_workers(cfg: dict | None) -> None:
     global FALLBACK_MODEL, FALLBACK_COOLDOWN
     WORKERS_CFG.clear()
     WORKERS_CFG.update(cfg or {})
+    _PROVIDER_SLOTS.clear()    # rebuild per-provider gates under the new config
     # Spec-pipeline STAGES: a case may group the four stage chains under
     # ``workers.stages`` with verb names (decompose/implement/review/verify) —
     # the clean, standard-aligned shape. We flatten them onto the internal
@@ -212,82 +213,42 @@ def _cycled(chain: list, cfg: dict) -> list:
 # harness's common dependency (no import cycles).
 PYTEST_LOCK = threading.Lock()
 
-# at most workers.max_concurrent_llm_requests LLM calls in flight — the free
-# pool's per-minute ceiling turns unbounded parallel calls into a 429 storm
-_llm_slots: "threading.Semaphore | None" = None
-_llm_slots_for = 0
+# ONE universal concurrency gate, keyed by PROVIDER (the model id's first
+# segment). A provider's limit is declared in its config and handles both reasons
+# a call must queue:
+#   * a FREE pool (openrouter/xiaomimimo) has a per-minute ceiling — unbounded
+#     parallel calls become a 429 storm;
+#   * a SUBSCRIPTION provider (claude over Bifrost -> Meridian -> Max) is
+#     rate-limited, so concurrent calls throttle each other into timeouts (live
+#     v097: 3 parallel claude calls each ballooned past the 75s cap, 0/9 ok).
+# Every call — whatever the backend (HTTP or the legacy CLI) — queues on the same
+# per-provider semaphore: no traffic-path split, no per-model special-case, no
+# duplicate gate. Concurrency comes from workers.provider_concurrency[<provider>]
+# (the harness mirror of a Bifrost provider's `concurrency`), falling back to the
+# shared max_concurrent_llm_requests default. Set a provider to 1 to serialise it
+# (claude), 0 to leave it unbounded.
+_PROVIDER_SLOTS: "dict[str, tuple]" = {}
 
 
-def _concurrency_gate() -> "threading.Semaphore | None":
-    global _llm_slots, _llm_slots_for
-    # canonical key is the self-describing max_concurrent_llm_requests; the old
-    # `concurrency` is still read so resuming a pre-rename run does not break.
-    want = int(WORKERS_CFG.get("max_concurrent_llm_requests")
-               or WORKERS_CFG.get("concurrency")
-               or config.env("LLM_CONCURRENCY", int))
+def _provider_of(model: str) -> str:
+    return (model or "").split("/", 1)[0].strip().lower() or "?"
+
+
+def _provider_gate(model: str) -> "threading.Semaphore | None":
+    prov = _provider_of(model)
+    pc = WORKERS_CFG.get("provider_concurrency") or {}
+    # the old `concurrency` key is still read so resuming a pre-rename run works.
+    default = int(WORKERS_CFG.get("max_concurrent_llm_requests")
+                  or WORKERS_CFG.get("concurrency")
+                  or config.env("LLM_CONCURRENCY", int))
+    want = int(pc.get(prov, pc.get("default", default)))
     if want <= 0:
         return None
-    if _llm_slots is None or _llm_slots_for != want:
-        _llm_slots = threading.BoundedSemaphore(want)
-        _llm_slots_for = want
-    return _llm_slots
-
-
-# Per-provider gate for the claude SUBSCRIPTION CLI. The `claude -p` subprocess
-# does NOT tolerate the run's parallelism: concurrent CLIs throttle each other
-# (subscription rate + per-call model/MCP load), so under fan-out every sonnet
-# call timed out — v075 logged 0/18 claude_ok, all timeouts. Unlike mimo (HTTP via
-# Bifrost, concurrency-safe), the CLI must be SERIALISED. This gate is the harness
-# equivalent of a Bifrost provider `concurrency: 1` — except sonnet bypasses
-# Bifrost (direct CLI), so the queue lives here. Default 1 = strictly sequential:
-# each claude call starts only after the previous returns. It is PER-PROVIDER, NOT
-# a global parallelism switch — mimo and the engine's leaf pool stay parallel.
-# Tune via workers.claude_cli_concurrency (0 = unbounded, restores old behaviour).
-_claude_cli_slots: "threading.Semaphore | None" = None
-_claude_cli_slots_for = -1
-
-
-def _claude_cli_gate() -> "threading.Semaphore | None":
-    global _claude_cli_slots, _claude_cli_slots_for
-    want = int(WORKERS_CFG.get("claude_cli_concurrency", 1))
-    if want <= 0:
-        return None
-    if _claude_cli_slots is None or _claude_cli_slots_for != want:
-        _claude_cli_slots = threading.BoundedSemaphore(want)
-        _claude_cli_slots_for = want
-    return _claude_cli_slots
-
-
-# Per-provider gate for claude reached over the LIVE path — Bifrost anthropic
-# provider -> Meridian -> subscription. It is subscription-rate-limited exactly
-# like the CLI, so concurrent claude calls throttle each other server-side: a
-# single call is fast (~28s) but THREE in flight (the run's fan-out) each balloon
-# past the per-call timeout (live v097: 0/9 claude_ok, all 75s timeouts -> the
-# whole run fell onto a weak model -> weak_implementer). The old _claude_cli_gate
-# only covered the `claude -p` subprocess, which the live config no longer uses
-# (claude now MUST ride Bifrost), so claude-over-HTTP was ungated. This gate
-# serialises claude at the ask() layer regardless of backend, so each call gets
-# full bandwidth and returns before the timeout. Default 1 = strictly sequential;
-# tune via workers.claude_concurrency (0 = unbounded). PER-PROVIDER, not global —
-# mimo and the leaf pool stay parallel.
-_claude_slots: "threading.Semaphore | None" = None
-_claude_slots_for = -1
-
-
-def _is_claude_model(model: str) -> bool:
-    return "claude" in (model or "").lower()
-
-
-def _claude_gate() -> "threading.Semaphore | None":
-    global _claude_slots, _claude_slots_for
-    want = int(WORKERS_CFG.get("claude_concurrency",
-                               WORKERS_CFG.get("claude_cli_concurrency", 1)))
-    if want <= 0:
-        return None
-    if _claude_slots is None or _claude_slots_for != want:
-        _claude_slots = threading.BoundedSemaphore(want)
-        _claude_slots_for = want
-    return _claude_slots
+    sem, sem_for = _PROVIDER_SLOTS.get(prov, (None, None))
+    if sem is None or sem_for != want:
+        sem = threading.BoundedSemaphore(want)
+        _PROVIDER_SLOTS[prov] = (sem, want)
+    return sem
 
 
 def _budget() -> int:
@@ -747,7 +708,6 @@ def ask(prompt: str, *, model: str, role: str, step: str,
     # chain so one capped model isn't every call's first hit. No-op unless
     # the case sets workers.cycle_models; the model SET is unchanged.
     chain = _cycled([model, *fallbacks], cfg)
-    gate = _concurrency_gate()
     # exhausted chain = WAIT, not death: a burst of 429s (8/min window)
     # or the nightly free-pool reset is hours away at most — a paused
     # run beats a dead one (v18 died exactly here)
@@ -846,11 +806,11 @@ def ask(prompt: str, *, model: str, role: str, step: str,
         _brk = int((cfg or {}).get("model_breaker_5xx", 2))
         for i, m in enumerate(live):
             _spend_call()
-            # claude rides a subscription-rate-limited path (Bifrost -> Meridian
-            # -> Max): serialise it with its own gate so parallel calls do not
-            # throttle each other into timeouts (v097). mimo and the leaf pool
-            # keep the global concurrency gate and stay parallel.
-            eff_gate = _claude_gate() if _is_claude_model(m) else gate
+            # ONE per-provider gate: claude serialises (subscription rate),
+            # the free pool caps at its 429 ceiling — same mechanism, declared
+            # per provider (live v097: 3 parallel claude calls self-throttled
+            # past the 75s timeout).
+            eff_gate = _provider_gate(m)
             try:
                 if eff_gate is not None:
                     with eff_gate:
@@ -1030,12 +990,8 @@ def _ask_claude(prompt: str, model: str, system: str | None = None,
     # RETRIES). Skip MCP for chat → the claude fallback stays ~5s.
     mcp = claude_cli.mcp_args_no_serena() if (allowed or disallowed) else []
     for attempt in range(1, RETRIES + 1):
-        # serialise the subscription CLI (see _claude_cli_gate): concurrent
-        # `claude -p` processes throttle each other into timeouts. The queue wait
-        # sits OUTSIDE t0 so recorded latency is the call itself, not the wait.
-        _cli_gate = _claude_cli_gate()
-        if _cli_gate is not None:
-            _cli_gate.acquire()
+        # concurrency is bounded once, upstream, by the per-provider gate in
+        # ask() (_provider_gate) — no separate CLI queue here.
         t0 = time.monotonic()
         try:
             proc = subprocess.run(
@@ -1056,9 +1012,6 @@ def _ask_claude(prompt: str, model: str, system: str | None = None,
             last = f"spawn failed: {exc}"
             _attempt(attempt, t0, "spawn_error", True, "spawn")
             continue
-        finally:
-            if _cli_gate is not None:
-                _cli_gate.release()
         if proc.returncode == 0 and proc.stdout.strip():
             _attempt(attempt, t0, 0, False)
             return claude_cli.strip_headroom_banner(proc.stdout)
@@ -1131,13 +1084,12 @@ def _failure_reason(exc: "Exception | str") -> str:
     s = str(exc).lower()
     if "throttl" in s or "429" in s or "quota" in s:
         return "429"
-    if "timeout" in s or "timed out" in s:
-        return "timeout"
-    if "empty" in s or "malformed" in s or "bad response" in s:
-        return "empty"
-    # any HTTP status (a remote provider/gateway error): keep the 5xx bucket but
-    # surface a specific 4xx code (e.g. a 404 'no such agent') instead of hiding
-    # it as a generic 'error' — an unreachable hermes/MC agent must be legible.
+    # An explicit HTTP STATUS is classified by the status FIRST — before the
+    # word "timeout" — so a server "504 gateway timeout" stays a 5xx (a discrete,
+    # maybe-transient error that waits the breaker threshold) and is not confused
+    # with a CLIENT timeout (a hung call we already paid for, retired after one).
+    # Surface a specific 4xx code (e.g. 404 'no such agent') instead of a generic
+    # 'error' so an unreachable hermes/MC agent stays legible.
     mm = re.search(r"http (\d\d\d)", s)
     if mm:
         code = mm.group(1)
@@ -1150,6 +1102,12 @@ def _failure_reason(exc: "Exception | str") -> str:
         if code in ("401", "403"):
             return "auth"
         return f"http {code}"
+    # no HTTP status -> a transport-level outcome: a client timeout (the call
+    # hung past the cap) or an empty/garbled body.
+    if "timeout" in s or "timed out" in s:
+        return "timeout"
+    if "empty" in s or "malformed" in s or "bad response" in s:
+        return "empty"
     return "error"
 
 

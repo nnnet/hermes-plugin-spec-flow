@@ -137,22 +137,25 @@ def test_proven_model_timeout_waits_threshold_dead_one_retired():
     lb._MODEL_OK.clear()
 
 
-def test_claude_gate_serialises_only_claude():
-    """v097 fix: claude rides a subscription-rate-limited path, so parallel
-    claude calls throttle each other into timeouts. A dedicated claude gate
-    serialises them (default concurrency 1) while mimo/leaf-pool keep the global
-    gate. The gate is claude-specific and distinct from the global one."""
-    lb.configure_workers({"claude_concurrency": 1,
+def test_provider_gate_is_one_universal_per_provider_gate():
+    """v097 fix: ONE universal gate keyed by PROVIDER. claude serialises
+    (subscription rate, concurrency 1) while the free pool keeps the shared
+    max_concurrent_llm_requests default — same mechanism, declared per provider,
+    no claude/CLI special-case. Each provider gets its own semaphore."""
+    lb.configure_workers({"provider_concurrency": {"claude": 1},
                           "max_concurrent_llm_requests": 3})
-    assert lb._is_claude_model("claude/sonnet") is True
-    assert lb._is_claude_model("anthropic/claude-sonnet-4-6") is True
-    assert lb._is_claude_model("xiaomimimo/mimo-v2.5") is False
-    cg = lb._claude_gate()
-    assert cg is not None and cg._value == 1          # serialised
-    assert cg is not lb._concurrency_gate()           # not the global gate
-    # 0 disables the gate (unbounded), restoring old behaviour
-    lb.configure_workers({"claude_concurrency": 0})
-    assert lb._claude_gate() is None
+    assert lb._provider_of("claude/sonnet") == "claude"
+    assert lb._provider_of("xiaomimimo/mimo-v2.5") == "xiaomimimo"
+    g_claude = lb._provider_gate("claude/sonnet")
+    g_mimo = lb._provider_gate("xiaomimimo/mimo-v2.5")
+    assert g_claude._value == 1               # claude serialised by config
+    assert g_mimo._value == 3                 # free pool at the shared default
+    assert g_claude is not g_mimo             # one semaphore per provider
+    # same provider -> same semaphore (a real shared gate, not per-call)
+    assert lb._provider_gate("claude/opus") is g_claude
+    # 0 leaves a provider unbounded
+    lb.configure_workers({"provider_concurrency": {"claude": 0}})
+    assert lb._provider_gate("claude/sonnet") is None
     lb.configure_workers(None)
 
 

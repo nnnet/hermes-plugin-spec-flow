@@ -333,4 +333,4 @@ def test_llm_concurrency_legacy_key(monkeypatch, fake_openai):
     # back-compat: a pre-rename run with the old `concurrency` key still gates
     from harness import llm_backend as lb
     lb.configure_workers({"concurrency": 2})
-    assert lb._concurrency_gate() is not None
+    assert lb._provider_gate("openrouter/a:free") is not None
