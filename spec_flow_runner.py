@@ -2826,6 +2826,12 @@ class Engine:
                 uniq.append(mp)
         return uniq
 
+    # first-parameter names that mark a STORAGE/DEPENDENCY function (not an HTTP
+    # handler): the router cannot supply these, so a route must not wire to them.
+    _DEP_FIRST_PARAMS = frozenset({
+        "conn", "connection", "db", "database", "session", "cursor", "engine",
+        "txn", "tx", "pool", "client", "store", "repo", "repository", "dao"})
+
     def _resolve_route_handlers(self, contract: dict) -> tuple:
         """Pure-AST resolver: map each declared (method, path) to the best leaf
         handler already built under src/. A handler is a module-level function
@@ -2858,6 +2864,17 @@ class Engine:
                     if params[:2] == ["environ", "start_response"]:
                         continue          # raw WSGI handler — not a leaf business fn
                     if n.name.startswith("__"):
+                        continue
+                    # An HTTP handler takes the REQUEST (payload/query/body), not an
+                    # injected dependency. A storage-layer fn whose first param is a
+                    # connection/session (e.g. insert_note(conn, text),
+                    # list_notes(conn)) is NOT dispatchable as (payload, query): the
+                    # router would pass a dict where a sqlite3.Connection is expected
+                    # and 500 (live v099: the resolver mapped POST/GET /notes onto
+                    # db.insert_note/list_notes and every call crashed). Reject it so
+                    # the route stays unresolved and the engine promotes the real
+                    # raw-WSGI router instead of fabricating a broken wiring.
+                    if params and params[0].lower() in self._DEP_FIRST_PARAMS:
                         continue
                     abi = "pq" if len(params) >= 2 else (
                         "p" if len(params) == 1 else "none")

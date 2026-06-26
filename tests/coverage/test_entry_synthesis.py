@@ -392,6 +392,32 @@ def test_synth_returns_none_when_critical_route_unresolved(tmp_path):
     assert code is None, "must fall back to LLM when a critical route is unresolved"
 
 
+def test_storage_layer_fn_is_not_wired_as_handler(tmp_path):
+    """Live v099 regression: a storage fn whose first param is a CONNECTION
+    (insert_note(conn, text), list_notes(conn)) is NOT an HTTP handler — the
+    router cannot supply a sqlite3.Connection, so wiring it makes every call
+    500. The resolver must reject dep-first-param functions, leaving the route
+    unresolved so the engine promotes the real raw-WSGI router instead."""
+    eng = _engine(tmp_path)
+    src = pathlib.Path(eng.workspace.root) / "src"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "notes_db.py").write_text(
+        "def connect():\n    return object()\n"
+        "def insert_note(conn, text):\n    return 1\n"
+        "def list_notes(conn):\n    return []\n")
+    mapping, unresolved = eng._resolve_route_handlers(_SPLIT_CONTRACT)
+    # the db-layer fns must NOT be wired to POST/GET /notes
+    wired = set(mapping.values()) if mapping else set()
+    assert all("insert_note" not in str(w) and "list_notes" not in str(w)
+               for w in wired), f"db-layer fn wrongly wired: {mapping}"
+    assert ("POST", "/notes") in unresolved and ("GET", "/notes") in unresolved
+    # a clean (payload, query) handler in the SAME module is still wired
+    (src / "api.py").write_text(
+        "def create_note(payload, query):\n    return (201, {'id': 1})\n")
+    mapping2, _ = eng._resolve_route_handlers(_SPLIT_CONTRACT)
+    assert ("POST", "/notes") in mapping2, "real handler must still resolve"
+
+
 # --- route-coverage promotion (live v094): the working router is a monolithic
 # raw-WSGI blob in a NON-entry module; the declared entry is a /about-only decoy.
 # The resolver cannot decompose the blob, so the engine PROMOTES the rival by
