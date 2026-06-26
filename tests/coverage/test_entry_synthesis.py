@@ -91,6 +91,11 @@ def _load_entry(code, db_path, src_dir):
     """Materialise the synthesized entry next to the leaves and import it."""
     import os
     os.environ["NOTES_DB"] = str(db_path)
+    # purge any leaf modules cached from a previous test (each test seeds its own
+    # src/ in a fresh tmp dir, but sys.modules would otherwise reuse a stale one)
+    for _m in ("db_layer", "notes_post", "notes_get", "ui", "about", "l0",
+               "_product_logic", "synth_app"):
+        sys.modules.pop(_m, None)
     entry = pathlib.Path(src_dir) / "app.py"
     entry.write_text(code)
     sys.path.insert(0, str(src_dir))
@@ -123,11 +128,13 @@ def test_resolver_maps_every_declared_route(tmp_path):
     eng = _engine(tmp_path)
     _seed_src(eng.workspace.root)
     mapping, unresolved = eng._resolve_route_handlers(_CONTRACT)
-    assert unresolved == [], "all declared routes must resolve, got %r" % unresolved
     assert ("POST", "/notes") in mapping
     assert ("GET", "/notes") in mapping
     assert ("GET", "/ui") in mapping
     assert ("GET", "/about") in mapping
+    # /health has no dedicated handler leaf here -> left for the synth to inline;
+    # it is the only route that may stay unresolved (never falsely wired).
+    assert all(mp == ("GET", "/health") for mp in unresolved), unresolved
     # POST/GET on /notes resolve to DIFFERENT handlers
     assert mapping[("POST", "/notes")][1] != mapping[("GET", "/notes")][1]
 
@@ -292,6 +299,35 @@ def test_harden_entry_wraps_unguarded_json_loads(tmp_path):
     assert st == 200
     assert eng._harden_entry() is True             # idempotent, no double-wrap
     assert (src / "app.py").read_text().count("_spec_flow_hardened") == 1
+
+
+def test_route_without_resource_handler_not_falsely_wired(tmp_path):
+    """Regression (live v091): a GET route with NO resource-matching handler must
+    stay unresolved and 404, not be wired to get_notes just because the method
+    matches. Synthesis still fires for the resolved json_roundtrip; the unbuilt
+    route is omitted (honest 404) so the doctor builds a real handler."""
+    eng = _engine(tmp_path)
+    src = pathlib.Path(eng.workspace.root) / "src"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "notes_post.py").write_text(
+        "def post_note(payload, query):\n    return (201, {'id': 1})\n"
+        "def get_notes(payload, query):\n    return (200, {'items': []})\n")
+    contract = {"entry": "src/app.py", "callable": ["wsgi_app"],
+                "boot": {"ok_route": "/health", "html_route": "/ui",
+                         "json_roundtrip": "/notes"},
+                "routes": [["GET", "/about"]]}
+    mapping, unresolved = eng._resolve_route_handlers(contract)
+    assert ("GET", "/ui") in unresolved          # no ui handler -> unresolved
+    assert ("GET", "/about") in unresolved        # no about handler -> unresolved
+    assert ("GET", "/notes") in mapping and ("POST", "/notes") in mapping
+    assert mapping[("GET", "/notes")][1] == "get_notes"
+    code = eng._synthesize_entry_code(contract, mapping, unresolved)
+    assert code is not None                       # json_roundtrip resolved -> fire
+    app = _load_entry(code, tmp_path / "x.db", src)
+    st, _h, _b = _call(app, "GET", "/ui")
+    assert st == 404, "unbuilt /ui must 404, never be wired to get_notes"
+    st, _h, _b = _call(app, "GET", "/notes")
+    assert st == 200
 
 
 def test_json_parse_unguarded_detector():

@@ -2874,13 +2874,25 @@ class Engine:
             # `get_notes` must NOT win `POST /notes` just by containing "notes").
             other_syn = tuple(s for m, syns in self._METHOD_SYNONYMS.items()
                               if m != method for s in syns if s not in syn)
+            res_sing = res.rstrip("s") if res else ""
             best = None
             best_score = 0
             for stem, name, abi, low in cands:
+                # ELIGIBILITY: the handler must relate to this route's RESOURCE.
+                # A method-synonym match alone is NOT enough — otherwise `get_notes`
+                # falsely wins GET /ui / GET /about / GET /health just by carrying
+                # "get" (live v091). A route with no resource-matching handler stays
+                # unresolved (honest) instead of being wired to an unrelated leaf.
+                res_hit = bool(res and (res in low or
+                                        (len(res_sing) >= 3 and res_sing in low)))
+                root_hit = (not res and name.lower() in
+                            ("index", "home", "root", "app", "main"))
+                if not (res_hit or root_hit):
+                    continue
                 score = 0
                 if res and res in low:
                     score += 3
-                if res and res.rstrip("s") and res.rstrip("s") in low:
+                if res_sing and res_sing in low:
                     score += 1                       # singular/plural tolerance
                 if any(s in low for s in syn):
                     score += 3                       # matches THIS method
@@ -2889,13 +2901,10 @@ class Engine:
                     score -= 3                       # carries a CONFLICTING method
                 if abi == "pq":
                     score += 1
-                if not res and name.lower() in (
-                        "index", "home", "root", "app", "main"):
+                if root_hit:
                     score += 2
                 if score > best_score:
                     best_score, best = score, (stem, name, abi)
-            # require a real signal (resource OR method synonym matched), not just
-            # the +1 signature bonus, to avoid wiring an unrelated function
             if best and best_score >= 2:
                 mapping[(method, path)] = best
             else:
@@ -2920,11 +2929,17 @@ class Engine:
         boot = contract.get("boot", {}) or {}
         callable_name = (contract.get("callable") or ["wsgi_app"])[0]
         ok_route = boot.get("ok_route")
+        rt = boot.get("json_roundtrip")
         unresolved_set = set(unresolved)
-        # a missing health route is fine (inline 200); any other miss is critical
-        critical_miss = [mp for mp in unresolved_set
-                         if not (mp == ("GET", ok_route))]
-        if critical_miss:
+        # ONLY the json_roundtrip pair is critical: without it the engine cannot
+        # own a meaningful product. A missing health route is inlined (200); a
+        # missing HTML page or extra route is simply omitted (it will 404, which
+        # the boot-gate honestly reports so the doctor builds the real handler) —
+        # the router still serves every route that DOES resolve. This keeps the
+        # deterministic entry in place instead of declining the whole synthesis
+        # over one not-yet-built late route (live v091 /ui, /about).
+        critical = {("POST", rt), ("GET", rt)} if rt else set()
+        if critical & unresolved_set:
             return None
         # build deterministic import aliases + route table
         alias_for: dict = {}
