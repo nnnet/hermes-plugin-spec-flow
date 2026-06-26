@@ -226,6 +226,11 @@ workers:
       claude/sonnet: anthropic/claude-sonnet-4-6
       sonnet: anthropic/claude-sonnet-4-6
   retries: 6
+  # per-call wall cap. Real generations here run ~16s; a dead/hung provider (mimo
+  # 504s the Bifrost gateway holds ~120s) must NOT cost the 420s global default.
+  # 75s leaves wide margin over real calls but bails a hung call as a client
+  # timeout, which the per-model breaker now retires after ONE (v091: 25×~120s).
+  timeout: 75
   leaf_depth: 3
   max_children: 3
   max_decompose_calls: 40

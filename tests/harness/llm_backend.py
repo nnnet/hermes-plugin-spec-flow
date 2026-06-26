@@ -813,13 +813,20 @@ def ask(prompt: str, *, model: str, role: str, step: str,
                 # per-model breaker: count 5xx (gateway down) and retire the
                 # model for the rest of the run once it crosses the threshold,
                 # so later calls skip it instead of paying its timeout again
-                if _failure_reason(exc) in ("5xx", "timeout"):
+                _reason = _failure_reason(exc)
+                if _reason in ("5xx", "timeout"):
                     _MODEL_5XX[m] = _MODEL_5XX.get(m, 0) + 1
-                    if _MODEL_5XX[m] >= _brk and m not in _MODEL_DOWN:
+                    # a client TIMEOUT means we already paid a full per-call wait
+                    # for nothing and a hung gateway almost never heals mid-run —
+                    # retire the model after ONE so the rest of the run skips it.
+                    # A discrete 5xx may be a transient blip, so it waits the
+                    # configured threshold. (live v091: mimo 504s cost ~120s each;
+                    # capping the timeout turns them into timeouts dropped at 1.)
+                    _retire_at = 1 if _reason == "timeout" else _brk
+                    if _MODEL_5XX[m] >= _retire_at and m not in _MODEL_DOWN:
                         _MODEL_DOWN.add(m)
                         _log_event({"event": "model_circuit_open", "model": m,
-                                    "reason": "repeated 5xx",
-                                    "count": _MODEL_5XX[m]})
+                                    "reason": _reason, "count": _MODEL_5XX[m]})
                 # record the fallback hop so the dashboard shows which model
                 # failed (and why) and what was tried next
                 _nxt = live[i + 1] if i + 1 < len(live) else (

@@ -110,6 +110,17 @@ def test_quota_wait_window_is_detected(tmp_path):
     assert a["top"][0]["cause"] == "ожидание квоты"
 
 
+def test_error_round_is_provider_not_quota(tmp_path):
+    """An error_round (provider 5xx/timeout) must NOT be labelled 'ожидание
+    квоты' — that is a real quota_wait only. Mislabelling hid the mimo-504 sink
+    behind a quota label (live v091)."""
+    rows = [_ev(0, task="x", phase="implement"),
+            _ev(300, task="x", phase="implement")]
+    llm = [{"event": "error_round", "t": 100.0}]
+    a = dash._idle_analysis(_run(tmp_path, rows, llm))
+    assert a["top"][0]["cause"] == "ожидание провайдера (5xx/таймаут)"
+
+
 def test_rollups_sorted_by_total(tmp_path):
     rows = [_ev(0, task="a", phase="review"),
             _ev(100, task="b", phase="integrate", action="acceptance"),

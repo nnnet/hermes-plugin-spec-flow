@@ -1442,7 +1442,8 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
         # below the run start is run-relative seconds → shift onto the axis
         return t if t >= run_start else run_start + t
 
-    waits = []
+    waits = []          # real quota_wait sleeps (free pool 429'd)
+    prov_fails = []     # provider 5xx/timeout error_rounds — NOT quota
     calls = []
     # FAILURE report: when a model did NOT answer normally (429/5xx/timeout/empty)
     # — how many times, what it led to (a fallback to another model, or a terminal
@@ -1501,8 +1502,11 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
             if ev_ in ("quota_wait", "error_round"):
                 t = e.get("t")
                 if t is not None:
-                    waits.append((_epoch(float(t)),
-                                  float(e.get("wait_s", 0) or 0)))
+                    pt = (_epoch(float(t)), float(e.get("wait_s", 0) or 0))
+                    # honest split: a quota_wait is a real free-pool 429 sleep; an
+                    # error_round is a provider 5xx/timeout failure. Lumping them
+                    # mislabels mimo-504 idle as "ожидание квоты" (live v091).
+                    (waits if ev_ == "quota_wait" else prov_fails).append(pt)
             elif ev_ == "llm_attempt" and e.get("abnormal"):
                 d = _fm(e.get("model"))
                 d["abn"] += 1
@@ -1607,6 +1611,9 @@ def _idle_analysis(run_dir: "pathlib.Path | None", top: int = 40) -> dict:
             _comp_idx[k] = i + 1
 
     def _cause(ev: dict, gap: float, t0: float, t1: float) -> str:
+        for wt, _ws in prov_fails:
+            if t0 <= wt <= t1:
+                return "ожидание провайдера (5xx/таймаут)"
         for wt, _ws in waits:
             if t0 <= wt <= t1:
                 return "ожидание квоты"
@@ -2611,7 +2618,7 @@ function idleHTML(){
  rows.sort((a,b)=>{let x=a[IDLE_SORT],y=b[IDLE_SORT];
   if(x<y)return IDLE_DESC?1:-1;if(x>y)return IDLE_DESC?-1:1;return 0;});
  // cause heat: quota waits + integration are the usual long poles
- const causeColor=c=>({'ожидание квоты':'var(--err)','интеграция (тесты)':'var(--warn)',
+ const causeColor=c=>({'ожидание квоты':'var(--err)','ожидание провайдера (5xx/таймаут)':'var(--err)','интеграция (тесты)':'var(--warn)',
   'починка':'var(--code)','реализация (LLM)':'var(--link)','ревью спеки':'var(--link-2)',
   'декомпозиция (LLM)':'var(--purple)','ответ человека':'var(--code)'}[c]||'var(--dim)');
  let h='<h3 class=muted>⏱ Анализ простоев и длительности '+

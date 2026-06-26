@@ -94,5 +94,19 @@ def test_quota_error_still_waits_and_retries(fake_openai):
     assert srv.call_count == 3
 
 
+def test_timeout_classified_for_fast_retire():
+    """Fast-fail mimo: the per-model breaker retires a model after ONE 'timeout'
+    (a hung call we already paid for) but waits the threshold for a discrete
+    '5xx'. This depends on _failure_reason classifying a client timeout as
+    'timeout' and an HTTP 504 as '5xx' — capping the per-call timeout (p6
+    workers.timeout=75) turns mimo's slow gateway 504 into a client timeout that
+    is retired immediately (live v091: 25×~120s)."""
+    assert lb._failure_reason(TimeoutError("the read operation timed out")) \
+        == "timeout"
+    assert lb._failure_reason(RuntimeError("openai backend failed: HTTP 504")) \
+        == "5xx"
+    assert lb._failure_reason(RuntimeError("HTTP 429 rate limited")) == "429"
+
+
 def test_reset_after_module():
     _reset()
