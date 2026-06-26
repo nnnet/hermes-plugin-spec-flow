@@ -3080,6 +3080,56 @@ application = %(callable)s
             return False
         return True
 
+    def _neutralize_rival_entries(self, entry: str) -> int:
+        """Phase 3 — eliminate the split deterministically. When the engine owns
+        the declared entry, any OTHER module that also exposes a WSGI callable is a
+        rival entry: it trips the route-redeclare gate and confuses servers about
+        which app to run (live v089: notes_api.py beside app.py). Strip just the
+        module-level WSGI callable (``def wsgi_app|application|app`` and
+        ``application = ...`` / raw ``(environ, start_response)`` glue) from each
+        rival, keeping its business functions (which the synthesized router may
+        import). Pure AST; returns the count neutralised."""
+        if not hasattr(ast, "unparse"):
+            return 0
+        n = 0
+        names = {"wsgi_app", "application", "app"}
+        for fname, _sym in self._rival_wsgi_entries(entry):
+            p = Path(self.workspace.root) / "src" / fname
+            if not p.is_file():
+                continue
+            try:
+                tree = ast.parse(p.read_text(encoding="utf-8", errors="replace"))
+            except (OSError, SyntaxError):
+                continue
+            keep: list = []
+            changed = False
+            for node in tree.body:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    params = [a.arg for a in node.args.args]
+                    if node.name in names or \
+                            params[:2] == ["environ", "start_response"]:
+                        changed = True
+                        continue            # drop the rival WSGI callable
+                elif isinstance(node, ast.Assign) and any(
+                        isinstance(t, ast.Name) and t.id in names
+                        for t in node.targets):
+                    changed = True
+                    continue                # drop `application = wsgi_app`
+                keep.append(node)
+            if not changed:
+                continue
+            try:
+                body = "\n".join(ast.unparse(x) for x in keep)
+                p.write_text(
+                    '"""Rival WSGI entry neutralised by the engine — business '
+                    'logic kept,\nthe duplicate app callable removed so the '
+                    'declared entry is the sole one."""\n' + body + "\n",
+                    encoding="utf-8")
+                n += 1
+            except (OSError, ValueError):
+                continue
+        return n
+
     def _try_synthesize_entry(self) -> bool:
         """Deterministically (re)build the product entry from the contract when
         EVERY declared route resolves to a built leaf handler. The engine — not
@@ -3122,11 +3172,15 @@ application = %(callable)s
             ep = Path(ws.root) / entry
             if ep.is_file() and ep.read_text(
                     encoding="utf-8", errors="replace") == code:
+                self._neutralize_rival_entries(entry)
                 return True             # already the synthesised router
             ep.parent.mkdir(parents=True, exist_ok=True)
             ep.write_text(code, encoding="utf-8")
         except OSError:
             return False
+        # split-elimination: with the engine owning the entry, strip any rival
+        # WSGI callable so the declared entry is the sole one (Phase 3).
+        self._neutralize_rival_entries(entry)
         try:
             self.workspace.commit(
                 f"build: synthesize {entry} (deterministic assembly)", [entry])

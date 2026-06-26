@@ -294,6 +294,27 @@ def test_harden_entry_wraps_unguarded_json_loads(tmp_path):
     assert (src / "app.py").read_text().count("_spec_flow_hardened") == 1
 
 
+def test_neutralize_rival_entries_strips_duplicate_app(tmp_path):
+    """Phase 3 split-elimination: a second module exposing a WSGI callable beside
+    the declared entry (live v089 notes_api.py) is stripped of that callable while
+    its business functions are kept; the declared entry is left untouched."""
+    eng = _engine(tmp_path)
+    src = pathlib.Path(eng.workspace.root) / "src"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "app.py").write_text(
+        "def wsgi_app(environ, start_response):\n    return []\n")
+    (src / "notes_api.py").write_text(
+        "def get_notes(payload, query):\n    return (200, {'items': []})\n"
+        "def wsgi_app(environ, start_response):\n    return []\n"
+        "application = wsgi_app\n")
+    assert eng._neutralize_rival_entries("src/app.py") == 1
+    rival = (src / "notes_api.py").read_text()
+    assert "def wsgi_app" not in rival
+    assert "application = wsgi_app" not in rival
+    assert "def get_notes" in rival          # business logic preserved
+    assert "def wsgi_app" in (src / "app.py").read_text()   # entry untouched
+
+
 def test_synth_returns_none_when_critical_route_unresolved(tmp_path):
     eng = _engine(tmp_path)
     # only a health leaf, no notes/ui/about handlers -> json_roundtrip unresolved
