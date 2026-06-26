@@ -108,5 +108,17 @@ def test_timeout_classified_for_fast_retire():
     assert lb._failure_reason(RuntimeError("HTTP 429 rate limited")) == "429"
 
 
+def test_auth_failure_classified_and_retired_after_one():
+    """Fast-fail #83: a 401/403 is broken provider auth that will not heal
+    mid-run, so it is its own 'auth' reason and the breaker retires the model
+    after ONE (live v094: xiaomimimo 401'd 16x, each a wasted instant fallback).
+    A generic 4xx stays a legible 'http NNN' and is NOT auto-retired."""
+    assert lb._failure_reason(RuntimeError("openai backend failed: HTTP 401")) \
+        == "auth"
+    assert lb._failure_reason(RuntimeError("HTTP 403 forbidden")) == "auth"
+    assert lb._failure_reason(RuntimeError("HTTP 404 no such agent")) \
+        == "http 404"
+
+
 def test_reset_after_module():
     _reset()

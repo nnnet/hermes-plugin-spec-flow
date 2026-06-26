@@ -814,15 +814,18 @@ def ask(prompt: str, *, model: str, role: str, step: str,
                 # model for the rest of the run once it crosses the threshold,
                 # so later calls skip it instead of paying its timeout again
                 _reason = _failure_reason(exc)
-                if _reason in ("5xx", "timeout"):
+                if _reason in ("5xx", "timeout", "auth"):
                     _MODEL_5XX[m] = _MODEL_5XX.get(m, 0) + 1
                     # a client TIMEOUT means we already paid a full per-call wait
                     # for nothing and a hung gateway almost never heals mid-run —
                     # retire the model after ONE so the rest of the run skips it.
+                    # An AUTH failure (401/403) is a stale/missing gateway key: it
+                    # NEVER heals mid-run, so retire after ONE too (live v094:
+                    # xiaomimimo 401'd 16x, each an instant but wasted fallback).
                     # A discrete 5xx may be a transient blip, so it waits the
                     # configured threshold. (live v091: mimo 504s cost ~120s each;
                     # capping the timeout turns them into timeouts dropped at 1.)
-                    _retire_at = 1 if _reason == "timeout" else _brk
+                    _retire_at = 1 if _reason in ("timeout", "auth") else _brk
                     if _MODEL_5XX[m] >= _retire_at and m not in _MODEL_DOWN:
                         _MODEL_DOWN.add(m)
                         _log_event({"event": "model_circuit_open", "model": m,
@@ -1063,7 +1066,15 @@ def _failure_reason(exc: "Exception | str") -> str:
     mm = re.search(r"http (\d\d\d)", s)
     if mm:
         code = mm.group(1)
-        return "5xx" if code[0] == "5" else f"http {code}"
+        if code[0] == "5":
+            return "5xx"
+        # 401/403 == broken provider auth (a stale/missing key at the gateway):
+        # it will NOT heal mid-run, so it is its own bucket and the breaker
+        # retires the model after ONE (live v094: xiaomimimo 401'd 16x, each an
+        # instant but wasted fallback). A generic 4xx stays a legible `http NNN`.
+        if code in ("401", "403"):
+            return "auth"
+        return f"http {code}"
     return "error"
 
 

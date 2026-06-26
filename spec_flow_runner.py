@@ -3095,7 +3095,8 @@ application = %(callable)s
             return False
         return True
 
-    def _neutralize_rival_entries(self, entry: str) -> int:
+    def _neutralize_rival_entries(self, entry: str,
+                                  keep: "Optional[set]" = None) -> int:
         """Phase 3 — eliminate the split deterministically. When the engine owns
         the declared entry, any OTHER module that also exposes a WSGI callable is a
         rival entry: it trips the route-redeclare gate and confuses servers about
@@ -3103,12 +3104,17 @@ application = %(callable)s
         module-level WSGI callable (``def wsgi_app|application|app`` and
         ``application = ...`` / raw ``(environ, start_response)`` glue) from each
         rival, keeping its business functions (which the synthesized router may
-        import). Pure AST; returns the count neutralised."""
+        import). ``keep`` is a set of module STEMS to leave intact — used by the
+        promote path, where the declared entry DELEGATES to a rival's callable, so
+        that rival must keep exposing it. Pure AST; returns the count neutralised."""
         if not hasattr(ast, "unparse"):
             return 0
         n = 0
         names = {"wsgi_app", "application", "app"}
+        keep = keep or set()
         for fname, _sym in self._rival_wsgi_entries(entry):
+            if Path(fname).stem in keep:
+                continue                # the entry delegates to this one — keep it
             p = Path(self.workspace.root) / "src" / fname
             if not p.is_file():
                 continue
@@ -3145,6 +3151,117 @@ application = %(callable)s
                 continue
         return n
 
+    def _promote_rival_entry(self, contract: dict) -> "Optional[tuple]":
+        """Route-coverage fallback (live v094): a weak coder built a WORKING
+        raw-WSGI app but in a NON-entry module — the whole notes router lived in
+        ``src/wsgi_app.py`` while the declared ``src/app.py`` served only a stray
+        ``/about``. The ``(payload, query)`` resolver cannot decompose a monolithic
+        raw-WSGI blob, so ``_synthesize_entry_code`` declines — yet the contract IS
+        served, just behind the wrong file, and the boot-gate (which loads the
+        DECLARED entry) 404s the contract. Rather than fabricate logic, the engine
+        PROMOTES the rival: it emits a thin declared entry that delegates to the
+        rival's callable and guards a malformed body -> 400 (M1). The model's
+        routing and business logic are untouched — only the HTTP entry is
+        engine-owned, so assembly never depends on WHICH file the model put the
+        router in. Returns ``(code, keep_stem)`` for the best-scoring rival, or
+        ``None`` when there is no rival to promote. The caller boot-verifies the
+        delegation against the real contract before committing — a rival that does
+        not actually serve the contract is rejected, never faked green. Pure AST."""
+        entry = contract.get("entry") or ""
+        rivals = self._rival_wsgi_entries(entry)
+        if not rivals:
+            return None
+        callable_name = (contract.get("callable") or ["wsgi_app"])[0]
+        # score each rival by how many declared route PATHS it references as
+        # string literals — the module that names the most contract paths is the
+        # real router (a decoy that only mentions /about scores 0).
+        want_paths = {p for (_m, p) in self._declared_route_set(contract)}
+        root = Path(self.workspace.root) / "src"
+        best = None
+        best_score = -1
+        for fname, sym in rivals:
+            score = 0
+            try:
+                tree = ast.parse((root / fname).read_text(
+                    encoding="utf-8", errors="replace"))
+                lits = {nd.value for nd in ast.walk(tree)
+                        if isinstance(nd, ast.Constant)
+                        and isinstance(nd.value, str)}
+                score = sum(1 for p in want_paths if p in lits)
+            except (OSError, SyntaxError):
+                score = 0
+            if score > best_score:
+                best_score, best = score, (fname, sym)
+        fname, sym = best
+        stem = Path(fname).stem
+        code = (
+            '"""Product entry — engine-promoted delegation.\n\n'
+            'The coder built the working WSGI app in src/%(stem)s.py; the engine\n'
+            'wires it to the declared entry and guards a malformed body -> 400\n'
+            '(M1). Business logic is untouched — only the HTTP entry is\n'
+            'engine-owned, so assembly never depends on which file the model put\n'
+            'the router in. Do not hand-edit.\n'
+            '"""\n'
+            'import json as _sf_json\n'
+            'from %(stem)s import %(sym)s as _sf_inner\n'
+            '\n\n'
+            'def %(callable)s(environ, start_response):\n'
+            '    try:\n'
+            '        return _sf_inner(environ, start_response)\n'
+            '    except _sf_json.JSONDecodeError:\n'
+            '        start_response("400 Bad Request",\n'
+            '                       [("Content-Type", "application/json")])\n'
+            '        return [b\'{"error": "invalid json"}\']\n'
+            '\n\n'
+            'application = %(callable)s\n'
+        ) % {"stem": stem, "sym": sym, "callable": callable_name}
+        return code, stem
+
+    def _write_promoted_entry(self, contract: dict, code: str,
+                              keep_stem: str) -> bool:
+        """Write a promoted delegating entry and KEEP it only if the assembled
+        product actually boots its contract. The promote path is more speculative
+        than the resolver path (it trusts a rival's whole router) and it strips
+        OTHER rivals, so it self-verifies with the un-mockable boot-gate BEFORE
+        committing: green -> neutralise the other rivals (keeping the delegated
+        one) and commit; red -> restore the original entry and fall back to the
+        LLM implementer. Never leaves a worse entry than it found."""
+        entry = contract["entry"]
+        ep = Path(self.workspace.root) / entry
+        try:
+            original = (ep.read_text(encoding="utf-8", errors="replace")
+                        if ep.is_file() else None)
+            ep.parent.mkdir(parents=True, exist_ok=True)
+            ep.write_text(code, encoding="utf-8")
+        except OSError:
+            return False
+        boot_ok, _ = self._assembled_product_boots()
+        if not boot_ok:
+            try:                        # delegation did not serve the contract
+                if original is None:
+                    ep.unlink()
+                else:
+                    ep.write_text(original, encoding="utf-8")
+            except OSError:
+                pass
+            return False
+        # green: the declared entry now delegates to the working rival. Strip the
+        # OTHER rivals' callables but KEEP the promoted module (the entry imports
+        # it), so a SINGLE declared entry serves the whole contract.
+        self._neutralize_rival_entries(entry, keep={keep_stem})
+        try:
+            self.workspace.commit(
+                f"build: promote src/{keep_stem}.py to {entry} "
+                "(deterministic delegation)", [entry])
+        except Exception:               # noqa: BLE001 — boot reads the work tree
+            pass
+        self.emit("integrate", "verifier", "spec-integrate", "L0:integrate",
+                  f"entry promoted deterministically: {entry} -> src/{keep_stem}.py",
+                  "engine-owned delegation: the declared entry wires the coder's "
+                  "working WSGI app and guards malformed body -> 400",
+                  "integrate_verify", "", level=L_MILESTONE)
+        return True
+
     def _try_synthesize_entry(self) -> bool:
         """Deterministically (re)build the product entry from the contract when
         EVERY declared route resolves to a built leaf handler. The engine — not
@@ -3173,6 +3290,17 @@ application = %(callable)s
         except Exception:               # noqa: BLE001 — resolver is best-effort
             return False
         if not code:
+            # the (payload,query) resolver could not own the entry (e.g. the
+            # router is a monolithic raw-WSGI blob in a non-entry module — live
+            # v094). Last deterministic resort before the LLM: PROMOTE a rival
+            # that already serves the contract, delegating to it from the
+            # declared entry (boot-verified, never faked).
+            try:
+                promoted = self._promote_rival_entry(contract)
+            except Exception:           # noqa: BLE001 — promote is best-effort
+                promoted = None
+            if promoted:
+                return self._write_promoted_entry(contract, *promoted)
             return False
         if harvested:
             # keep `from <entry> import <handler>` working for any unit tests the

@@ -94,7 +94,7 @@ def _load_entry(code, db_path, src_dir):
     # purge any leaf modules cached from a previous test (each test seeds its own
     # src/ in a fresh tmp dir, but sys.modules would otherwise reuse a stale one)
     for _m in ("db_layer", "notes_post", "notes_get", "ui", "about", "l0",
-               "_product_logic", "synth_app"):
+               "_product_logic", "synth_app", "wsgi_app", "notes_router"):
         sys.modules.pop(_m, None)
     entry = pathlib.Path(src_dir) / "app.py"
     entry.write_text(code)
@@ -390,3 +390,112 @@ def test_synth_returns_none_when_critical_route_unresolved(tmp_path):
     assert ("POST", "/notes") in unresolved
     code = eng._synthesize_entry_code(_CONTRACT, mapping, unresolved)
     assert code is None, "must fall back to LLM when a critical route is unresolved"
+
+
+# --- route-coverage promotion (live v094): the working router is a monolithic
+# raw-WSGI blob in a NON-entry module; the declared entry is a /about-only decoy.
+# The resolver cannot decompose the blob, so the engine PROMOTES the rival by
+# delegating to it from the declared entry (+ the M1 malformed->400 net). -------
+_SPLIT_CONTRACT = {
+    "entry": "src/app.py",
+    "callable": ["wsgi_app"],
+    "boot": {"ok_route": "/health", "json_roundtrip": "/notes"},
+    "routes": [],
+}
+
+# the coder's REAL router — raw WSGI, self-contained, unguarded json.loads (M1).
+_WSGI_MONOLITH = '''\
+import json
+_NOTES = []
+def wsgi_app(environ, start_response):
+    path = environ.get("PATH_INFO", "/")
+    method = environ.get("REQUEST_METHOD", "GET")
+    if path == "/health" and method == "GET":
+        start_response("200 OK", [("Content-Type", "text/plain")])
+        return [b"ok"]
+    if path == "/notes" and method == "POST":
+        n = int(environ.get("CONTENT_LENGTH") or 0)
+        data = json.loads(environ["wsgi.input"].read(n))   # unguarded -> M1 net
+        _NOTES.append(data["text"])
+        start_response("200 OK", [("Content-Type", "application/json")])
+        return [json.dumps({"id": len(_NOTES)}).encode()]
+    if path == "/notes" and method == "GET":
+        items = [{"id": i + 1, "text": t} for i, t in enumerate(_NOTES)]
+        start_response("200 OK", [("Content-Type", "application/json")])
+        return [json.dumps({"items": items}).encode()]
+    start_response("404 Not Found", [("Content-Type", "application/json")])
+    return [b'{"error": "not found"}']
+'''
+
+# the declared entry the weak coder wrote — a decoy that serves only /about.
+_DECOY_ENTRY = '''\
+def wsgi_app(environ, start_response):
+    if environ.get("PATH_INFO") == "/about":
+        start_response("200 OK", [("Content-Type", "text/html")])
+        return [b"<html>about</html>"]
+    start_response("404 Not Found", [("Content-Type", "text/plain")])
+    return [b"not found"]
+'''
+
+
+def _seed_split(root):
+    src = pathlib.Path(root) / "src"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "wsgi_app.py").write_text(_WSGI_MONOLITH)
+    (src / "app.py").write_text(_DECOY_ENTRY)
+    return src
+
+
+def test_promote_rival_entry_emits_delegation(tmp_path):
+    """The promote helper returns a thin entry that imports the rival's callable
+    and keeps that module (keep_stem), so a SINGLE declared entry serves the
+    contract without the engine fabricating any business logic."""
+    eng = _engine(tmp_path)
+    _seed_split(eng.workspace.root)
+    out = eng._promote_rival_entry(_SPLIT_CONTRACT)
+    assert out is not None
+    code, keep = out
+    assert keep == "wsgi_app"
+    assert "from wsgi_app import wsgi_app as _sf_inner" in code
+    assert "def wsgi_app(environ, start_response):" in code
+    assert "JSONDecodeError" in code             # M1 net present
+    assert "application = wsgi_app" in code
+
+
+def test_promote_picks_router_over_decoy_rival(tmp_path):
+    """With two rival WSGI modules, the engine promotes the one that references
+    the most declared route paths (the real router), not a /about-only decoy."""
+    eng = _engine(tmp_path)
+    src = _seed_split(eng.workspace.root)
+    (src / "extra.py").write_text(
+        "def wsgi_app(environ, start_response):\n"
+        "    if environ.get('PATH_INFO') == '/about':\n"
+        "        start_response('200 OK', []); return [b'x']\n"
+        "    start_response('404 Not Found', []); return [b'']\n")
+    code, keep = eng._promote_rival_entry(_SPLIT_CONTRACT)
+    assert keep == "wsgi_app"                     # the /notes,/health router wins
+    assert "from wsgi_app import" in code
+
+
+def test_split_router_is_promoted_and_boots_and_m1(tmp_path):
+    """End-to-end: the resolver declines the monolith, so _try_synthesize_entry
+    PROMOTES the rival; the assembled product boots its contract and a malformed
+    body is answered 400 (the engine's M1 net), never a 500 crash."""
+    eng = _engine(tmp_path)
+    eng.workspace.enabled = True
+    eng._constitution = [
+        "HTTP through a WSGI app (src/app.py exposes `wsgi_app`).",
+        "FROZEN: POST /notes takes {text} responds {id}; GET /notes responds "
+        "{items:[{id,text}]}; GET /health 200.",
+    ]
+    src = _seed_split(eng.workspace.root)
+    assert eng._try_synthesize_entry() is True
+    entry_src = (src / "app.py").read_text()
+    assert "engine-promoted delegation" in entry_src
+    # the assembled product really boots its contract (un-mockable subprocess)
+    ok, detail = eng._assembled_product_boots()
+    assert ok, detail
+    # M1: a malformed body is 400, not a 500 crash
+    app = _load_entry(entry_src, tmp_path / "m1.db", src)
+    status, _h, _b = _call(app, "POST", "/notes", body=b"{bad json")
+    assert status == 400
