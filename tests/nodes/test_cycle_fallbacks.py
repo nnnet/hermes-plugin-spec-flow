@@ -159,6 +159,19 @@ def test_provider_gate_is_one_universal_per_provider_gate():
     lb.configure_workers(None)
 
 
+def test_provider_timeout_is_per_provider():
+    """v098 fix: one timeout can't fit a mixed pool. A flaky free model fails
+    fast at the default; the capable workhorse gets longer for a big codegen
+    prompt over the subscription path (claude prompts ran 9k-18k chars and all
+    timed out at 75s). provider_timeout is declared per provider, same as the
+    gate, and falls back to the shared TIMEOUT default."""
+    lb.configure_workers({"provider_timeout": {"claude": 180}})
+    assert lb._provider_timeout("claude/sonnet") == 180
+    assert lb._provider_timeout("xiaomimimo/mimo-v2.5") == lb.TIMEOUT
+    lb.configure_workers(None)
+    assert lb._provider_timeout("claude/sonnet") == lb.TIMEOUT   # default
+
+
 def test_http_post_wraps_socket_timeout_as_runtimeerror():
     """Run-killer regression (live v093/v095 died here): a socket TimeoutError /
     an unreachable endpoint raised by urllib is an OSError subclass — ask() only

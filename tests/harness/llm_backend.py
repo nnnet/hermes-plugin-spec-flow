@@ -251,6 +251,20 @@ def _provider_gate(model: str) -> "threading.Semaphore | None":
     return sem
 
 
+def _provider_timeout(model: str) -> int:
+    """Per-provider per-call wall cap, declared in config alongside the gate
+    (workers.provider_timeout[<provider>]). One global timeout cannot fit a
+    mixed pool: a flaky free model must fail fast (~75s) so a dead endpoint is
+    dropped quickly, but the capable workhorse legitimately needs longer for a
+    BIG codegen prompt over a multi-hop subscription path (live v098: claude
+    prompts ran 9k-18k chars and a real generation took ~30s for 4k chars, so a
+    18k-char call needs well over 75s — at 75s every claude codegen timed out,
+    0/24, and the run fell onto weak models -> weak_implementer). Falls back to
+    the shared LLM_TIMEOUT default."""
+    pt = WORKERS_CFG.get("provider_timeout") or {}
+    return int(pt.get(_provider_of(model), pt.get("default", TIMEOUT)))
+
+
 def _budget() -> int:
     if WORKERS_CFG.get("budget") is not None:
         return int(WORKERS_CFG["budget"])
@@ -1022,13 +1036,17 @@ def _ask_claude(prompt: str, model: str, system: str | None = None,
 
 
 # ── OpenAI-compatible HTTP (Bifrost unified / OpenRouter / any) ──────────────
-def _http_post(url: str, payload: dict, headers: dict) -> tuple[int, str]:
-    """Tiny urllib POST; returns (status, body). Separated for test stubbing."""
+def _http_post(url: str, payload: dict, headers: dict,
+               timeout: "int | None" = None) -> tuple[int, str]:
+    """Tiny urllib POST; returns (status, body). Separated for test stubbing.
+    ``timeout`` is the per-call wall cap (per-provider, resolved by the caller);
+    it falls back to the shared TIMEOUT."""
+    to = timeout or TIMEOUT
     req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
                                  headers={"Content-Type": "application/json",
                                           **headers}, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=to) as resp:
             return resp.status, resp.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:                       # non-2xx
         return e.code, e.read().decode("utf-8", "replace")
@@ -1045,7 +1063,7 @@ def _http_post(url: str, payload: dict, headers: dict) -> tuple[int, str]:
         reason = getattr(e, "reason", e)
         if isinstance(e, TimeoutError) or "timed out" in str(reason).lower():
             raise RuntimeError(
-                f"openai backend timed out after {TIMEOUT}s") from e
+                f"openai backend timed out after {to}s") from e
         raise RuntimeError(f"openai backend unreachable: {reason}") from e
 
 
@@ -1134,11 +1152,12 @@ def _ask_openai(prompt: str, model: str, system: str | None = None,
         + [{"role": "user", "content": prompt}]
     payload = {"model": model, "messages": messages, **_openai_params(params)}
     provider = _provider_of(model)
+    call_timeout = _provider_timeout(model)
     last = ""
     throttled = 0
     for attempt in range(1, RETRIES + 1):
         t0 = time.monotonic()
-        status, body = _http_post(url, payload, headers)
+        status, body = _http_post(url, payload, headers, timeout=call_timeout)
         latency = round(time.monotonic() - t0, 2)
         err = ""
         if status == 200:

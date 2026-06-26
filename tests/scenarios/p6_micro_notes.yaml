@@ -245,6 +245,14 @@ workers:
   provider_concurrency:
     claude: 1
     anthropic: 1
+  # Per-provider per-call wall cap. A flaky free model fails fast at the 75s
+  # default so a dead endpoint drops quickly; the capable workhorse needs longer
+  # for a BIG codegen prompt over the subscription path (live v098: claude
+  # prompts 9k-18k chars all timed out at 75s, 0/24 -> weak fallback). 180s lets
+  # a real claude generation finish while still bailing a genuinely hung call.
+  provider_timeout:
+    claude: 180
+    anthropic: 180
   # cycle_models: false  → STRICT primary-first: each chain's first model
   # (xiaomimimo/mimo-v2.5) is tried on every call, fallbacks only on failure. We
   # want mimo to carry the run so Xiaomi traffic is consistently visible IN
