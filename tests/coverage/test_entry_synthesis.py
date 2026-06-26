@@ -264,6 +264,36 @@ def test_monolithic_entry_is_harvested_then_synthesized(tmp_path):
     assert st == 400
 
 
+def test_harden_entry_wraps_unguarded_json_loads(tmp_path):
+    """Phase 2 net: an LLM entry that parses the body without try/except must be
+    wrapped so a malformed body answers 400, never 500. Idempotent."""
+    eng = _engine(tmp_path)
+    eng.workspace.enabled = True
+    eng._product_contract = lambda: _CONTRACT      # bypass constitution parse
+    src = pathlib.Path(eng.workspace.root) / "src"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "app.py").write_text(
+        "import json\n"
+        "def wsgi_app(environ, start_response):\n"
+        "    n = int(environ.get('CONTENT_LENGTH') or 0)\n"
+        "    body = environ['wsgi.input'].read(n)\n"
+        "    json.loads(body)            # unguarded -> 500 on malformed\n"
+        "    start_response('200 OK', [('Content-Type', 'application/json')])\n"
+        "    return [b'{}']\n"
+    )
+    assert eng._harden_entry() is True
+    hardened = (src / "app.py").read_text()
+    assert "_spec_flow_hardened" in hardened and "application = wsgi_app" in hardened
+    app = _load_entry(hardened, tmp_path / "h.db", src)
+    st, _h, _b = _call(app, "POST", "/notes", body=b"not-json{")
+    assert st == 400, "hardened entry must answer 400 on malformed body, got %s" % st
+    # a well-formed body still flows through untouched
+    st, _h, _b = _call(app, "POST", "/notes", body=b'{"text": "ok"}')
+    assert st == 200
+    assert eng._harden_entry() is True             # idempotent, no double-wrap
+    assert (src / "app.py").read_text().count("_spec_flow_hardened") == 1
+
+
 def test_synth_returns_none_when_critical_route_unresolved(tmp_path):
     eng = _engine(tmp_path)
     # only a health leaf, no notes/ui/about handlers -> json_roundtrip unresolved

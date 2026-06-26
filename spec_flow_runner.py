@@ -3138,6 +3138,71 @@ application = %(callable)s
                   "malformed body -> 400", "integrate_verify", "", level=L_MILESTONE)
         return True
 
+    def _harden_entry(self) -> bool:
+        """Phase 2 — deterministic M1 safety net for an LLM-written entry (used
+        when synthesis fell back to the model). Wraps the product callable so a
+        malformed JSON body that escapes the handler is caught and answered 400,
+        never a 500 crash, and guarantees the ``application`` alias. Pure text
+        append over the existing callable — the model's routing and logic are
+        untouched — and idempotent via a marker. Returns True iff a wrap is in
+        place. Independent of model quality: closes M1 even when the model forgot
+        the try/except."""
+        ws = self.workspace
+        if not (getattr(ws, "enabled", False) and getattr(ws, "root", None)):
+            return False
+        contract = self._product_contract()
+        if not contract or not contract.get("entry"):
+            return False
+        entry = contract["entry"]
+        ep = Path(ws.root) / entry
+        if not ep.is_file():
+            return False
+        try:
+            text = ep.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return False
+        if "_spec_flow_hardened" in text:
+            return True                              # idempotent
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            return False
+        defined = {n.name for n in tree.body
+                   if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        name = next((c for c in (contract.get("callable") or
+                                 ["wsgi_app", "application", "app"])
+                     if c in defined), None)
+        if not name:
+            return False        # no callable to wrap — M3 is the assembly's job
+        suffix = (
+            "\n\n# _spec_flow_hardened — deterministic M1 net (engine, not model):"
+            "\n# a malformed request body that escapes the handler becomes 400,"
+            "\n# never a 500 crash.\n"
+            "import json as _sf_json\n"
+            "_sf_inner_%(n)s = %(n)s\n"
+            "def %(n)s(environ, start_response):\n"
+            "    try:\n"
+            "        return _sf_inner_%(n)s(environ, start_response)\n"
+            "    except _sf_json.JSONDecodeError:\n"
+            "        start_response('400 Bad Request',\n"
+            "                       [('Content-Type', 'application/json')])\n"
+            "        return [b'{\"error\": \"invalid json\"}']\n"
+            "application = %(n)s\n"
+        ) % {"n": name}
+        try:
+            ep.write_text(text + suffix, encoding="utf-8")
+        except OSError:
+            return False
+        try:
+            self.workspace.commit(f"harden: M1 net on {entry}", [entry])
+        except Exception:           # noqa: BLE001
+            pass
+        self.emit("integrate", "verifier", "spec-integrate", "L0:integrate",
+                  f"entry hardened (M1 net): {entry}",
+                  "wrapped callable: malformed body -> 400, no 500 crash",
+                  "integrate_verify", "", level=L_MILESTONE)
+        return True
+
     def _node_driver(self, node: dict, kind: str) -> _NodeDriver:
         """Build the lifecycle guard for one node under the active engine."""
         nid = str(node.get("id", "?"))
@@ -5264,8 +5329,10 @@ application = %(callable)s
         # deterministically. This guarantees M1/M2/M3 are closed on every verify,
         # not only inside the conditional reconcile remedy (which a budget-spent
         # doctor may never reach — live v089). No-op when a critical route is
-        # unresolved, leaving the LLM implementer responsible.
-        self._try_synthesize_entry()
+        # unresolved, leaving the LLM implementer responsible — in that fallback
+        # the AST hardening net (Phase 2) still guarantees malformed body -> 400.
+        if not self._try_synthesize_entry():
+            self._harden_entry()
         # run from the workspace root: paths stay short (tests/test_x.py),
         # confcutdir isolates the run from any host-project conftest.py;
         # --import-mode=importlib tolerates same-basename test files across
