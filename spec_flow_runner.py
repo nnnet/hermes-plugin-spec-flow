@@ -2400,6 +2400,15 @@ class Engine:
                   f"reconcile_check: build declared entry {entry}",
                   "re-running the implementer on the assembly spec to wire wsgi_app",
                   "integrate_verify", "", level=L_MILESTONE)
+        # DETERMINISTIC-FIRST (model-independent assembly, shared helper). The
+        # engine OWNS the WSGI glue: when every declared route resolves to a built
+        # leaf handler, synthesise the entry and skip the LLM — closing M1/M2/M3 by
+        # construction. Only a critical-route miss falls through to the implementer.
+        synth_done = False
+        if self._try_synthesize_entry():
+            _bok, _ = self._assembled_product_boots()
+            if _bok:
+                synth_done = True
         ictx = {"node": "product_entry",
                 "title": str(asm.get("title") or f"Assemble {entry}"),
                 "depth": self.depth, "workspace": ws,
@@ -2407,13 +2416,14 @@ class Engine:
         # escalate_tier remedy: rebuild the entry on the strong model tier
         if escalate:
             ictx["tier"] = "strong"
-        try:
-            self._invoke_implementer(ictx, "product_entry", module)
-        except Exception as exc:        # noqa: BLE001
-            self.emit("integrate", "doctor", "", "L0:integrate",
-                      "reconcile_check build raised", str(exc)[:140],
-                      "integrate_verify", "FAIL", level=L_MILESTONE)
-            return False
+        if not synth_done:
+            try:
+                self._invoke_implementer(ictx, "product_entry", module)
+            except Exception as exc:        # noqa: BLE001
+                self.emit("integrate", "doctor", "", "L0:integrate",
+                          "reconcile_check build raised", str(exc)[:140],
+                          "integrate_verify", "FAIL", level=L_MILESTONE)
+                return False
         boot_ok, boot_detail = self._assembled_product_boots()
         if not boot_ok:
             self.emit("integrate", "verifier", "spec-integrate", "L0:integrate",
@@ -2587,10 +2597,15 @@ class Engine:
             return None
         entry = c["entry"]
         _rivals = self._rival_wsgi_entries(entry)
-        if (not force and (Path(self.workspace.root) / entry).is_file()
-                and not _rivals):
-            return None             # a feature leaf already built the entry
-        # else: entry absent OR the product is split across a rival WSGI entry
+        _present = (Path(self.workspace.root) / entry).is_file()
+        # The entry FILE existing is not enough: a weak coder writes src/app.py
+        # but never the contract callable (live v088 — present, no wsgi_app
+        # anywhere, boot RED 'no module exposes a callable'). Skip only when the
+        # entry is present AND actually exposes a callable AND no rival splits it.
+        _has_callable = self._entry_exposes_callable(entry, c.get("callable"))
+        if (not force and _present and _has_callable and not _rivals):
+            return None             # a feature leaf already built a real entry
+        # else: entry absent, exposes no callable, OR split across a rival entry
         # (e.g. routes in src/wsgi_app.py while the declared src/app.py serves
         # nothing) — the assembly must run to consolidate into the declared entry.
         callable_name = c["callable"][0]
@@ -2627,12 +2642,14 @@ class Engine:
             "running product. Import the existing modules (do NOT reimplement "
             "them, do NOT mock them); dispatch every endpoint the contract "
             "declares to the matching handler/storage already present. "
-            "EVERY listed module that exposes an HTTP handler — a function taking "
-            "`(environ, start_response)`, e.g. `handle_*` / `*_handler` / "
-            "`route_*` — is a delivered feature: the entry MUST import and route "
-            "it to its endpoint (infer the path from the handler name, e.g. a "
-            "`handle_status` function -> `GET /status`). Leave NO built handler "
-            "unrouted."
+            "EVERY listed module that exposes an HTTP handler is a delivered "
+            "feature the entry MUST import and route to its endpoint (infer the "
+            "path from the handler name, e.g. a `handle_status` function -> "
+            "`GET /status`); leave NO built handler unrouted. A handler is EITHER "
+            "a high-level business function `def name(payload, query) -> "
+            "(status:int, body:dict|str)` (PREFERRED — the entry parses the body, "
+            "rejecting a malformed JSON body with 400, and serialises the result) "
+            "OR a raw WSGI function `(environ, start_response)`; adapt both."
             + boot_line + " Standard library only.\n\n"
             + (api + "\n\n" if api else "")
             + "### Contract (binding)\n"
@@ -2748,6 +2765,378 @@ class Engine:
             if hit:
                 rivals.append((py.name, hit))
         return rivals
+
+    def _entry_exposes_callable(self, entry: str, callables: list) -> bool:
+        """Pure-AST: does the entry FILE expose a module-level callable named in
+        ``callables`` (def or assignment)? A weak coder sometimes writes the
+        declared entry file but never the contract callable (live v088: src/app.py
+        present, no module-level wsgi_app anywhere) — the boot-gate then RED-s with
+        'no module exposes a callable'. Detecting an entry-without-callable lets
+        the assembly run to synthesise/repair it, not skip it. No import, no exec."""
+        p = Path(self.workspace.root) / entry
+        if not p.is_file():
+            return False
+        want = set(callables or ["wsgi_app", "application", "app"])
+        try:
+            tree = ast.parse(p.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, SyntaxError):
+            return True              # unpar_seable: not our call to overwrite
+        for n in tree.body:
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                    and n.name in want:
+                return True
+            if isinstance(n, ast.Assign) and any(
+                    isinstance(t, ast.Name) and t.id in want for t in n.targets):
+                return True
+        return False
+
+    # method-name synonyms used to score a route -> handler match (1a)
+    _METHOD_SYNONYMS = {
+        "GET": ("get", "list", "fetch", "read", "index", "show", "view", "all"),
+        "POST": ("post", "create", "add", "new", "store", "submit", "make"),
+        "PUT": ("put", "update", "edit", "set", "replace"),
+        "PATCH": ("patch", "update", "edit", "modify"),
+        "DELETE": ("delete", "remove", "destroy", "drop"),
+    }
+
+    def _declared_route_set(self, contract: dict) -> list:
+        """The concrete (method, path) routes the assembled entry must serve,
+        derived from the model-independent contract: the boot triple plus every
+        extra declared GET. Templated paths are already excluded upstream. Order
+        is dedup-stable (json_roundtrip first so its handlers anchor the table)."""
+        boot = contract.get("boot", {}) or {}
+        out: list = []
+        rt = boot.get("json_roundtrip")
+        if rt:
+            out += [("POST", rt), ("GET", rt)]
+        if boot.get("html_route"):
+            out.append(("GET", boot["html_route"]))
+        if boot.get("ok_route"):
+            out.append(("GET", boot["ok_route"]))
+        for r in (contract.get("routes") or []):
+            try:
+                out.append((str(r[0]).upper(), str(r[1])))
+            except (IndexError, TypeError):
+                continue
+        seen: set = set()
+        uniq: list = []
+        for mp in out:
+            if mp not in seen:
+                seen.add(mp)
+                uniq.append(mp)
+        return uniq
+
+    def _resolve_route_handlers(self, contract: dict) -> tuple:
+        """Pure-AST resolver: map each declared (method, path) to the best leaf
+        handler already built under src/. A handler is a module-level function
+        whose signature is NOT raw WSGI ``(environ, start_response)`` — i.e. a
+        high-level ``(payload, query) -> (status, body)`` business function (the
+        shape leaves converge on; live v088 had all six leaves in this shape but
+        no entry to dispatch them). Scoring: resource token in name (+3), method
+        synonym in name (+2), 2-arg signature (+1). Returns
+        ``(mapping, unresolved)`` where mapping is
+        ``{(method, path): (module_stem, func, abi)}`` (abi in {"pq","p","none"})
+        and unresolved is the list of (method, path) with no candidate. No import,
+        no execution — independent of model quality."""
+        root = Path(self.workspace.root) / "src"
+        entry_name = Path(contract.get("entry") or "").name
+        # collect candidate functions across all non-entry modules
+        cands: list = []                 # (stem, name, abi, lowname)
+        if root.is_dir():
+            for py in sorted(root.glob("*.py")):
+                if py.name in (entry_name, "__init__.py"):
+                    continue
+                try:
+                    tree = ast.parse(
+                        py.read_text(encoding="utf-8", errors="replace"))
+                except (OSError, SyntaxError):
+                    continue
+                for n in tree.body:
+                    if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        continue
+                    params = [a.arg for a in n.args.args]
+                    if params[:2] == ["environ", "start_response"]:
+                        continue          # raw WSGI handler — not a leaf business fn
+                    if n.name.startswith("__"):
+                        continue
+                    abi = "pq" if len(params) >= 2 else (
+                        "p" if len(params) == 1 else "none")
+                    cands.append((py.stem, n.name, abi, n.name.lower()))
+        mapping: dict = {}
+        unresolved: list = []
+        for method, path in self._declared_route_set(contract):
+            seg = path.rstrip("/").rsplit("/", 1)[-1]
+            res = "".join(ch for ch in seg.lower()
+                          if ch.isalnum())          # resource token
+            syn = self._METHOD_SYNONYMS.get(method, ())
+            # synonyms of OTHER HTTP methods — a name carrying one of these while
+            # serving a different method is a strong negative signal (e.g.
+            # `get_notes` must NOT win `POST /notes` just by containing "notes").
+            other_syn = tuple(s for m, syns in self._METHOD_SYNONYMS.items()
+                              if m != method for s in syns if s not in syn)
+            best = None
+            best_score = 0
+            for stem, name, abi, low in cands:
+                score = 0
+                if res and res in low:
+                    score += 3
+                if res and res.rstrip("s") and res.rstrip("s") in low:
+                    score += 1                       # singular/plural tolerance
+                if any(s in low for s in syn):
+                    score += 3                       # matches THIS method
+                if any(("_" + s) in low or low.startswith(s) or low.endswith(s)
+                       for s in other_syn):
+                    score -= 3                       # carries a CONFLICTING method
+                if abi == "pq":
+                    score += 1
+                if not res and name.lower() in (
+                        "index", "home", "root", "app", "main"):
+                    score += 2
+                if score > best_score:
+                    best_score, best = score, (stem, name, abi)
+            # require a real signal (resource OR method synonym matched), not just
+            # the +1 signature bonus, to avoid wiring an unrelated function
+            if best and best_score >= 2:
+                mapping[(method, path)] = best
+            else:
+                unresolved.append((method, path))
+        return mapping, unresolved
+
+    def _synthesize_entry_code(self, contract: dict, mapping: dict,
+                               unresolved: list) -> "Optional[str]":
+        """Deterministically emit the product entry: a stdlib-only WSGI router
+        that imports the resolved leaf handlers and dispatches the declared
+        contract. The engine — not the model — owns the HTTP glue (body parsing
+        with a malformed->400 guard, routing of EVERY declared path, 404/405,
+        serialization, the contract callable). This makes assembly independent of
+        model quality: M1 (malformed->500), M2 (late route not wired) and M3 (no
+        entry callable) cannot occur because the model never writes this layer.
+
+        Returns the source string, or ``None`` when a CRITICAL route (the
+        json_roundtrip pair, an HTML page, or any extra declared route) has no
+        resolved handler — then the caller honestly falls back to the LLM
+        implementer rather than fabricating business logic. An unresolved health
+        ``ok_route`` is NOT critical: a trivial 200 is synthesised inline."""
+        boot = contract.get("boot", {}) or {}
+        callable_name = (contract.get("callable") or ["wsgi_app"])[0]
+        ok_route = boot.get("ok_route")
+        unresolved_set = set(unresolved)
+        # a missing health route is fine (inline 200); any other miss is critical
+        critical_miss = [mp for mp in unresolved_set
+                         if not (mp == ("GET", ok_route))]
+        if critical_miss:
+            return None
+        # build deterministic import aliases + route table
+        alias_for: dict = {}
+        imports: list = []
+        for i, (stem, name, _abi) in enumerate(
+                sorted(set(mapping.values()))):
+            alias = "_h%d" % i
+            alias_for[(stem, name)] = alias
+            imports.append("from %s import %s as %s" % (stem, name, alias))
+        rows: list = []
+        for (method, path), (stem, name, abi) in sorted(mapping.items()):
+            rows.append('    (%r, %r): (%r, %s),'
+                        % (method, path, abi, alias_for[(stem, name)]))
+        if ok_route and ("GET", ok_route) in unresolved_set:
+            rows.append('    (%r, %r): ("health", None),' % ("GET", ok_route))
+        routes_block = "\n".join(rows)
+        imports_block = "\n".join(imports)
+        tmpl = '''\
+"""Product entry — generated deterministically by the spec-flow engine.
+
+The business logic lives in the imported leaf modules; this router only parses
+each request, dispatches the declared routes, and serialises the response. Do
+not hand-edit: the engine owns the HTTP glue so assembly never depends on model
+quality (malformed bodies are rejected with 400, every declared route is wired).
+"""
+import json
+from urllib.parse import parse_qs
+
+%(imports)s
+
+_STATUS = {200: "200 OK", 201: "201 Created", 204: "204 No Content",
+           400: "400 Bad Request", 404: "404 Not Found",
+           405: "405 Method Not Allowed", 500: "500 Internal Server Error"}
+
+
+def _status_line(code):
+    try:
+        code = int(code)
+    except (TypeError, ValueError):
+        code = 200
+    return _STATUS.get(code, "%%d OK" %% code)
+
+
+_ROUTES = {
+%(routes)s
+}
+
+
+def _send(start_response, code, body):
+    if isinstance(body, (dict, list)):
+        payload = json.dumps(body).encode("utf-8")
+        ctype = "application/json"
+    elif isinstance(body, (bytes, bytearray)):
+        payload, ctype = bytes(body), "text/html; charset=utf-8"
+    else:
+        text = "" if body is None else str(body)
+        ctype = ("text/html; charset=utf-8"
+                 if text.lstrip().startswith("<") else "text/plain; charset=utf-8")
+        payload = text.encode("utf-8")
+    start_response(_status_line(code), [("Content-Type", ctype)])
+    return [payload]
+
+
+def %(callable)s(environ, start_response):
+    method = (environ.get("REQUEST_METHOD") or "GET").upper()
+    path = environ.get("PATH_INFO") or "/"
+    query = parse_qs(environ.get("QUERY_STRING") or "")
+    try:
+        length = int(environ.get("CONTENT_LENGTH") or 0)
+    except (TypeError, ValueError):
+        length = 0
+    raw = environ["wsgi.input"].read(length) if length > 0 else b""
+    payload = {}
+    if raw:
+        try:
+            payload = json.loads(raw)
+        except Exception:                       # malformed body -> 400, never 500
+            return _send(start_response, 400, {"error": "invalid json"})
+    handler = _ROUTES.get((method, path))
+    if handler is None:
+        if any(p == path for (_m, p) in _ROUTES):
+            return _send(start_response, 405, {"error": "method not allowed"})
+        return _send(start_response, 404, {"error": "not found"})
+    abi, fn = handler
+    try:
+        if abi == "health":
+            status, body = 200, {"status": "ok"}
+        elif abi == "pq":
+            status, body = fn(payload, query)
+        elif abi == "p":
+            status, body = fn(payload)
+        else:
+            status, body = fn()
+    except Exception as exc:                    # a leaf bug -> clean 500, no crash
+        return _send(start_response, 500, {"error": "handler failed: %%s" %% exc})
+    return _send(start_response, status, body)
+
+
+application = %(callable)s
+'''
+        return tmpl % {"imports": imports_block, "routes": routes_block,
+                       "callable": callable_name}
+
+    def _harvest_entry_handlers(self, contract: dict) -> bool:
+        """Relocate a MONOLITHIC entry's business logic into a sibling leaf module
+        so the engine can own the entry as a pure router that imports it. A weak
+        decomposer sometimes writes every handler INSIDE src/app.py (live v089:
+        handle_notes_* / handle_health all inside the entry) instead of separate
+        leaves — the resolver, which excludes the entry, then finds nothing to
+        wire. This rewrites the entry's non-router functions (imports, db helpers,
+        `(payload, query)` handlers) into ``src/_product_logic.py``, dropping the
+        old WSGI callable, so a re-resolve sees them as a normal leaf. Returns True
+        iff a harvest module with at least one handler was written. Pure AST."""
+        root = Path(self.workspace.root) / "src"
+        entry = contract.get("entry") or ""
+        ep = Path(self.workspace.root) / entry
+        if not ep.is_file() or not hasattr(ast, "unparse"):
+            return False
+        try:
+            tree = ast.parse(ep.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, SyntaxError):
+            return False
+        callables = set(contract.get("callable") or
+                        ["wsgi_app", "application", "app"])
+        keep: list = []
+        has_handler = False
+        for n in tree.body:
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if n.name in callables:
+                    continue                          # drop the old router fn
+                params = [a.arg for a in n.args.args]
+                if params[:2] == ["environ", "start_response"]:
+                    continue                          # drop raw-WSGI glue
+                keep.append(n)
+                if params:
+                    has_handler = True
+            elif isinstance(n, ast.Assign) and any(
+                    isinstance(t, ast.Name) and t.id in callables
+                    for t in n.targets):
+                continue                              # drop `application = wsgi_app`
+            else:
+                keep.append(n)                        # imports, constants, helpers
+        if not has_handler:
+            return False
+        mod = root / "_product_logic.py"
+        try:
+            body = "\n".join(ast.unparse(n) for n in keep)
+            mod.write_text(
+                '"""Harvested product logic — relocated by the engine from a '
+                'monolithic\nentry so the entry can be a pure generated router. '
+                'Business logic only."""\n' + body + "\n", encoding="utf-8")
+        except (OSError, ValueError):
+            return False
+        return True
+
+    def _try_synthesize_entry(self) -> bool:
+        """Deterministically (re)build the product entry from the contract when
+        EVERY declared route resolves to a built leaf handler. The engine — not
+        the model — owns the WSGI glue, so assembly is independent of model
+        quality: M1 (malformed->400), M2 (every route wired), M3 (callable always
+        present) cannot occur. Returns True iff a router is in place. Idempotent
+        (pure-AST resolve; skips the write when the entry already equals the
+        synthesised source) and safe to call on every integrate verify. Falls back
+        (returns False) only when a critical route has no handler — then the LLM
+        implementer stays responsible, never a fabricated product."""
+        ws = self.workspace
+        if not (getattr(ws, "enabled", False) and getattr(ws, "root", None)):
+            return False
+        contract = self._product_contract()
+        if not contract or not contract.get("entry"):
+            return False
+        harvested = False
+        try:
+            mapping, unresolved = self._resolve_route_handlers(contract)
+            code = self._synthesize_entry_code(contract, mapping, unresolved)
+            if not code and self._harvest_entry_handlers(contract):
+                # monolithic entry — handlers relocated to a leaf, re-resolve
+                harvested = True
+                mapping, unresolved = self._resolve_route_handlers(contract)
+                code = self._synthesize_entry_code(contract, mapping, unresolved)
+        except Exception:               # noqa: BLE001 — resolver is best-effort
+            return False
+        if not code:
+            return False
+        if harvested:
+            # keep `from <entry> import <handler>` working for any unit tests the
+            # model wrote against the (now relocated) monolith: re-export its names.
+            code = code.replace(
+                "from urllib.parse import parse_qs\n",
+                "from urllib.parse import parse_qs\n"
+                "from _product_logic import *  # noqa: F401,F403 re-export harvested\n",
+                1)
+        entry = contract["entry"]
+        try:
+            ep = Path(ws.root) / entry
+            if ep.is_file() and ep.read_text(
+                    encoding="utf-8", errors="replace") == code:
+                return True             # already the synthesised router
+            ep.parent.mkdir(parents=True, exist_ok=True)
+            ep.write_text(code, encoding="utf-8")
+        except OSError:
+            return False
+        try:
+            self.workspace.commit(
+                f"build: synthesize {entry} (deterministic assembly)", [entry])
+        except Exception:               # noqa: BLE001 — boot reads the work tree
+            pass
+        self.emit("integrate", "verifier", "spec-integrate", "L0:integrate",
+                  f"entry synthesized deterministically: {entry}",
+                  "engine-owned WSGI router (no LLM): all declared routes wired, "
+                  "malformed body -> 400", "integrate_verify", "", level=L_MILESTONE)
+        return True
 
     def _node_driver(self, node: dict, kind: str) -> _NodeDriver:
         """Build the lifecycle guard for one node under the active engine."""
@@ -4869,6 +5258,14 @@ class Engine:
         if not tests_dir.exists():
             return
         self._derive_smoke_contract()
+        # DETERMINISTIC-FIRST ASSEMBLY (model-independent). Before the suite and
+        # the boot-gate, let the ENGINE own the product entry: if every declared
+        # route resolves to a built leaf handler, (re)synthesise the WSGI router
+        # deterministically. This guarantees M1/M2/M3 are closed on every verify,
+        # not only inside the conditional reconcile remedy (which a budget-spent
+        # doctor may never reach — live v089). No-op when a critical route is
+        # unresolved, leaving the LLM implementer responsible.
+        self._try_synthesize_entry()
         # run from the workspace root: paths stay short (tests/test_x.py),
         # confcutdir isolates the run from any host-project conftest.py;
         # --import-mode=importlib tolerates same-basename test files across
