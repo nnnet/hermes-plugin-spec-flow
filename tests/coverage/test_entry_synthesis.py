@@ -358,25 +358,76 @@ def test_json_parse_unguarded_detector():
     assert sft.json_parse_unguarded(leaf) is None
 
 
-def test_neutralize_rival_entries_strips_duplicate_app(tmp_path):
+def test_neutralize_rival_entries_delegates_duplicate_app(tmp_path):
     """Phase 3 split-elimination: a second module exposing a WSGI callable beside
-    the declared entry (live v089 notes_api.py) is stripped of that callable while
-    its business functions are kept; the declared entry is left untouched."""
+    the declared entry (live v089 notes_api.py) has that callable REPLACED by a
+    wrapper delegating to the sole declared entry — not hard-stripped — so a
+    companion test importing it keeps a working symbol. Business functions are
+    kept, the declared entry is untouched, and the neutralised module is stamped
+    with the sentinel so the route-redeclare gate no longer flags it."""
     eng = _engine(tmp_path)
     src = pathlib.Path(eng.workspace.root) / "src"
     src.mkdir(parents=True, exist_ok=True)
     (src / "app.py").write_text(
-        "def wsgi_app(environ, start_response):\n    return []\n")
+        "def wsgi_app(environ, start_response):\n    return []\n"
+        "application = wsgi_app\n")
     (src / "notes_api.py").write_text(
         "def get_notes(payload, query):\n    return (200, {'items': []})\n"
         "def wsgi_app(environ, start_response):\n    return []\n"
         "application = wsgi_app\n")
+    # before: notes_api is a live rival
+    assert any(f == "notes_api.py"
+               for f, _ in eng._rival_wsgi_entries("src/app.py"))
     assert eng._neutralize_rival_entries("src/app.py") == 1
     rival = (src / "notes_api.py").read_text()
-    assert "def wsgi_app" not in rival
-    assert "application = wsgi_app" not in rival
-    assert "def get_notes" in rival          # business logic preserved
-    assert "def wsgi_app" in (src / "app.py").read_text()   # entry untouched
+    assert "def wsgi_app(environ, start_response):" in rival   # still importable
+    assert "from app import application" in rival              # delegates to entry
+    assert "def get_notes" in rival                            # business kept
+    assert sfr._NEUTRALIZED_SENTINEL in rival                  # stamped
+    assert "def wsgi_app" in (src / "app.py").read_text()      # entry untouched
+    # after: the sentinel makes the gate skip our own delegation stub
+    assert not any(f == "notes_api.py"
+                   for f, _ in eng._rival_wsgi_entries("src/app.py"))
+
+
+def test_neutralized_rival_companion_test_still_imports(tmp_path):
+    """Live v100 regression: the engine neutralised ``health_wsgi``'s ``wsgi_app``
+    while ``tests/test_health_wsgi.py`` did ``from health_wsgi import wsgi_app`` —
+    a hard strip made that an ImportError, RED-ing the assembled product on a
+    phantom ``weak_implementer``. After neutralisation the symbol must still
+    import AND delegate to the real entry."""
+    eng = _engine(tmp_path)
+    src = pathlib.Path(eng.workspace.root) / "src"
+    src.mkdir(parents=True, exist_ok=True)
+    # the sole declared entry returns a recognisable body
+    (src / "app.py").write_text(
+        "def application(environ, start_response):\n"
+        "    start_response('200 OK', [('Content-Type', 'text/plain')])\n"
+        "    return [b'from-entry']\n"
+        "wsgi_app = application\n")
+    (src / "health_wsgi.py").write_text(
+        "def check():\n    return True\n"
+        "def wsgi_app(environ, start_response):\n"
+        "    start_response('200 OK', [])\n"
+        "    return [b'rival']\n")
+    assert eng._neutralize_rival_entries("src/app.py") == 1
+    sys.path.insert(0, str(src))
+    try:
+        for m in ("health_wsgi", "app"):
+            sys.modules.pop(m, None)
+        mod = importlib.import_module("health_wsgi")
+        assert hasattr(mod, "wsgi_app")           # import does NOT raise
+        captured = {}
+        mod.wsgi_app({"REQUEST_METHOD": "GET", "PATH_INFO": "/health"},
+                     lambda s, h: captured.setdefault("s", s))
+        # the wrapper forwarded to the entry, not the old rival body
+        assert captured["s"] == "200 OK"
+        assert mod.check() is True                # business logic still there
+    finally:
+        for m in ("health_wsgi", "app"):
+            sys.modules.pop(m, None)
+        if str(src) in sys.path:
+            sys.path.remove(str(src))
 
 
 def test_synth_returns_none_when_critical_route_unresolved(tmp_path):

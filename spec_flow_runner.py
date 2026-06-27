@@ -358,6 +358,11 @@ DEFAULT_VERBOSITY = int(os.environ.get("SPEC_FLOW_RUN_VERBOSITY", str(L_STEP)))
 DEPTHS = {"spec": 1, "scaffold": 2, "verify": 3, "execute": 4, "product": 5}
 DEPTH_SPEC, DEPTH_SCAFFOLD, DEPTH_VERIFY, DEPTH_EXECUTE, DEPTH_PRODUCT = 1, 2, 3, 4, 5
 
+# Docstring prefix stamped on a module whose rival WSGI callable the engine has
+# replaced with a delegating wrapper. Both the route-redeclare gate and the
+# neutraliser key off it so a neutralised module is never re-flagged as a rival.
+_NEUTRALIZED_SENTINEL = "Rival WSGI entry neutralised by the engine"
+
 
 def _depth_int(d: Any) -> int:
     if isinstance(d, int):
@@ -826,6 +831,50 @@ def _amend_routes(text: str) -> set:
     return {r for r in out if len(r) > 1}
 
 
+_HTTP_VERBS = "GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS"
+
+
+def _served_routes(body: str) -> set:
+    """HTTP routes a module actually SERVES, established from CODE DISPATCH only
+    — the OWNERSHIP counterpart to ``_amend_routes`` (which picks up any route
+    MENTION: a quoted literal, a comment, an error string, or a "GET /ui" phrase
+    in spec prose). A route counts as served only with real dispatch evidence:
+    a ('METHOD','/path') routes-table key, a @route('/path') decorator, or a
+    path-variable test against the literal (``path == '/path'``,
+    ``path.startswith('/path')``, ``path in (...)``).
+
+    Crucially a "METHOD /path" phrase in PROSE is NOT served — a sibling spec
+    routinely names a neighbour's route while describing the system. Counting
+    that mis-credits the sibling as the owner: live v101/v102 — '/ui' appeared in
+    the health module's spec text, so the web_ui late requirement was rejected as
+    an empty delta (route-redeclare), the UI leaf was never built, and the
+    product served GET /ui -> 404. A route only PLANNED in prose is not yet
+    served; the new spec may be the one that implements it, so it must not be
+    pre-empted."""
+    out: set = set()
+    # ('METHOD', '/path')  — routes-table tuple key
+    out |= {m.rstrip("/") for m in re.findall(
+        r"""['"](?:%s)['"]\s*,\s*['"](/[A-Za-z0-9_./-]+)['"]""" % _HTTP_VERBS,
+        body, re.I)}
+    # @app.route('/path') / .add_url_rule('/path', ...)
+    out |= {m.rstrip("/") for m in re.findall(
+        r"""\.(?:route|add_url_rule)\(\s*['"](/[A-Za-z0-9_./-]+)['"]""", body)}
+    # path-variable dispatch: path == '/p' | path.startswith('/p')
+    out |= {m.rstrip("/") for m in re.findall(
+        r"""(?:path|path_info)\b[^\n]{0,40}?(?:==|!=|\.startswith\()\s*"""
+        r"""['"](/[A-Za-z0-9_./-]+)['"]""", body, re.I)}
+    out |= {m.rstrip("/") for m in re.findall(
+        r"""['"](/[A-Za-z0-9_./-]+)['"]\s*==[^\n]{0,40}?\b(?:path|path_info)\b""",
+        body, re.I)}
+    # path in ('/a', '/b', ...) — pull every literal from the membership tuple
+    for grp in re.findall(
+            r"""(?:path|path_info)\b[^\n]{0,20}?\bin\b\s*[\([{]([^)\]}\n]*)""",
+            body, re.I):
+        out |= {m.rstrip("/") for m in re.findall(
+            r"""['"](/[A-Za-z0-9_./-]+)['"]""", grp)}
+    return {r for r in out if len(r) > 1}
+
+
 def _amend_symbols(body: str) -> set:
     """Names a module DEFINES (functions/classes) — lowercased + split into
     sub-tokens so `render_notes_page` contributes {render, notes, page}."""
@@ -1013,7 +1062,11 @@ def _dup_surface_findings(spec_text: str, modules: list) -> list:
     all_syms: set = set()
     per_mod = []
     for rel, _stem, body in modules:
-        r, s = _amend_routes(body), _amend_symbols(body)
+        # OWNERSHIP side: a module owns a route only if it actually SERVES it
+        # (dispatch evidence), not merely names it in prose/comment/error text —
+        # otherwise a stray '/ui' literal makes it the false owner and blocks a
+        # legitimate late requirement as an empty delta (live v101).
+        r, s = _served_routes(body), _amend_symbols(body)
         per_mod.append((rel, r, s, r | s))
         all_routes |= r
         all_syms |= s
@@ -2748,6 +2801,13 @@ class Engine:
                                               errors="replace"))
             except (OSError, SyntaxError):
                 continue
+            # A module already neutralised by the engine keeps a delegating
+            # wrapper (so its companion test still imports a working callable);
+            # it is NOT a live rival entry — skip it or the route-redeclare gate
+            # would trip forever on our own delegation stub.
+            doc = ast.get_docstring(tree) or ""
+            if doc.startswith(_NEUTRALIZED_SENTINEL):
+                continue
             hit = None
             for n in tree.body:
                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -3123,12 +3183,22 @@ application = %(callable)s
         rival, keeping its business functions (which the synthesized router may
         import). ``keep`` is a set of module STEMS to leave intact — used by the
         promote path, where the declared entry DELEGATES to a rival's callable, so
-        that rival must keep exposing it. Pure AST; returns the count neutralised."""
+        that rival must keep exposing it.
+
+        The rival's OWN callable is not deleted but REPLACED by a delegating
+        wrapper that forwards to the sole declared entry at call time (live v100:
+        ``tests/test_health_wsgi.py`` does ``from health_wsgi import wsgi_app`` — a
+        hard strip turned that into an ImportError, RED-ing the assembled product
+        on a phantom ``weak_implementer``). The wrapper imports the entry lazily
+        (no module-level cycle) and the module is stamped with the sentinel so the
+        route-redeclare gate skips it instead of re-flagging our own stub. Pure
+        AST; returns the count neutralised."""
         if not hasattr(ast, "unparse"):
             return 0
         n = 0
         names = {"wsgi_app", "application", "app"}
         keep = keep or set()
+        entry_stem = Path(entry).stem
         for fname, _sym in self._rival_wsgi_entries(entry):
             if Path(fname).stem in keep:
                 continue                # the entry delegates to this one — keep it
@@ -3139,29 +3209,42 @@ application = %(callable)s
                 tree = ast.parse(p.read_text(encoding="utf-8", errors="replace"))
             except (OSError, SyntaxError):
                 continue
-            keep: list = []
-            changed = False
+            kept: list = []
+            dropped: list = []          # names of WSGI callables we replaced
             for node in tree.body:
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     params = [a.arg for a in node.args.args]
                     if node.name in names or \
                             params[:2] == ["environ", "start_response"]:
-                        changed = True
+                        if node.name not in dropped:
+                            dropped.append(node.name)
                         continue            # drop the rival WSGI callable
-                elif isinstance(node, ast.Assign) and any(
-                        isinstance(t, ast.Name) and t.id in names
-                        for t in node.targets):
-                    changed = True
-                    continue                # drop `application = wsgi_app`
-                keep.append(node)
-            if not changed:
+                elif isinstance(node, ast.Assign):
+                    hit = [t.id for t in node.targets
+                           if isinstance(t, ast.Name) and t.id in names]
+                    if hit:
+                        for nm in hit:
+                            if nm not in dropped:
+                                dropped.append(nm)
+                        continue            # drop `application = wsgi_app`
+                kept.append(node)
+            if not dropped:
                 continue
+            # Re-expose each dropped name as a wrapper delegating to the sole
+            # entry, so a companion test importing it still gets a working app.
+            stubs = "\n\n".join(
+                "def %s(environ, start_response):\n"
+                "    from %s import application as _entry\n"
+                "    return _entry(environ, start_response)" % (nm, entry_stem)
+                for nm in dropped)
             try:
-                body = "\n".join(ast.unparse(x) for x in keep)
+                body = "\n".join(ast.unparse(x) for x in kept)
                 p.write_text(
-                    '"""Rival WSGI entry neutralised by the engine — business '
-                    'logic kept,\nthe duplicate app callable removed so the '
-                    'declared entry is the sole one."""\n' + body + "\n",
+                    '"""%s — business logic kept; the duplicate\n'
+                    'app callable now delegates to the sole declared entry."""\n'
+                    % _NEUTRALIZED_SENTINEL
+                    + (body + "\n" if body.strip() else "")
+                    + "\n" + stubs + "\n",
                     encoding="utf-8")
                 n += 1
             except (OSError, ValueError):
