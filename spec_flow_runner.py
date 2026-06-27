@@ -875,6 +875,21 @@ def _served_routes(body: str) -> set:
     return {r for r in out if len(r) > 1}
 
 
+def _canonical_handler_symbol(method: str, path: str) -> str:
+    """The ONE handler-function name the engine DECLARES for a route, instead of
+    guessing the binding from whatever the model happened to call it. Derived
+    deterministically from method+path so the same route always maps to the same
+    symbol: GET /ui -> get_ui, POST /notes -> post_notes, GET /health ->
+    get_health, GET / -> get_root, GET /notes/{id} -> get_notes (template
+    segments dropped). The decomposition spec orders this exact name and the
+    resolver looks it up first — the name stops being a thing anyone infers."""
+    segs = [s for s in re.split(r"[/\-.]", (path or "").strip("/"))
+            if s and not s.startswith("{") and not s.startswith(":")]
+    base = "_".join(re.sub(r"[^a-z0-9]", "", s.lower()) for s in segs)
+    base = re.sub(r"_+", "_", base).strip("_") or "root"
+    return "%s_%s" % ((method or "GET").strip().lower() or "get", base)
+
+
 def _amend_symbols(body: str) -> set:
     """Names a module DEFINES (functions/classes) — lowercased + split into
     sub-tokens so `render_notes_page` contributes {render, notes, page}."""
@@ -2688,6 +2703,24 @@ class Engine:
         # the build directive goes into spec_markdown; the title is the heading.
         boot_line = (f" The product must boot in a fresh process and answer "
                      f"`GET {ok_route}` -> 200." if ok_route else "")
+        # ENGINE-DECLARED route -> handler binding: the canonical handler name
+        # for every declared route, so nobody has to GUESS the binding from a
+        # name. The resolver looks these exact names up first; the spec orders
+        # them so a built leaf and the entry agree on one symbol per route.
+        _rmap = self._declared_route_set(c)
+        _rmap_block = ""
+        if _rmap:
+            _rmap_block = (
+                "\n\n### Route -> handler binding (engine-declared, binding)\n"
+                "Name each handler EXACTLY as listed and expose it at module "
+                "level — the entry imports it by this name:\n"
+                + "\n".join(
+                    "- `%s %s` -> `def %s(payload, query)`"
+                    % (m, p, _canonical_handler_symbol(m, p))
+                    for m, p in _rmap)
+                + "\n\nStatus semantics (binding): unknown path -> 404; a known "
+                  "path with an unsupported method -> 405; a malformed JSON body "
+                  "-> 400.")
         spec_md = (
             "## ASSEMBLE THE PRODUCT ENTRY (engine-required, binding)\n\n"
             f"Create `{entry}` exposing a module-level `{callable_name}` callable "
@@ -2696,9 +2729,9 @@ class Engine:
             "them, do NOT mock them); dispatch every endpoint the contract "
             "declares to the matching handler/storage already present. "
             "EVERY listed module that exposes an HTTP handler is a delivered "
-            "feature the entry MUST import and route to its endpoint (infer the "
-            "path from the handler name, e.g. a `handle_status` function -> "
-            "`GET /status`); leave NO built handler unrouted. A handler is EITHER "
+            "feature the entry MUST import and route to its endpoint per the "
+            "route->handler binding below; leave NO built handler unrouted. "
+            "A handler is EITHER "
             "a high-level business function `def name(payload, query) -> "
             "(status:int, body:dict|str)` (PREFERRED — the entry parses the body, "
             "rejecting a malformed JSON body with 400, and serialises the result) "
@@ -2712,6 +2745,7 @@ class Engine:
             # real endpoints the assembled entry must route, else the boot-gate
             # 404s them (the v054 RED: app.py existed but never routed /ping).
             + _standing_lines
+            + _rmap_block
             # CONSOLIDATE a split product: if the coder put a second WSGI app in
             # another module, fold its routes into the SINGLE declared entry so
             # the boot-gate (which loads the declared entry) serves the whole
@@ -2948,6 +2982,18 @@ class Engine:
         mapping: dict = {}
         unresolved: list = []
         for method, path in self._declared_route_set(contract):
+            # EXPLICIT BINDING FIRST: the engine declares one canonical handler
+            # symbol per route and the decomposition spec orders that exact name.
+            # If a leaf defines it, wire it directly — the binding is read, not
+            # guessed. The heuristics below are only the fallback for when the
+            # model deviated from the ordered name.
+            want = _canonical_handler_symbol(method, path)
+            explicit = next(((stem, name, abi)
+                             for stem, name, abi, low, _ish in cands
+                             if name == want), None)
+            if explicit:
+                mapping[(method, path)] = explicit
+                continue
             seg = path.rstrip("/").rsplit("/", 1)[-1]
             res = "".join(ch for ch in seg.lower()
                           if ch.isalnum())          # resource token

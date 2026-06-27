@@ -139,6 +139,38 @@ def test_resolver_maps_every_declared_route(tmp_path):
     assert mapping[("POST", "/notes")][1] != mapping[("GET", "/notes")][1]
 
 
+def test_canonical_handler_symbol_is_deterministic():
+    f = sfr._canonical_handler_symbol
+    assert f("GET", "/ui") == "get_ui"
+    assert f("POST", "/notes") == "post_notes"
+    assert f("GET", "/health") == "get_health"
+    assert f("GET", "/") == "get_root"
+    assert f("GET", "/notes/{id}") == "get_notes"        # template seg dropped
+    assert f("DELETE", "/orders/{oid}/items") == "delete_orders_items"
+
+
+def test_resolver_reads_the_declared_binding_before_guessing(tmp_path):
+    """Root fix for the name-guessing: the engine declares one canonical handler
+    symbol per route; if the leaf defines it, the resolver wires it directly,
+    regardless of any same-resource distractor that token-matching might score
+    higher. The binding is read, not inferred."""
+    eng = _engine(tmp_path)
+    src = pathlib.Path(eng.workspace.root) / "src"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "ui.py").write_text(
+        "def get_ui(payload, query):\n"
+        "    return (200, {'html': '<!DOCTYPE html><html></html>'})\n"
+        "def render_ui_legacy(payload, query):\n"
+        "    return (200, {'html': '<html>old</html>'})\n")
+    contract = {
+        "entry": "src/app.py", "callable": ["wsgi_app"],
+        "boot": {"html_route": "/ui"}, "routes": [["GET", "/ui"]],
+    }
+    mapping, unresolved = eng._resolve_route_handlers(contract)
+    assert mapping[("GET", "/ui")][1] == "get_ui"        # declared name wins
+    assert not unresolved
+
+
 def test_synth_entry_exposes_every_declared_callable_alias(tmp_path):
     """Live v103: a generated test imported the contract callable by name
     (`from app import app`) while the synthesized entry exposed only wsgi_app +
