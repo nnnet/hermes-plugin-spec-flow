@@ -2906,15 +2906,17 @@ class Engine:
         no execution — independent of model quality."""
         root = Path(self.workspace.root) / "src"
         entry_name = Path(contract.get("entry") or "").name
+        html_route = ((contract.get("boot") or {}).get("html_route")
+                      or "").rstrip("/")
         # collect candidate functions across all non-entry modules
-        cands: list = []                 # (stem, name, abi, lowname)
+        cands: list = []                 # (stem, name, abi, lowname, is_html)
         if root.is_dir():
             for py in sorted(root.glob("*.py")):
                 if py.name in (entry_name, "__init__.py"):
                     continue
                 try:
-                    tree = ast.parse(
-                        py.read_text(encoding="utf-8", errors="replace"))
+                    src_text = py.read_text(encoding="utf-8", errors="replace")
+                    tree = ast.parse(src_text)
                 except (OSError, SyntaxError):
                     continue
                 for n in tree.body:
@@ -2938,7 +2940,11 @@ class Engine:
                         continue
                     abi = "pq" if len(params) >= 2 else (
                         "p" if len(params) == 1 else "none")
-                    cands.append((py.stem, n.name, abi, n.name.lower()))
+                    seg_src = ast.get_source_segment(src_text, n) or ""
+                    is_html = bool(re.search(
+                        r"<!doctype|<html|text/html|['\"]html['\"]",
+                        seg_src, re.I))
+                    cands.append((py.stem, n.name, abi, n.name.lower(), is_html))
         mapping: dict = {}
         unresolved: list = []
         for method, path in self._declared_route_set(contract):
@@ -2954,7 +2960,7 @@ class Engine:
             res_sing = res.rstrip("s") if res else ""
             best = None
             best_score = 0
-            for stem, name, abi, low in cands:
+            for stem, name, abi, low, _ish in cands:
                 # ELIGIBILITY: the handler must relate to this route's RESOURCE.
                 # A method-synonym match alone is NOT enough — otherwise `get_notes`
                 # falsely wins GET /ui / GET /about / GET /health just by carrying
@@ -2984,6 +2990,23 @@ class Engine:
                     best_score, best = score, (stem, name, abi)
             if best and best_score >= 2:
                 mapping[(method, path)] = best
+            elif (method == "GET" and html_route
+                  and path.rstrip("/") == html_route):
+                # The declared HTML/UI route has no name-matching handler: the
+                # model routinely names the page handler after the DATA it
+                # renders (get_notes_html), not the route (/ui), so the
+                # resource-token match misses. Fall back to the leaf handler that
+                # actually PRODUCES HTML — live v103: get_notes_html rendered the
+                # page yet GET /ui stayed unresolved and the product 404'd. A
+                # dispatchable (payload, query) handler is preferred.
+                html_cands = [(stem, name, abi)
+                              for stem, name, abi, low, ish in cands if ish]
+                html_cands.sort(key=lambda c: 0 if c[2] == "pq"
+                                else (1 if c[2] == "p" else 2))
+                if html_cands:
+                    mapping[(method, path)] = html_cands[0]
+                else:
+                    unresolved.append((method, path))
             else:
                 unresolved.append((method, path))
         return mapping, unresolved
@@ -3004,7 +3027,20 @@ class Engine:
         implementer rather than fabricating business logic. An unresolved health
         ``ok_route`` is NOT critical: a trivial 200 is synthesised inline."""
         boot = contract.get("boot", {}) or {}
-        callable_name = (contract.get("callable") or ["wsgi_app"])[0]
+        callables = contract.get("callable") or ["wsgi_app"]
+        callable_name = callables[0]
+        # Expose EVERY declared callable alias, not just `application`: a
+        # generated test imports the contract's callable by name (live v103:
+        # test_app.py did `from app import app` while the entry exposed only
+        # wsgi_app/application -> ImportError RED-ed the assembled product). The
+        # router def is callable_name; the rest are module-level aliases to it.
+        alias_names = []
+        for c in list(callables[1:]) + ["application"]:
+            if (c and c.isidentifier() and c != callable_name
+                    and c not in alias_names):
+                alias_names.append(c)
+        aliases_block = "\n".join("%s = %s" % (a, callable_name)
+                                  for a in alias_names)
         ok_route = boot.get("ok_route")
         rt = boot.get("json_roundtrip")
         unresolved_set = set(unresolved)
@@ -3115,10 +3151,10 @@ def %(callable)s(environ, start_response):
     return _send(start_response, status, body)
 
 
-application = %(callable)s
+%(aliases)s
 '''
         return tmpl % {"imports": imports_block, "routes": routes_block,
-                       "callable": callable_name}
+                       "callable": callable_name, "aliases": aliases_block}
 
     def _harvest_entry_handlers(self, contract: dict) -> bool:
         """Relocate a MONOLITHIC entry's business logic into a sibling leaf module

@@ -139,6 +139,81 @@ def test_resolver_maps_every_declared_route(tmp_path):
     assert mapping[("POST", "/notes")][1] != mapping[("GET", "/notes")][1]
 
 
+def test_synth_entry_exposes_every_declared_callable_alias(tmp_path):
+    """Live v103: a generated test imported the contract callable by name
+    (`from app import app`) while the synthesized entry exposed only wsgi_app +
+    application -> ImportError RED-ed the product. The entry must expose every
+    declared callable name, all bound to the one router object."""
+    eng = _engine(tmp_path)
+    src = pathlib.Path(eng.workspace.root) / "src"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "notes_endpoints.py").write_text(
+        "def get_notes(payload, query):\n    return (200, {'items': []})\n")
+    contract = {
+        "entry": "src/app.py", "callable": ["wsgi_app", "application", "app"],
+        "boot": {"ok_route": "/notes"}, "routes": [["GET", "/notes"]],
+    }
+    mapping, unresolved = eng._resolve_route_handlers(contract)
+    code = eng._synthesize_entry_code(contract, mapping, unresolved)
+    ns: dict = {}
+    # the module must import its leaves from src/ on the path
+    sys.path.insert(0, str(src))
+    try:
+        exec(compile(code, "app.py", "exec"), ns)
+    finally:
+        sys.path.remove(str(src))
+        sys.modules.pop("notes_endpoints", None)
+    for name in ("wsgi_app", "application", "app"):
+        assert name in ns, "entry must expose %s" % name
+    assert ns["app"] is ns["wsgi_app"] is ns["application"]
+
+
+def test_html_route_resolves_to_html_handler_named_after_its_data(tmp_path):
+    """Live v103: the model named the UI page handler after the DATA it renders
+    (`get_notes_html`), not the route (`/ui`), so the resource-token match found
+    no candidate and GET /ui stayed unresolved -> the product served 404. The
+    declared HTML route must fall back to the leaf handler that actually PRODUCES
+    HTML, regardless of its name."""
+    eng = _engine(tmp_path)
+    src = pathlib.Path(eng.workspace.root) / "src"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "notes_endpoints.py").write_text(
+        "def get_notes(payload, query):\n    return (200, {'items': []})\n"
+        "def get_notes_html(payload, query):\n"
+        "    html = '<!DOCTYPE html>\\n<html><body>notes</body></html>'\n"
+        "    return (200, {'html': html})\n")
+    contract = {
+        "entry": "src/app.py", "callable": ["wsgi_app"],
+        "boot": {"ok_route": "/notes", "html_route": "/ui"},
+        "routes": [["GET", "/notes"], ["GET", "/ui"]],
+    }
+    mapping, unresolved = eng._resolve_route_handlers(contract)
+    assert ("GET", "/ui") in mapping, unresolved
+    assert mapping[("GET", "/ui")][1] == "get_notes_html"
+    # and it must NOT steal the data route
+    assert mapping[("GET", "/notes")][1] == "get_notes"
+
+
+def test_html_fallback_does_not_fire_for_non_html_routes(tmp_path):
+    """The HTML fallback is scoped to the declared html_route only — a different
+    route with no name-matching handler stays honestly unresolved (never wired to
+    an unrelated HTML-producing leaf)."""
+    eng = _engine(tmp_path)
+    src = pathlib.Path(eng.workspace.root) / "src"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "pages.py").write_text(
+        "def render_page(payload, query):\n"
+        "    return (200, {'html': '<html>hi</html>'})\n")
+    contract = {
+        "entry": "src/app.py", "callable": ["wsgi_app"],
+        "boot": {"html_route": "/ui"},
+        "routes": [["GET", "/ui"], ["DELETE", "/orders"]],
+    }
+    mapping, unresolved = eng._resolve_route_handlers(contract)
+    assert ("GET", "/ui") in mapping                       # html route wired
+    assert ("DELETE", "/orders") in unresolved             # unrelated stays open
+
+
 def test_synth_entry_boots_and_serves_contract(tmp_path):
     eng = _engine(tmp_path)
     _seed_src(eng.workspace.root)
