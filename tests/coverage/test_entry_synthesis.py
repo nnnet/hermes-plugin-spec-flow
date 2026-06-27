@@ -139,6 +139,58 @@ def test_resolver_maps_every_declared_route(tmp_path):
     assert mapping[("POST", "/notes")][1] != mapping[("GET", "/notes")][1]
 
 
+def test_raw_wsgi_handler_is_wired_and_dispatched(tmp_path):
+    """Live v104: the model wrote a raw-WSGI handler (`_handle_ping(environ,
+    start_response)`) for GET /ping at a lower level than (payload, query).
+    Dropping it left /ping -> 404 and the synth declined. It must be wired as a
+    'ws' handler and delegated to raw at dispatch."""
+    eng = _engine(tmp_path)
+    src = pathlib.Path(eng.workspace.root) / "src"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "extras.py").write_text(
+        "def _handle_ping(environ, start_response):\n"
+        "    if environ.get('PATH_INFO') == '/ping':\n"
+        "        start_response('200 OK', [('Content-Type', 'text/plain')])\n"
+        "        return [b'pong']\n"
+        "    start_response('404 Not Found', [])\n"
+        "    return [b'']\n"
+        "def get_notes(payload, query):\n    return (200, {'items': []})\n")
+    contract = {
+        "entry": "src/app.py", "callable": ["wsgi_app"],
+        "boot": {"json_roundtrip": "/notes"},
+        "routes": [["GET", "/ping"], ["GET", "/notes"], ["POST", "/notes"]],
+    }
+    mapping, unresolved = eng._resolve_route_handlers(contract)
+    assert ("GET", "/ping") in mapping
+    assert mapping[("GET", "/ping")][2] == "ws"
+    code = eng._synthesize_entry_code(contract, mapping, unresolved)
+    assert code
+    app = _load_entry(code, tmp_path / "x.db", str(src))
+    st, _h, body = _call(app, "GET", "/ping")
+    assert st == 200 and body == b"pong"
+
+
+def test_whole_app_raw_router_is_not_wired_to_a_single_route(tmp_path):
+    """A raw-WSGI fn that dispatches MANY paths is a whole-app router, not a
+    per-route handler — it must not be wired to one route (that path would work
+    but the router belongs to the promote path). Here it stays unresolved."""
+    eng = _engine(tmp_path)
+    src = pathlib.Path(eng.workspace.root) / "src"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "router.py").write_text(
+        "def serve(environ, start_response):\n"
+        "    p = environ.get('PATH_INFO')\n"
+        "    if p == '/ping': pass\n"
+        "    if p == '/health': pass\n"
+        "    if p == '/notes': pass\n"
+        "    start_response('200 OK', [])\n"
+        "    return [b'']\n")
+    contract = {"entry": "src/app.py", "callable": ["wsgi_app"],
+                "boot": {}, "routes": [["GET", "/ping"]]}
+    mapping, unresolved = eng._resolve_route_handlers(contract)
+    assert ("GET", "/ping") in unresolved        # multi-route router not wired
+
+
 def test_canonical_handler_symbol_is_deterministic():
     f = sfr._canonical_handler_symbol
     assert f("GET", "/ui") == "get_ui"

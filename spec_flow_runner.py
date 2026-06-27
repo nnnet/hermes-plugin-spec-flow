@@ -2957,10 +2957,10 @@ class Engine:
                     if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
                         continue
                     params = [a.arg for a in n.args.args]
-                    if params[:2] == ["environ", "start_response"]:
-                        continue          # raw WSGI handler — not a leaf business fn
                     if n.name.startswith("__"):
                         continue
+                    seg_src = ast.get_source_segment(src_text, n) or ""
+                    is_ws = params[:2] == ["environ", "start_response"]
                     # An HTTP handler takes the REQUEST (payload/query/body), not an
                     # injected dependency. A storage-layer fn whose first param is a
                     # connection/session (e.g. insert_note(conn, text),
@@ -2970,15 +2970,34 @@ class Engine:
                     # db.insert_note/list_notes and every call crashed). Reject it so
                     # the route stays unresolved and the engine promotes the real
                     # raw-WSGI router instead of fabricating a broken wiring.
-                    if params and params[0].lower() in self._DEP_FIRST_PARAMS:
+                    if (not is_ws and params
+                            and params[0].lower() in self._DEP_FIRST_PARAMS):
                         continue
-                    abi = "pq" if len(params) >= 2 else (
-                        "p" if len(params) == 1 else "none")
-                    seg_src = ast.get_source_segment(src_text, n) or ""
+                    # A raw WSGI handler (environ, start_response) is a REAL handler
+                    # the model wrote at a lower level (live v104: _handle_ping
+                    # inline in the entry served GET /ping). Keep it as abi 'ws' and
+                    # let the router delegate to it raw, instead of dropping it and
+                    # leaving the route 404.
+                    if is_ws:
+                        abi = "ws"
+                    else:
+                        abi = "pq" if len(params) >= 2 else (
+                            "p" if len(params) == 1 else "none")
+                    # route paths literally named in the body — a self-dispatching
+                    # handler (`if path == '/ping'`) reveals which route it serves
+                    body_paths = frozenset(re.findall(
+                        r"""['"](/[A-Za-z0-9_./{}-]*)['"]""", seg_src))
+                    # A raw-WSGI fn that dispatches MANY paths is a whole-app
+                    # router, not a per-route handler — it must go through promote
+                    # (delegate the entry to it), not be wired to a single route.
+                    if is_ws and len({p.rstrip("/") for p in body_paths
+                                      if len(p) > 1}) >= 2:
+                        continue
                     is_html = bool(re.search(
                         r"<!doctype|<html|text/html|['\"]html['\"]",
                         seg_src, re.I))
-                    cands.append((py.stem, n.name, abi, n.name.lower(), is_html))
+                    cands.append((py.stem, n.name, abi, n.name.lower(),
+                                  is_html, body_paths))
         mapping: dict = {}
         unresolved: list = []
         for method, path in self._declared_route_set(contract):
@@ -2989,7 +3008,7 @@ class Engine:
             # model deviated from the ordered name.
             want = _canonical_handler_symbol(method, path)
             explicit = next(((stem, name, abi)
-                             for stem, name, abi, low, _ish in cands
+                             for stem, name, abi, low, _ish, _bp in cands
                              if name == want), None)
             if explicit:
                 mapping[(method, path)] = explicit
@@ -3006,7 +3025,7 @@ class Engine:
             res_sing = res.rstrip("s") if res else ""
             best = None
             best_score = 0
-            for stem, name, abi, low, _ish in cands:
+            for stem, name, abi, low, _ish, _bp in cands:
                 # ELIGIBILITY: the handler must relate to this route's RESOURCE.
                 # A method-synonym match alone is NOT enough — otherwise `get_notes`
                 # falsely wins GET /ui / GET /about / GET /health just by carrying
@@ -3036,8 +3055,21 @@ class Engine:
                     best_score, best = score, (stem, name, abi)
             if best and best_score >= 2:
                 mapping[(method, path)] = best
-            elif (method == "GET" and html_route
-                  and path.rstrip("/") == html_route):
+                continue
+            # PATH-STRING signal: a self-dispatching handler that names THIS exact
+            # route in its body serves it even when its function name does not
+            # carry the resource (live v104: a raw-WSGI _handle_ping tested
+            # `path == '/ping'`). A dispatchable / raw-WSGI handler is preferred.
+            tgt = path.rstrip("/")
+            pm = [(stem, name, abi)
+                  for stem, name, abi, low, _ish, bp in cands
+                  if tgt in {p.rstrip("/") for p in bp}]
+            pm.sort(key=lambda c: 0 if c[2] in ("ws", "pq") else 1)
+            if pm:
+                mapping[(method, path)] = pm[0]
+                continue
+            if (method == "GET" and html_route
+                    and path.rstrip("/") == html_route):
                 # The declared HTML/UI route has no name-matching handler: the
                 # model routinely names the page handler after the DATA it
                 # renders (get_notes_html), not the route (/ui), so the
@@ -3046,15 +3078,13 @@ class Engine:
                 # page yet GET /ui stayed unresolved and the product 404'd. A
                 # dispatchable (payload, query) handler is preferred.
                 html_cands = [(stem, name, abi)
-                              for stem, name, abi, low, ish in cands if ish]
+                              for stem, name, abi, low, ish, _bp in cands if ish]
                 html_cands.sort(key=lambda c: 0 if c[2] == "pq"
                                 else (1 if c[2] == "p" else 2))
                 if html_cands:
                     mapping[(method, path)] = html_cands[0]
-                else:
-                    unresolved.append((method, path))
-            else:
-                unresolved.append((method, path))
+                    continue
+            unresolved.append((method, path))
         return mapping, unresolved
 
     def _synthesize_entry_code(self, contract: dict, mapping: dict,
@@ -3165,6 +3195,14 @@ def _send(start_response, code, body):
 def %(callable)s(environ, start_response):
     method = (environ.get("REQUEST_METHOD") or "GET").upper()
     path = environ.get("PATH_INFO") or "/"
+    handler = _ROUTES.get((method, path))
+    if handler is None:
+        if any(p == path for (_m, p) in _ROUTES):
+            return _send(start_response, 405, {"error": "method not allowed"})
+        return _send(start_response, 404, {"error": "not found"})
+    abi, fn = handler
+    if abi == "ws":                             # raw WSGI handler reads input itself
+        return fn(environ, start_response)
     query = parse_qs(environ.get("QUERY_STRING") or "")
     try:
         length = int(environ.get("CONTENT_LENGTH") or 0)
@@ -3177,12 +3215,6 @@ def %(callable)s(environ, start_response):
             payload = json.loads(raw)
         except Exception:                       # malformed body -> 400, never 500
             return _send(start_response, 400, {"error": "invalid json"})
-    handler = _ROUTES.get((method, path))
-    if handler is None:
-        if any(p == path for (_m, p) in _ROUTES):
-            return _send(start_response, 405, {"error": "method not allowed"})
-        return _send(start_response, 404, {"error": "not found"})
-    abi, fn = handler
     try:
         if abi == "health":
             status, body = 200, {"status": "ok"}
@@ -3230,8 +3262,10 @@ def %(callable)s(environ, start_response):
                 if n.name in callables:
                     continue                          # drop the old router fn
                 params = [a.arg for a in n.args.args]
-                if params[:2] == ["environ", "start_response"]:
-                    continue                          # drop raw-WSGI glue
+                # KEEP a raw-WSGI sub-handler (environ, start_response) — it is a
+                # real route handler the model wrote at a lower level (live v104:
+                # _handle_ping served GET /ping). Relocated here it becomes a leaf
+                # the resolver wires as abi 'ws'; dropping it left the route 404.
                 keep.append(n)
                 if params:
                     has_handler = True
@@ -3464,8 +3498,13 @@ def %(callable)s(environ, start_response):
         try:
             mapping, unresolved = self._resolve_route_handlers(contract)
             code = self._synthesize_entry_code(contract, mapping, unresolved)
-            if not code and self._harvest_entry_handlers(contract):
-                # monolithic entry — handlers relocated to a leaf, re-resolve
+            # Harvest when the synth declined (no code) OR when a declared route is
+            # still unresolved: its handler may sit INLINE in the model's entry
+            # (live v104: _handle_ping for /ping), invisible to the resolver which
+            # scans only non-entry leaves. Relocating the entry's handlers to a
+            # leaf lets the re-resolve wire them. Harvest is a no-op (returns
+            # False) when the entry carries no business handler.
+            if (not code or unresolved) and self._harvest_entry_handlers(contract):
                 harvested = True
                 mapping, unresolved = self._resolve_route_handlers(contract)
                 code = self._synthesize_entry_code(contract, mapping, unresolved)
