@@ -831,6 +831,19 @@ def _amend_routes(text: str) -> set:
     return {r for r in out if len(r) > 1}
 
 
+def _verb_declared_routes(text: str) -> set:
+    """Routes a text declares EXPLICITLY via an HTTP verb (`GET /x`, `DELETE
+    /y`). Unlike _amend_routes this drops bare quoted-path literals: a `/notes`
+    mentioned in a spec's surrounding prose is service CONTEXT (what the product
+    already serves), NOT a route THIS node must add. Used by the late-requirement
+    delta gate so a node is only held to its OWN new routes, never a sibling's
+    (live v110: красивый_вид/note_search were charged with /ui & /ping, owned by
+    other leaves, purely because the spec narrated the whole service)."""
+    return {r.rstrip("/.,;:)\"'") for r in re.findall(
+        r"\b(?:GET|POST|PUT|DELETE|PATCH)\s+(/[A-Za-z0-9_./-]+)", text, re.I)
+        if len(r.rstrip("/.,;:)\"'")) > 1}
+
+
 _HTTP_VERBS = "GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS"
 
 
@@ -2142,12 +2155,25 @@ class Engine:
         # added nothing to web_ui.py, passing the line floor on the existing /ui
         # code). Deterministic: each declared route needs the literal path OR a
         # def whose name carries the route token in the owned module.
-        routes = _amend_routes(str(node.get("title") or ""))
+        # OWN routes only: VERB-declared here (a bare quoted `/notes` in the
+        # spec's prose is service CONTEXT, not this node's delta) and MINUS any
+        # route a sibling module already serves — a node is held to the routes it
+        # ADDS, never to the whole service it was merely told about (v110:
+        # красивый_вид/note_search were charged with /ui & /ping, owned by other
+        # leaves; that false REJECT reworked note_storage and broke app.py).
+        routes = _verb_declared_routes(str(node.get("title") or ""))
         try:
-            routes |= _amend_routes(
+            routes |= _verb_declared_routes(
                 (Path(self.workspace.root) / f"specs/{Path(code_rel).stem}.md")
                 .read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001 — spec optional; title is the floor
+            pass
+        try:                            # drop routes a SIBLING module serves
+            served_elsewhere = set()
+            for _rel, _stem, _sbody in self._surface_modules(Path(code_rel).stem):
+                served_elsewhere |= _served_routes(_sbody)
+            routes -= {r for r in routes if r.rstrip("/") in served_elsewhere}
+        except Exception:  # noqa: BLE001 — sibling scan is best-effort
             pass
         low = body.lower()
         missing = []

@@ -107,6 +107,44 @@ def test_late_req_without_route_is_inert_when_nonempty():
         assert ok is True and e.loops == []
 
 
+def test_sibling_served_route_is_not_charged_to_this_node():
+    # v110 root: a late node (красивый_вид) whose spec NARRATES the whole service
+    # ('/notes', '/ui') but whose OWN delta is a presentation tweak must NOT be
+    # charged with routes a SIBLING module already serves. The false REJECT here
+    # reworked the owner module and broke the synthesised app.py (ImportError).
+    with tempfile.TemporaryDirectory() as tmp:
+        e = _engine(tmp)
+        # a sibling already serves /notes and /ui via code dispatch
+        _write(tmp, "src/notes_service.py",
+               "def app(environ, sr):\n"
+               "    if environ['PATH_INFO'] == '/notes':\n        return []\n"
+               "    if environ['PATH_INFO'] == '/ui':\n        return []\n")
+        # this node's own module has real (non-route) code — a real delta
+        _write(tmp, "src/pretty.py",
+               "def prettify(items):\n    return sorted(items)\n")
+        _write(tmp, "specs/pretty.md",
+               "MAKE THE NOTES NICE TO READ. The service serves GET /notes and "
+               "GET /ui; present the notes returned by GET /notes nicely.")
+        node = {"_late_req": True, "title": "MAKE THE NOTES NICE TO READ."}
+        ok = e._late_req_delta_gate(node, "pretty", 4, "src/pretty.py")
+        assert ok is True                       # not charged with /notes or /ui
+        assert e.loops == [] and e._doctor_calls == []
+
+
+def test_own_new_route_still_enforced_when_sibling_absent():
+    # the guard only drops SIBLING-served routes: a genuinely NEW route this node
+    # declares (and nobody else serves) is still enforced — v062 must hold.
+    with tempfile.TemporaryDirectory() as tmp:
+        e = _engine(tmp)
+        _write(tmp, "src/web_ui.py",
+               "def handle_get_ui(environ, sr):\n    return [b'x']\n")
+        node = {"_late_req": True,
+                "title": "ADD AN ABOUT PAGE. Serve GET /about as an HTML page."}
+        ok = e._late_req_delta_gate(node, "about_page", 4, "src/web_ui.py")
+        assert ok is False                      # /about is new, unserved -> FAIL
+        assert any("/about" in str(lp.get("detail", "")) for lp in e.loops)
+
+
 class _DoctorOn:
     enabled = True
 
