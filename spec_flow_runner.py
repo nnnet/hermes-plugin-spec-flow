@@ -3695,6 +3695,13 @@ def %(callable)s(environ, start_response):
                 + repr(self._on_integrate_fail))
         self._integrate_max_rework = int(
             project.get("integrate_max_rework", 2))
+        # Plan Шаг 5 — the ROOT product-integrate heal budget, separate from the
+        # per-node rework cap above so bumping it does not multiply node-level
+        # rework cost. The boot-gate is fail-fast (one route per probe), so a
+        # product with N broken leaves needs N heal rounds; default 3 covers a
+        # tiny service's independent surfaces (live v111: /ui, /notes, delete).
+        self._product_repair_rounds = int(
+            project.get("product_repair_rounds", 3))
         # unified gate policies — the `gates:` block wins over legacy keys
         gates = project.get("gates") or {}
         g_rev = gates.get("review") or {}
@@ -5883,9 +5890,19 @@ def %(callable)s(environ, start_response):
                       "integrate_verify", "FAIL", level=L_MILESTONE)
             self.loops.append({"type": "integrate-fail", "task": root_id,
                                "detail": reason})
-            # 2) ANALYSE + ATTEMPT A FIX (doctor → reconcile_check rebuilds the
-            #    entry through a real worker), then RE-VERIFY once.
-            if self._attempt_integrate_repair(reason, out):
+            # 2) ANALYSE + ATTEMPT A FIX (doctor → rework the blamed leaf or
+            #    reconcile the entry through a real worker), then RE-VERIFY —
+            #    LOOPING up to integrate_max_rework rounds. The boot-gate is
+            #    fail-fast (it reports ONE failing route at a time), so a product
+            #    with several broken leaves (live v111: /ui arity, /notes schema,
+            #    a delete route) needs one healing round PER route; a single pass
+            #    dead-ended after the first and the run came back NOT READY.
+            #    The loop STOPS the instant the assembled product is green —
+            #    the doctor is never run over a product that already serves its
+            #    contract (Plan Шаг 5).
+            for _round in range(max(1, getattr(self, "_product_repair_rounds", 3))):
+                if not self._attempt_integrate_repair(reason, out):
+                    break               # no actionable remedy — stop looping
                 passed, out = _run_suite()
                 if passed:
                     b_ok, b_detail = self._assembled_product_boots()
@@ -5899,12 +5916,13 @@ def %(callable)s(environ, start_response):
                                           and lp.get("type") == "integrate-fail")]
                     self.emit("integrate", "doctor", "spec-integrate",
                               "L0:integrate",
-                              "reconcile_check healed the product (red→green)",
-                              "rebuilt entry: suite + boot-gate now green",
+                              "repair healed the product (red→green)",
+                              f"suite + boot-gate green after {_round + 1} round(s)",
                               "integrate_verify", "PASS", level=L_MILESTONE)
                     reason = ""
-                else:
-                    reason = self._concise_red_reason(out) + " (still red after repair)"
+                    break
+                # still red — record the current cause and try the next route
+                reason = self._concise_red_reason(out) + " (still red after repair)"
         depth_name = next((k for k, v in DEPTHS.items() if v == self.depth), str(self.depth))
         ws._write("TEST-RESULTS.md",
                   f"# Test results (depth={depth_name})\n\nStatus: "
