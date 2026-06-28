@@ -699,6 +699,13 @@ class RunResult:
     workspace_root: Optional[str] = None
     # variant A: nid -> collision-free module name (every value unique)
     module_names: dict = field(default_factory=dict)
+    # Plan Шаг 4 — canonical terminal verdict of the whole run, so the outcome
+    # is readable from ONE field instead of reconstructed from a trace tail.
+    # "READY" / "NOT READY" once a product-depth acceptance gate ran, else None
+    # (acceptance not asserted — e.g. shallower depth). `product_failed` lists
+    # the acceptance checks that failed, for the run's meta.json summary.
+    product_status: Optional[str] = None
+    product_failed: list = field(default_factory=list)
 
 
 def event_line(e: Event, widths: Optional[dict] = None) -> str:
@@ -4137,7 +4144,11 @@ def %(callable)s(environ, start_response):
         return RunResult(project, self.events, self.tasks, self.skills, self.profiles,
                          self.loops, self.gate_calls, self.verbosity, self.depth,
                          getattr(self.workspace, "root", None),
-                         dict(self._module_names))
+                         dict(self._module_names),
+                         # Plan Шаг 4 — terminal verdict (None if acceptance was
+                         # never asserted, e.g. depth below product).
+                         getattr(self, "_product_status", None),
+                         list(getattr(self, "_product_failed", []) or []))
 
     # -- recursion ---------------------------------------------------------
     def _decomposer_ctx(self, node: dict, depth: int, parent: Optional[str],
@@ -6026,6 +6037,11 @@ def %(callable)s(environ, start_response):
                   "build+run product against acceptance spec",
                   f"{len(failed)} failed check(s)" if failed else "all checks passed",
                   "", verdict, level=L_MILESTONE)
+        # Plan Шаг 4 — record the terminal product verdict so RunResult (and the
+        # run's meta.json) can report it from one field. v111 reached "NOT READY"
+        # yet meta.status stayed None: the verdict existed only in the trace tail.
+        self._product_status = verdict
+        self._product_failed = list(failed)
 
     def _load_revisions(self, project: dict) -> list[dict]:
         """Normalise the project's revision declarations into a list, each with

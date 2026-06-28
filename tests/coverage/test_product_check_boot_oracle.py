@@ -63,6 +63,26 @@ def test_no_contract_still_needs_entrypoint():
     assert "no runnable entrypoint" in md
 
 
+# ── Plan Шаг 4: the verdict is recorded on the engine, not only in the MD ────
+# v111 reached a "NOT READY" product verdict yet meta.status stayed None because
+# the verdict lived only in PRODUCT-RESULTS.md / the trace tail. _product_check
+# must stamp self._product_status so RunResult (and the run's meta.json) can
+# report the outcome from one canonical field.
+
+def test_product_status_recorded_ready():
+    e = _eng((True, "all routes answered"))
+    e._product_check(_ACCEPT)
+    assert e._product_status == "READY"
+    assert e._product_failed == []
+
+
+def test_product_status_recorded_not_ready_with_failed_checks():
+    e = _eng((False, "GET /notes -> 404"))
+    e._product_check(_ACCEPT)
+    assert e._product_status == "NOT READY"
+    assert e._product_failed, "the failed acceptance checks must be captured"
+
+
 # ── boot-gate robustness: a malformed body must be 4xx, never a 5xx crash ───
 import pathlib                                              # noqa: E402
 

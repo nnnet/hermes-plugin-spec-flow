@@ -346,6 +346,25 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
         agents["_realness_check"] = _ccheck.realness_violations
     except Exception:  # noqa: BLE001
         pass
+    def _write_terminal_meta(status, failed=None):
+        """Plan Шаг 4 — stamp the run's CANONICAL outcome into meta.json so the
+        result is read from one field, not guessed from a trace tail. Merges
+        onto the meta written at start (never clobbers case/workers/etc.).
+        v111 reached "NOT READY" yet meta.status stayed None — this closes that
+        observability hole; an aborted/killed run is recorded as ABORTED."""
+        import time as _time
+        mp = case_dir / "meta.json"
+        try:
+            meta = json.loads(mp.read_text(encoding="utf-8")) if mp.is_file() else {}
+        except Exception:        # noqa: BLE001 — a corrupt meta never blocks the stamp
+            meta = {}
+        meta["status"] = status
+        meta["finished"] = _time.strftime("%Y-%m-%dT%H:%M:%S")
+        if failed is not None:
+            meta["product_failed"] = list(failed)
+        mp.write_text(json.dumps(meta, ensure_ascii=False, indent=2),
+                      encoding="utf-8")
+
     try:
         res = eng.run_project(exec_case, workspace=str(case_dir / "workspace"), depth=depth,
                               tools=tools, agents=agents or None,
@@ -362,6 +381,7 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
         # otherwise a run that never reaches the post-run sweep leaves the
         # banks with raw experience and zero models (the live gap the user
         # spotted in Hindsight)
+        _write_terminal_meta("ABORTED")
         try:
             from harness import memory as _mem
             if _mem.MANAGER is not None:
@@ -377,6 +397,12 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
     (case_dir / "tree.json").write_text(
         json.dumps(res.project.get("tree", {}), ensure_ascii=False, indent=2),
         encoding="utf-8")
+    # Plan Шаг 4 — canonical terminal status. READY/NOT READY come from the
+    # product acceptance gate; a run that completed below product depth (no
+    # acceptance asserted) is DONE, not a failure.
+    _term = {"READY": "READY", "NOT READY": "FAILED"}.get(
+        getattr(res, "product_status", None), "DONE")
+    _write_terminal_meta(_term, failed=getattr(res, "product_failed", []))
     # memory learning sweep: engine-side lessons the workers can't see
     # (demotions, crashes), then distil the banks into mental models
     try:
