@@ -3697,11 +3697,15 @@ def %(callable)s(environ, start_response):
             project.get("integrate_max_rework", 2))
         # Plan Шаг 5 — the ROOT product-integrate heal budget, separate from the
         # per-node rework cap above so bumping it does not multiply node-level
-        # rework cost. The boot-gate is fail-fast (one route per probe), so a
-        # product with N broken leaves needs N heal rounds; default 3 covers a
-        # tiny service's independent surfaces (live v111: /ui, /notes, delete).
+        # rework cost. The boot-gate is FAIL-FAST (it surfaces ONE failing route
+        # per probe), so a product with N broken leaves only reveals leaf k+1
+        # once leaf k is green — and a single rework does not always fix a leaf.
+        # The budget must therefore cover (broken leaves × a retry), not just the
+        # leaf count: live v114 had 3 broken leaves (db, /ui, routing), stalled
+        # re-reworking the first, and never reached the others at a budget of 3.
+        # Default 6 = ~3 surfaces × 2 attempts; only failing runs ever spend it.
         self._product_repair_rounds = int(
-            project.get("product_repair_rounds", 3))
+            project.get("product_repair_rounds", 6))
         # unified gate policies — the `gates:` block wins over legacy keys
         gates = project.get("gates") or {}
         g_rev = gates.get("review") or {}
