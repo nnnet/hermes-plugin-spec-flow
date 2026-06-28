@@ -2026,24 +2026,19 @@ class Engine:
         own = _snake(str(node.get("id", "")))
         stmt = str(node.get("requirement") or node.get("spec_markdown")
                    or node.get("title") or "")
-        # PRIORITY route-rule (deterministic, model-independent): a late
-        # requirement that adds an HTTP ROUTE belongs in the single declared WSGI
-        # entry — by contract the app owns ALL routes, even a brand-new one that
-        # shares no surface with any existing module. Without this, surface-
-        # overlap (which needs a SHARED surface) forks a second web module
-        # (web_ui / ping_text); the model then correctly folds the handler into
-        # the app entry per the "all endpoints in src/app.py" contract, leaving
-        # the forked file EMPTY — and the delta gate, the implementer module and
-        # the injection's tests were all aimed at that empty fork. Routing to the
-        # entry sets code_target == the entry, so the gate checks app.py (where
-        # the handler lives), the coder edits app.py, and tests/test_app.py
-        # covers the new route. Fires only for web projects with a declared entry
-        # and a route-bearing requirement; absent ⇒ falls through to overlap.
-        if _amend_routes(stmt):
-            _pc = self._product_contract()
-            _entry = (_pc or {}).get("entry")
-            if _entry and Path(_entry).stem != own:
-                return _entry
+        # A late requirement that adds an HTTP ROUTE must land where its handler
+        # stays a RESOLVABLE leaf function — never in the engine-owned entry. The
+        # entry (src/app.py) is regenerated deterministically at assembly, so a
+        # handler the model inlines into its router is silently dropped (live
+        # v104/v107: ping_text / web_ui were routed to "EDIT app.py" and the
+        # /ping, /ui branch vanished from the regenerated router -> 404). The
+        # route->handler binding now tells the model to expose
+        # `def <method>_<path>(payload, query)`; forking the node's OWN leaf (or
+        # a real NON-entry module it overlaps) keeps that handler resolvable, and
+        # the harvesting assembler relocates a stray top-level handler. So the
+        # entry is never an amend target.
+        _entry_stem = Path((self._product_contract() or {}).get("entry")
+                           or "").stem
         modules = self._surface_modules(own)
         if not modules:
             return None
@@ -2052,8 +2047,11 @@ class Engine:
         if os.environ.get("SPEC_FLOW_AMEND_LLM", "") not in (
                 "", "0", "false", "False", "no"):
             llm = self._amend_llm_router
-        return _amend_find_owner(stmt, modules, candidates_text=cand_text,
-                                 llm=llm)
+        owner = _amend_find_owner(stmt, modules, candidates_text=cand_text,
+                                  llm=llm)
+        if owner and _entry_stem and Path(owner).stem == _entry_stem:
+            return None       # never edit the regenerated entry — fork own leaf
+        return owner
 
     def _surface_modules(self, own: str) -> list:
         """Existing candidate modules as [(rel, stem, spec+code body)], merged by

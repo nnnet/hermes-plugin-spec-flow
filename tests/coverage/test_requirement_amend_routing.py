@@ -160,14 +160,14 @@ def test_flag_off_keeps_separate_modules(tmp_path, monkeypatch):
     assert seen.get("nice_ui") == "nice_ui"     # own module, not routed
 
 
-# ── route-to-entry rule ────────────────────────────────────────────────────
-# A late requirement that adds a NEW HTTP route shares no surface with any
-# existing module, so plain surface-overlap forks a second web module — the
-# web_ui / ping_text miss where the handler was correctly folded into the single
-# WSGI app (src/app.py) but the forked file stayed EMPTY and the delta gate then
-# checked that empty fork. When the project declares a WSGI entry, a route-bearing
-# requirement must route INTO that entry so code_target (hence the gate, the
-# implementer module, and tests/test_<entry>.py) all act on the entry file.
+# ── route requirement never routes into the engine-owned entry ──────────────
+# A late requirement that adds a NEW HTTP route must NOT route into the declared
+# WSGI entry (src/app.py): the engine regenerates that entry deterministically at
+# assembly, so a handler the model inlines into its router is dropped and the
+# route 404s (live v104/v107: ping_text / web_ui). With no non-entry surface to
+# overlap it forks its OWN leaf, where the handler stays a resolvable function
+# (the route->handler binding orders the name; the harvesting assembler relocates
+# a stray top-level handler).
 import spec_flow_runner as _sfr            # noqa: E402
 
 
@@ -181,18 +181,19 @@ class _EntryStub:
         return []
 
 
-def test_late_route_requirement_routes_into_declared_entry(monkeypatch):
+def test_late_route_requirement_forks_own_leaf_not_the_entry(monkeypatch):
     monkeypatch.setenv("SPEC_FLOW_REQ_AMEND", "1")
     node = {"id": "ping_text",
             "requirement": "Serve GET /ping returning the plain text pong"}
-    assert _sfr.Engine._amend_target(_EntryStub(), node) == "src/app.py"
+    # no non-entry overlap -> own leaf (None), NEVER the regenerated src/app.py
+    assert _sfr.Engine._amend_target(_EntryStub(), node) is None
 
 
-def test_late_web_ui_route_routes_into_declared_entry(monkeypatch):
+def test_late_web_ui_route_forks_own_leaf_not_the_entry(monkeypatch):
     monkeypatch.setenv("SPEC_FLOW_REQ_AMEND", "1")
     node = {"id": "web_ui",
             "requirement": "Serve a server-rendered HTML page at GET /ui"}
-    assert _sfr.Engine._amend_target(_EntryStub(), node) == "src/app.py"
+    assert _sfr.Engine._amend_target(_EntryStub(), node) is None
 
 
 def test_non_route_requirement_does_not_force_entry(monkeypatch):
@@ -201,6 +202,21 @@ def test_non_route_requirement_does_not_force_entry(monkeypatch):
     monkeypatch.setenv("SPEC_FLOW_REQ_AMEND", "1")
     node = {"id": "nicer", "requirement": "make the notes nicer to read"}
     assert _sfr.Engine._amend_target(_EntryStub(), node) is None
+
+
+def test_overlap_pointing_at_entry_is_overridden_to_own_leaf(monkeypatch):
+    # even if surface-overlap WOULD pick the entry module, the guard forks the
+    # own leaf instead — the engine-owned entry is never an amend target.
+    monkeypatch.setenv("SPEC_FLOW_REQ_AMEND", "1")
+
+    class _EntryOverlap(_EntryStub):
+        def _surface_modules(self, own):
+            return [("src/app.py", "app",
+                     "def wsgi_app(environ, start_response):\n"
+                     "    # serves notes and health\n    return []\n")]
+
+    node = {"id": "extra", "requirement": "add a notes health summary endpoint"}
+    assert _sfr.Engine._amend_target(_EntryOverlap(), node) is None
 
 
 def test_route_rule_silent_without_declared_entry(monkeypatch):
