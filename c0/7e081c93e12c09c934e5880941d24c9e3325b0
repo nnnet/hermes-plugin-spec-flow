@@ -1,0 +1,23 @@
+tests/coverage/test_requirement_amend_routing.py
+  s_a7f45290e91181::t_5dea02d2e5b0ac 184,188-189,192,196
+  s_a7f45290e91181::t_bf6da86a72ef8b 163-170
+  s_a7f45290e91181::t_12a73209e9ccf9 207-221
+spec_flow_runner.py
+  s_a7f45290e91181::t_c7b5da5fe452db 2029-2041,2050-2054
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "c07e081c93e12c09c934e5880941d24c9e3325b0",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "nvidia/nemotron-3-super-120b-a12b-20230311:free"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
