@@ -327,8 +327,17 @@ def _inline_file(root: Optional[str], rel: str) -> str:
             truncation_log.record(f"{rel}:{dropped}")
         except Exception:            # noqa: BLE001 — diagnostics never kill a run
             pass
-        text = (text[:INLINE_FILE_LIMIT]
-                + f"\n…(truncated: dropped {dropped} chars of {rel})")
+        # Cut at a clean line boundary and mark the cut with an ASCII COMMENT.
+        # This text is embedded in a prompt, but a worker shown a truncated file
+        # can echo it verbatim back to disk (live v105: a '…(truncated)' marker
+        # landed in tests/test_app.py and the U+2026 broke pytest COLLECTION of
+        # the WHOLE suite — NOT_READY). A line-complete cut + '#' comment makes a
+        # round-tripped marker syntactically harmless.
+        head = text[:INLINE_FILE_LIMIT]
+        if "\n" in head:
+            head = head.rsplit("\n", 1)[0]
+        text = (head
+                + f"\n# ...(truncated: dropped {dropped} chars of {rel})")
     return text
 
 

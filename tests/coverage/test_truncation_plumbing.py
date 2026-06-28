@@ -38,6 +38,21 @@ def test_inline_file_records_real_drop(tmp_path):
     assert drops and drops[0].startswith("big.py:")
 
 
+def test_truncation_marker_is_syntax_safe(tmp_path):
+    """v105: a truncated embed can round-trip back into a source file (a worker
+    shown a truncated file echoes it verbatim). The marker must not break Python
+    — a U+2026 outside a comment killed pytest COLLECTION of the whole suite and
+    the product came back NOT_READY on a phantom failure."""
+    from harness import role_worker as rw
+    lines = "\n".join("x%d = %d" % (i, i) for i in range(4000))   # > LIMIT
+    big = tmp_path / "big.py"
+    big.write_text(lines, encoding="utf-8")
+    out = rw._inline_file(str(tmp_path), "big.py")
+    assert "truncated" in out
+    assert "…" not in out                  # no stray ellipsis character
+    compile(out, "big.py", "exec")              # round-tripped marker compiles
+
+
 def test_detector_fires_on_drained_evidence():
     d = diag.Diagnosers()
     findings = d.run(node="leafA", gate="spec_review", verdict="REJECT",
