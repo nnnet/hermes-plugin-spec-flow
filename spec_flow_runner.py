@@ -2721,6 +2721,19 @@ class Engine:
                 + "\n\nStatus semantics (binding): unknown path -> 404; a known "
                   "path with an unsupported method -> 405; a malformed JSON body "
                   "-> 400.")
+            # The engine OWNS the health/ok_route response when no leaf handler
+            # resolves (it serves a fixed stub). Declare that exact body so a
+            # generated test matches the engine instead of guessing a different
+            # shape (live v107: the stub returned {"status": "ok"} JSON while the
+            # test asserted b'ok' -> phantom RED). A handler returning this same
+            # body resolves and is used in preference to the stub.
+            _ok = (c.get("boot") or {}).get("ok_route")
+            if _ok:
+                _rmap_block += (
+                    "\n\nHealth (binding): `GET %s` returns 200 with the JSON "
+                    'body `{"status": "ok"}` (Content-Type application/json). '
+                    "If you add a handler, return exactly that; any test must "
+                    "assert that body, not a bare string." % _ok)
         spec_md = (
             "## ASSEMBLE THE PRODUCT ENTRY (engine-required, binding)\n\n"
             f"Create `{entry}` exposing a module-level `{callable_name}` callable "
