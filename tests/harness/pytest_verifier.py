@@ -472,6 +472,67 @@ def _non_ascii_offenders(root: str) -> list:
     return out
 
 
+# Unambiguous non-code characters a weak model substitutes for ASCII. Each is a
+# pure encoding typo when it lands in a CODE position (it never belongs in Python
+# syntax); normalising it cannot change program meaning. We apply these ONLY to a
+# file that does NOT compile, so a character living legitimately inside a string
+# of a healthy file is never touched.
+_JUNK_MAP = {
+    "…": "...",                                   # … horizontal ellipsis
+    "“": '"', "”": '"',                      # “ ” smart double quotes
+    "‘": "'", "’": "'",                      # ‘ ’ smart single quotes
+    "–": "-", "—": "-",                      # – — en/em dash
+    " ": " ", " ": " ", "​": "",        # nbsp/thin/zero-width space
+    "−": "-",                                     # − minus sign
+    "×": "*",                                     # × multiplication sign
+}
+
+
+def _sanitize_junk(text: str) -> tuple[str, bool]:
+    """Replace known non-ASCII typo characters with their ASCII equivalent.
+    Returns (new_text, changed)."""
+    out = text
+    for bad, good in _JUNK_MAP.items():
+        out = out.replace(bad, good)
+    return out, (out != text)
+
+
+def autofix_non_ascii(root: str, offenders: list) -> list:
+    """Deterministically repair the non-ASCII SyntaxError class (#98) instead of
+    only hinting a weak model to do it. For each flagged file, map its junk
+    characters to ASCII and KEEP the rewrite only if the file now COMPILES — a
+    file that still fails to parse is left untouched (the model hint remains the
+    fallback). This is model-independent and honest: it does not make a failing
+    test pass, it makes an UNCOLLECTABLE file collectable so its tests give a
+    real verdict (a U+2026 in code aborted the whole suite's collection, hiding
+    every other result). Returns the list of relpaths actually fixed."""
+    fixed = []
+    seen = set()
+    for rel, _ln, _ch, _cp in offenders:
+        if rel in seen or not _safe_rel(rel):
+            continue
+        seen.add(rel)
+        f = Path(root) / rel
+        try:
+            text = f.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        new, changed = _sanitize_junk(text)
+        if not changed:
+            continue
+        try:
+            compile(new, rel, "exec")
+        except SyntaxError:
+            continue                              # still broken — leave for the model
+        try:
+            f.write_text(new if new.endswith("\n") else new + "\n",
+                         encoding="utf-8")
+            fixed.append(rel)
+        except OSError:
+            continue
+    return fixed
+
+
 def _module_exports(path: Path) -> set | None:
     """Top-level names a module binds (def/class/assignment/re-import) — the
     names another module can legally `from <mod> import`. None if unparsable."""
@@ -599,6 +660,18 @@ def make_verifier(model: Optional[str] = None,
                 passed, out = False, gate_hint
         if not gate_hint:
             passed, out = run_suite(root, include_smoke, targets)
+        # Deterministic repair of the non-ASCII SyntaxError class (#98) BEFORE
+        # spending model repair rounds: a single uncollectable file (e.g. a
+        # U+2026 in a code position) aborts the WHOLE suite's collection and
+        # hides every other result. Normalise the unambiguous junk chars and
+        # re-run — model-independent, and only ever applied to a file that does
+        # not compile, so a healthy file's strings are never touched.
+        if not passed:
+            _fixed = autofix_non_ascii(root, _non_ascii_offenders(root))
+            if _fixed:
+                llm_log.log({"event": "autofix_non_ascii", "role": "verifier",
+                             "node": str(ctx.get("node")), "files": _fixed})
+                passed, out = run_suite(root, include_smoke, targets)
         first_red = ""
         if not passed:
             # the FIRST red output is the diagnosis — keep it on record

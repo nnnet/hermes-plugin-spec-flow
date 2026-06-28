@@ -103,3 +103,38 @@ def test_platform_internal_mutations_are_refused():
     assert not pv.content_allowed("def t():\n    db._SCHEMAS.clear()\n")
     assert not pv.content_allowed("registry.ROUTES.clear()")
     assert pv.content_allowed("import db\ndb.register_schema('CREATE...')\n")
+
+
+def test_autofix_non_ascii_makes_a_uncollectable_file_collectable(tmp_path):
+    """#98: a U+2026 in a code position aborts the whole suite's collection and
+    hides every other test. The deterministic autofix normalises the junk char
+    and the file compiles — so its tests run and give a real verdict."""
+    # smart quotes around a string literal in a code position: a real
+    # SyntaxError that becomes valid once normalised to ASCII quotes.
+    root = _ws(tmp_path, {
+        "tests/test_junk.py": "def test_x():\n    msg = “hello”\n"
+                              "    assert msg == 'hello'\n",
+    })
+    offenders = pv._non_ascii_offenders(root)
+    assert any(o[0] == "tests/test_junk.py" for o in offenders)
+    fixed = pv.autofix_non_ascii(root, offenders)
+    assert "tests/test_junk.py" in fixed
+    compile((tmp_path / "tests" / "test_junk.py").read_text(), "x", "exec")
+
+
+def test_autofix_leaves_a_healthy_files_strings_untouched(tmp_path):
+    """The autofix only touches files that DO NOT compile — a healthy file with
+    a smart quote inside a string is never rewritten."""
+    body = 'def test_ui():\n    page = "click “here”"\n    assert page\n'
+    root = _ws(tmp_path, {"tests/test_ui.py": body})
+    fixed = pv.autofix_non_ascii(root, pv._non_ascii_offenders(root))
+    assert fixed == []                               # compiles -> not flagged
+    assert (tmp_path / "tests" / "test_ui.py").read_text() == body
+
+
+def test_autofix_skips_a_still_broken_file(tmp_path):
+    """A file whose only problem is NOT a junk char (real syntax error) is left
+    for the model — the autofix never persists a still-uncompilable rewrite."""
+    root = _ws(tmp_path, {"tests/test_b.py": "def test_x(:\n    pass\n"})
+    fixed = pv.autofix_non_ascii(root, pv._non_ascii_offenders(root))
+    assert fixed == []
