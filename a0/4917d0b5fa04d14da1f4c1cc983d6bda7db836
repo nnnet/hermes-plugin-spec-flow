@@ -1,0 +1,19 @@
+spec_flow_runner.py
+  s_a7f45290e91181::t_9f5688d5f9a15e 3700-3706,3708
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "a04917d0b5fa04d14da1f4c1cc983d6bda7db836",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "nvidia/nemotron-3-super-120b-a12b-20230311:free"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
