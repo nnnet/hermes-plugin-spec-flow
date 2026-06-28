@@ -4985,7 +4985,11 @@ def %(callable)s(environ, start_response):
             atomic_claim = False        # proposed a split ⇒ claims not atomic
         else:
             atomic_claim = None         # no signal ⇒ pure thresholds
-        leaf_out = self._leaf(node["metrics"], atomic=atomic_claim)
+        # A node may arrive without metrics (a decomposer JSON that omitted the
+        # field, or an engine-synthesised node): default to {} so leaf_check
+        # judges by atomic + thresholds instead of KeyError-crashing the WHOLE
+        # run (live v106). Consistent with the setdefault on the spike path.
+        leaf_out = self._leaf(node.get("metrics") or {}, atomic=atomic_claim)
         verdict = leaf_out["verdict"]
         reasons = leaf_out["reasons"]
         if leaf_out.get("mismatch"):
