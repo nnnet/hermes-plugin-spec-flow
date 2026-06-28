@@ -1,0 +1,21 @@
+tests/harness/role_worker.py
+  s_a7f45290e91181::t_d12cf6719eccdf 330-340
+tests/coverage/test_truncation_plumbing.py
+  s_a7f45290e91181::t_4062c6a7c45d9f 41-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "1a3586005df8e914309e516e8beb6db96cee3852",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "nvidia/nemotron-3-super-120b-a12b-20230311:free"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
