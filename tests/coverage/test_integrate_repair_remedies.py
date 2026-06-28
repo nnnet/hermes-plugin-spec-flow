@@ -104,3 +104,58 @@ def test_entry_failure_still_reconciles():
     assert e._attempt_integrate_repair("ui 404", only_entry) is True
     assert e._reworked == []
     assert e._reconcile_calls == [("src/app.py", False)]
+
+
+# --- Plan Шаг 1: a ROOT BOOT-GATE failure names a ROUTE, not a file frame -----
+# The assembled product boots but a route fails at runtime (live v111: GET /ui
+# -> 500 _send arity; POST /notes -> 500 no-such-table). The entry is correct,
+# so rebuilding it loops; the leaf that OWNS the failing route must be reworked.
+# blame resolves the owner from the route map when no src/<file>.py frame exists.
+
+_RMAP = {("GET", "/ui"): ("web_ui", "handle_ui", "p"),
+         ("POST", "/notes"): ("notes_api", "create_note", "pq")}
+
+
+def _eng_routes(owned):
+    e = Engine.__new__(Engine)
+    e.tasks = {t: object() for t in owned}
+    e._product_contract = lambda: {"entry": "src/app.py", "callable": ["wsgi_app"]}
+    e._resolve_route_handlers = lambda contract: (dict(_RMAP), [])
+    return e
+
+
+def test_boot_route_failure_blames_route_owner():
+    e = _eng_routes(["web_ui", "notes_api"])
+    detail = "assembled product does not serve its contract: GET /ui -> 500 / not HTML"
+    assert e._blamed_module_from_failure(detail, "app") == "web_ui"
+
+
+def test_boot_route_notes_500_blames_storage_owner():
+    e = _eng_routes(["web_ui", "notes_api"])
+    assert e._blamed_module_from_failure("POST /notes -> 500", "app") == "notes_api"
+
+
+def test_boot_route_unowned_route_is_none():
+    # the route resolves to a module that is NOT an owned leaf — do not rework it.
+    e = _eng_routes(["web_ui"])          # notes_api absent from tasks
+    assert e._blamed_module_from_failure("POST /notes -> 500", "app") is None
+
+
+def test_route_blame_never_picks_the_engine_entry():
+    e = Engine.__new__(Engine)
+    e.tasks = {"app": object()}
+    e._product_contract = lambda: {"entry": "src/app.py"}
+    e._resolve_route_handlers = lambda c: ({("GET", "/ui"): ("app", "wsgi_app", "p")}, [])
+    assert e._blamed_module_from_failure("GET /ui -> 500", "app") is None
+
+
+def test_boot_route_failure_reworks_owner_not_entry():
+    e = _eng("rework")
+    e.tasks = {"web_ui": object()}
+    e._resolve_route_handlers = lambda c: ({("GET", "/ui"): ("web_ui", "h", "p")}, [])
+    e._reworked = []
+    e._remedy_rework_module = lambda mod, reason: e._reworked.append(mod) or True
+    detail = "assembled product does not serve its contract: GET /ui -> 500"
+    assert e._attempt_integrate_repair("boot RED", detail) is True
+    assert e._reworked == ["web_ui"]          # the leaf, not the entry
+    assert e._reconcile_calls == []

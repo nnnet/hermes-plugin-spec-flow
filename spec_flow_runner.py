@@ -5702,7 +5702,9 @@ def %(callable)s(environ, start_response):
         for m in re.finditer(r"\bsrc/([A-Za-z_][A-Za-z0-9_]*)\.py", text):
             stems.append(m.group(1))
         if not stems:
-            return None
+            # No src/<file>.py frame — but a ROOT BOOT-GATE detail still names the
+            # failing ROUTE ("GET /ui -> 500"). Blame the route's owner (Шаг 1).
+            return self._blamed_module_from_routes(text, entry_stem)
         # deepest frame last in a pytest traceback; prefer a known leaf that is
         # neither the entry nor a test, scanning from the deepest frame upward.
         for stem in reversed(stems):
@@ -5711,6 +5713,48 @@ def %(callable)s(environ, start_response):
             if stem in self.tasks or stem == "product_entry":
                 if stem != "product_entry":
                     return stem
+        # frames named only the entry / tests — fall back to route-owner blame so
+        # a boot-gate detail that ALSO mentions the entry frame still heals the leaf.
+        return self._blamed_module_from_routes(text, entry_stem)
+
+    def _blamed_module_from_routes(self, text: str,
+                                   entry_stem: str = "") -> "Optional[str]":
+        """Plan Шаг 1 — blame the leaf that OWNS a failing route named in a
+        ROOT BOOT-GATE detail when no ``src/<file>.py`` frame pins a module.
+
+        Why: the assembled product BOOTS but a route fails at runtime (live v111:
+        ``GET /ui -> 500`` from a handler arity bug; ``POST /notes -> 500`` from a
+        missing schema). The engine owns the entry wiring and it is correct, so
+        the existing remedy (rebuild the entry) loops without ever touching the
+        leaf whose handler 500s. The boot detail carries the route but no file
+        frame, so the traceback walk above finds nothing. Resolve the route's
+        owner with the SAME AST resolver the entry synthesiser uses — a
+        deterministic, model-independent blame — and rework THAT leaf instead.
+
+        Returns the owning module stem (an owned leaf, never the entry), or None
+        when no failing route resolves to a built leaf."""
+        if not text:
+            return None
+        # route paths the detail names; drop anything that looks like a source
+        # file (``src/app.py`` -> ``/app.py``) so a stray frame path is not read
+        # as a route.
+        paths = {p.rstrip("/.,;:)\"'") for p in
+                 re.findall(r"(/[A-Za-z0-9_./{}-]+)", text)}
+        paths = {p for p in paths if len(p) > 1
+                 and not p.endswith((".py", ".md", ".txt", ".json", ".html"))}
+        if not paths:
+            return None
+        try:
+            contract = self._product_contract()
+            mapping, _unresolved = self._resolve_route_handlers(contract)
+        except Exception:  # noqa: BLE001 — resolver is best-effort
+            return None
+        for (_method, path), info in (mapping or {}).items():
+            stem = info[0] if isinstance(info, (tuple, list)) and info else None
+            if not stem or stem == entry_stem:
+                continue
+            if path.rstrip("/") in paths and stem in getattr(self, "tasks", {}):
+                return stem
         return None
 
     def _remedy_rework_module(self, module: str, reason: str) -> bool:
