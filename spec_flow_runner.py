@@ -1300,7 +1300,7 @@ class Workspace:
 
     def spec(self, node_id, title, depth, verdict, reasons, parent, plan_lines,
              node: Optional[dict] = None, target: str = "",
-             module: Optional[str] = None) -> str:
+             module: Optional[str] = None, route_binding: str = "") -> str:
         """Materialise the node's level spec. Carries every piece of REAL data
         the run has about the node: gate inputs/outputs, resolved decisions,
         spike findings, the governing contract, drift/review episodes, the
@@ -1356,6 +1356,11 @@ class Workspace:
             # spec-flow-decompose skill); the engine header above stays the
             # deterministic, traceable core
             lines += ["", worker_md]
+        if route_binding:
+            # Phase 1: engine-declared route -> handler binding for THIS leaf's
+            # routes — DATA, not a guess. The leaf exposes the exact symbols the
+            # assembled entry imports, so the binding is never inferred later.
+            lines += ["", route_binding]
         lines += ["", "## Plan"]
         lines += [f"- {p}" for p in plan_lines]
         children = node.get("children")
@@ -2964,6 +2969,38 @@ class Engine:
                 uniq.append(mp)
         return uniq
 
+    def _leaf_route_binding(self, node: dict) -> str:
+        """Phase 1: the canonical route -> handler binding for the routes THIS
+        leaf owns, emitted as engine-declared DATA (never inferred). A declared
+        route is owned by the leaf when its path token appears in the leaf's own
+        text (requirement / title / authored spec). The leaf is told to expose
+        ``def <handler>(payload, query)`` EXACTLY, so the assembled entry imports
+        each handler by name and the binding is never guessed at assembly time.
+        Empty string when this leaf owns no declared route (non-HTTP leaf)."""
+        try:
+            routes = self._declared_route_set(self._product_contract() or {})
+        except Exception:        # noqa: BLE001
+            return ""
+        if not routes:
+            return ""
+        text = " ".join(str(node.get(k) or "")
+                        for k in ("requirement", "title", "spec_markdown"))
+        owned = []
+        for m, p in routes:
+            stem = (p or "").rstrip("/") or "/"
+            if re.search(r"(?<![\w/])" + re.escape(stem) + r"(?![\w])", text):
+                owned.append((m, p))
+        if not owned:
+            return ""
+        lines = "\n".join(
+            "- `%s %s` -> `def %s(payload, query)`"
+            % (m, p, _canonical_handler_symbol(m, p)) for m, p in owned)
+        return ("## Route -> handler binding (engine-declared)\n"
+                "Name each handler EXACTLY as listed and expose it at module "
+                "level so the assembled entry imports it by this name:\n" + lines
+                + "\nStatus semantics: unknown path -> 404; known path with an "
+                "unsupported method -> 405; malformed JSON body -> 400.")
+
     # first-parameter names that mark a STORAGE/DEPENDENCY function (not an HTTP
     # handler): the router cannot supply these, so a route must not wire to them.
     _DEP_FIRST_PARAMS = frozenset({
@@ -4427,7 +4464,8 @@ def %(callable)s(environ, start_response):
         spec_rel = self.workspace.spec(
             nid, title, depth, spec_args["verdict"], spec_args["reasons"],
             parent, spec_args["plan"], node=node, target=self._target,
-            module=self._module_for(nid))
+            module=self._module_for(nid),
+            route_binding=self._leaf_route_binding(node))
         # deterministic lint BEFORE the reviewer: the mechanical
         # traceability class (AC without REQ and the reverse) is fixed by
         # a bounded author round with the EXACT violations — a reviewer
@@ -4466,7 +4504,8 @@ def %(callable)s(environ, start_response):
                 nid, title, depth, spec_args["verdict"],
                 spec_args["reasons"], parent, spec_args["plan"],
                 node=node, target=self._target,
-            module=self._module_for(nid))
+            module=self._module_for(nid),
+                route_binding=self._leaf_route_binding(node))
         else:
             lint = _lint_spec_traceability(nid,
                                            str(node.get("spec_markdown")
@@ -4520,7 +4559,8 @@ def %(callable)s(environ, start_response):
             spec_rel = self.workspace.spec(
                 nid, title, depth, spec_args["verdict"], spec_args["reasons"],
                 parent, spec_args["plan"], node=node, target=self._target,
-                module=self._module_for(nid))
+                module=self._module_for(nid),
+                route_binding=self._leaf_route_binding(node))
         # if a scope FAIL was raised but the rework cleared it, emit the closing
         # PASS on the SAME gate — otherwise the FAIL reads as an unresolved
         # problem forever (no later PASS to pair it with)
@@ -4602,7 +4642,8 @@ def %(callable)s(environ, start_response):
                 spec_rel = self.workspace.spec(
                     nid, title, depth, spec_args["verdict"], spec_args["reasons"],
                     parent, spec_args["plan"], node=node, target=self._target,
-            module=self._module_for(nid))
+            module=self._module_for(nid),
+                    route_binding=self._leaf_route_binding(node))
                 verdict, reasons = self._consult_reviewer(nid, title, spec_rel, depth)
             if verdict == "REJECT":
                 exhausted = getattr(self, "_review_exhausted", "record")
