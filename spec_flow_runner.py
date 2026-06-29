@@ -3040,6 +3040,15 @@ class Engine:
                     is_html = bool(re.search(
                         r"<!doctype|<html|text/html|['\"]html['\"]",
                         seg_src, re.I))
+                    # An internal helper (`_send`, `_write`, `_db`, `_row_to_dict`)
+                    # is NOT a route handler — only a raw-WSGI `_handle_*` (is_ws)
+                    # may legitimately carry a leading underscore and serve a route.
+                    # Excluding pure `_`-helpers stops the resolver from wiring a
+                    # route to a response/DB helper (live v117: GET /ui resolved to
+                    # `_send`, a header-writing helper flagged is_html, and the
+                    # assembled product NameError/500'd at boot).
+                    if n.name.startswith("_") and not is_ws:
+                        continue
                     cands.append((py.stem, n.name, abi, n.name.lower(),
                                   is_html, body_paths))
         mapping: dict = {}

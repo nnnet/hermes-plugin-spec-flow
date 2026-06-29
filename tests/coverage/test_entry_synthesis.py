@@ -480,6 +480,29 @@ def test_strip_self_imports_removes_circular_lines(tmp_path):
     assert eng._strip_self_imports("src/_product_logic.py") is False
 
 
+def test_resolver_skips_internal_underscore_helpers(tmp_path):
+    # v117 scramble: GET /ui resolved to `_send` — a header-writing helper that
+    # happened to contain "text/html" so it was flagged is_html — instead of the
+    # real page handler. The assembled product then NameError/500'd at boot. An
+    # internal `_`-prefixed helper must never be a route-handler candidate.
+    eng = _engine(tmp_path)
+    src = pathlib.Path(eng.workspace.root) / "src"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "web.py").write_text(
+        "def _send(payload, query):\n"
+        "    return (200, {'Content-Type': 'text/html'}, b'')\n"
+        "def render_notes_page(payload, query):\n"
+        "    return (200, '<!doctype html><html>notes</html>')\n",
+        encoding="utf-8")
+    contract = {"entry": "src/app.py", "callable": ["wsgi_app"],
+                "boot": {"html_route": "/ui"}, "routes": [["GET", "/ui"]]}
+    mapping, _unresolved = eng._resolve_route_handlers(contract)
+    bound = mapping.get(("GET", "/ui"))
+    assert bound is not None, "GET /ui must resolve to a real handler"
+    assert bound[1] != "_send", "a route must not bind to an internal _ helper"
+    assert bound[1] == "render_notes_page"
+
+
 def test_harden_entry_wraps_unguarded_json_loads(tmp_path):
     """Phase 2 net: an LLM entry that parses the body without try/except must be
     wrapped so a malformed body answers 400, never 500. Idempotent."""
