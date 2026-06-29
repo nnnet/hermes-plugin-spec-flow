@@ -5953,6 +5953,39 @@ def %(callable)s(environ, start_response):
             return self._remedy_reconcile_check(entry, escalate=(remedy == "escalate_tier"))
         return False
 
+    def _assembled_suite_failures(self) -> "Optional[list]":
+        """Phase 7 (honest conjunction): run the assembled product's FULL test
+        suite as the final authority and return the failing test ids ([] when
+        all green, None when there is no suite). A terminal READY must require
+        this to be empty. A green narrow acceptance over a RED corpus is exactly
+        the v119 false green: a sibling leaf re-authored get_notes and a /ui
+        ordering test went red, yet the run reported READY."""
+        ws = self.workspace
+        if not (ws.enabled and ws.root):
+            return None
+        tests_dir = Path(ws.root) / "tests"
+        if not tests_dir.exists():
+            return None
+        argv = ["python3", "-m", "pytest", "-q", "--no-header",
+                f"--confcutdir={ws.root}", "-p", "no:cacheprovider",
+                "--import-mode=importlib", "tests"]
+        try:
+            p = subprocess.run(argv, capture_output=True, text=True,
+                               timeout=300, cwd=str(ws.root))
+        except Exception as exc:  # noqa: BLE001
+            return ["assembled test suite did not run: %s" % exc]
+        if p.returncode == 0:
+            return []
+        fails = []
+        for ln in ((p.stdout or "") + (p.stderr or "")).splitlines():
+            ln = ln.strip()
+            if "::" in ln and ("FAILED" in ln or "ERROR" in ln):
+                for tok in ln.split():
+                    if "::" in tok:
+                        fails.append(tok)
+                        break
+        return fails or ["assembled test suite is RED"]
+
     def _verify_tests(self) -> None:
         ws = self.workspace
         if not ws.enabled or not ws.root:
@@ -6199,6 +6232,14 @@ def %(callable)s(environ, start_response):
                            boot_detail or "product does not serve its contract")
                 else:
                     record(kind, check, False, no_entry_note)
+
+        # Phase 7 (honest conjunction): the assembled product's FULL test suite
+        # is the final authority. A narrow acceptance that passes over a RED
+        # corpus is the v119 false green — every late requirement that wrote a
+        # test (and every base feature) must still pass on the ASSEMBLED app,
+        # not just at leaf time. Any failing test forces NOT READY.
+        for _tid in (self._assembled_suite_failures() or []):
+            record("suite", _tid, False, "assembled test suite RED")
 
         ready = bool(lines) and not failed
         verdict = "READY" if ready else "NOT READY"
