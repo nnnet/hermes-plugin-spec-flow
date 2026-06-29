@@ -5907,6 +5907,14 @@ def %(callable)s(environ, start_response):
             for _round in range(max(1, getattr(self, "_product_repair_rounds", 3))):
                 if not self._attempt_integrate_repair(reason, out):
                     break               # no actionable remedy — stop looping
+                # A repair that REWORKS a leaf can change its handler surface, so
+                # the engine-owned entry must be RE-DERIVED before re-verifying —
+                # otherwise app.py keeps importing a handler the rework dropped and
+                # the assembled product ImportErrors at boot (live v115: web_ui was
+                # reworked without _handle_health while app.py still imported it).
+                # Idempotent (write-only-if-changed); a no-op when the surface is
+                # unchanged. Closes the entry↔leaf drift gap (Plan Шаг 1/2).
+                self._try_synthesize_entry()
                 passed, out = _run_suite()
                 if passed:
                     b_ok, b_detail = self._assembled_product_boots()
