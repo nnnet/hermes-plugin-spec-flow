@@ -503,6 +503,29 @@ def test_resolver_skips_internal_underscore_helpers(tmp_path):
     assert bound[1] == "render_notes_page"
 
 
+def test_resolver_html_handler_loses_a_data_route(tmp_path):
+    # v117 scramble #2: render_notes_page (returns HTML) wrongly won POST /notes —
+    # a JSON round-trip route — over the real data handler, and the round-trip
+    # 500'd. An HTML/page handler must not win a non-html (data) route.
+    eng = _engine(tmp_path)
+    src = pathlib.Path(eng.workspace.root) / "src"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "web.py").write_text(
+        "def render_notes_page(payload, query):\n"
+        "    return (200, '<!doctype html><html>notes</html>')\n",
+        encoding="utf-8")
+    (src / "data.py").write_text(
+        "def create_note(payload, query):\n"
+        "    return (201, {'id': 1})\n", encoding="utf-8")
+    contract = {"entry": "src/app.py", "callable": ["wsgi_app"],
+                "boot": {"json_roundtrip": "/notes"},
+                "routes": [["POST", "/notes"]]}
+    mapping, _u = eng._resolve_route_handlers(contract)
+    bound = mapping.get(("POST", "/notes"))
+    assert bound is not None, "POST /notes must resolve to a handler"
+    assert bound[1] == "create_note", "a data route must bind the data handler"
+
+
 def test_harden_entry_wraps_unguarded_json_loads(tmp_path):
     """Phase 2 net: an LLM entry that parses the body without try/except must be
     wrapped so a malformed body answers 400, never 500. Idempotent."""

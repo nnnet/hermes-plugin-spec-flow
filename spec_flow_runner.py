@@ -3078,7 +3078,13 @@ class Engine:
             res_sing = res.rstrip("s") if res else ""
             best = None
             best_score = 0
-            for stem, name, abi, low, _ish, _bp in cands:
+            # a DATA route returns/consumes JSON (any write method, or the declared
+            # json round-trip path) — a GET page route may legitimately serve HTML.
+            json_route = ((contract.get("boot") or {}).get("json_roundtrip")
+                          or "").rstrip("/")
+            is_data_route = (method in ("POST", "PUT", "PATCH", "DELETE")
+                             or path.rstrip("/") == json_route)
+            for stem, name, abi, low, ish, _bp in cands:
                 # ELIGIBILITY: the handler must relate to this route's RESOURCE.
                 # A method-synonym match alone is NOT enough — otherwise `get_notes`
                 # falsely wins GET /ui / GET /about / GET /health just by carrying
@@ -3104,6 +3110,12 @@ class Engine:
                     score += 1
                 if root_hit:
                     score += 2
+                if ish and is_data_route:
+                    # an HTML/page handler is implausible for a DATA route — it
+                    # returns markup, not the JSON the route's contract needs (live
+                    # v117: render_notes_page, is_html, wrongly won POST /notes and
+                    # the round-trip 500'd). GET page routes keep their HTML handler.
+                    score -= 4
                 if score > best_score:
                     best_score, best = score, (stem, name, abi)
             if best and best_score >= 2:
