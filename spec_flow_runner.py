@@ -3278,6 +3278,39 @@ def %(callable)s(environ, start_response):
         return tmpl % {"imports": imports_block, "routes": routes_block,
                        "callable": callable_name, "aliases": aliases_block}
 
+    def _strip_self_imports(self, rel: str) -> bool:
+        """Deterministically drop any ``from <own-stem> import …`` line from an
+        engine-generated module. A module importing FROM ITSELF is always a bug
+        (circular import; the assembled product ImportErrors at boot — live v116:
+        ``_product_logic.py`` held ``from _product_logic import get_health as
+        _h0`` carried over by a harvest). Line-based (never reformats healthy
+        code); returns True iff the file changed. Root guard for the
+        invalid-generated-import class (v110/v115/v116)."""
+        ws = self.workspace
+        if not (getattr(ws, "enabled", False) and getattr(ws, "root", None)):
+            return False
+        p = Path(ws.root) / rel
+        if not p.is_file():
+            return False
+        try:
+            text = p.read_text(encoding="utf-8")
+        except OSError:
+            return False
+        pat = re.compile(r"^\s*from\s+" + re.escape(p.stem) + r"\s+import\b")
+        lines = text.splitlines(keepends=True)
+        kept = [ln for ln in lines if not pat.match(ln)]
+        if len(kept) == len(lines):
+            return False
+        try:
+            p.write_text("".join(kept), encoding="utf-8")
+        except OSError:
+            return False
+        self.emit("integrate", "verifier", "spec-integrate", "L0:integrate",
+                  f"stripped self-import from {rel}",
+                  f"removed {len(lines) - len(kept)} circular import line(s)",
+                  "integrate_verify", "", level=L_MILESTONE)
+        return True
+
     def _harvest_entry_handlers(self, contract: dict) -> bool:
         """Relocate a MONOLITHIC entry's business logic into a sibling leaf module
         so the engine can own the entry as a pure router that imports it. A weak
@@ -3585,6 +3618,15 @@ def %(callable)s(environ, start_response):
                 "from _product_logic import *  # noqa: F401,F403 re-export harvested\n",
                 1)
         entry = contract["entry"]
+        # Root guard for the v110/v115/v116 invalid-generated-import class: an
+        # engine-harvested module must never import FROM ITSELF (a circular import
+        # -> the assembled product ImportErrors at boot). Strip it on EVERY
+        # assembly — covers a stale _product_logic.py that an earlier in-run cycle
+        # poisoned, even when this synth call leaves the entry unchanged below.
+        try:
+            self._strip_self_imports("src/_product_logic.py")
+        except Exception:               # noqa: BLE001 — guard is best-effort
+            pass
         try:
             ep = Path(ws.root) / entry
             if ep.is_file() and ep.read_text(

@@ -459,6 +459,27 @@ def test_harvest_drops_self_referential_product_logic_imports(tmp_path):
     assert st == 200
 
 
+def test_strip_self_imports_removes_circular_lines(tmp_path):
+    # root guard: an engine module importing FROM ITSELF is a circular import.
+    # Even if a stale _product_logic.py was poisoned in an earlier in-run cycle,
+    # the synth strips it on every assembly so the boot never ImportErrors.
+    eng = _engine(tmp_path)
+    src = pathlib.Path(eng.workspace.root) / "src"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "_product_logic.py").write_text(
+        "import json\n"
+        "from _product_logic import get_health as _h0\n"
+        "from _product_logic import get_notes as _h1\n"
+        "def get_health(p, q):\n    return (200, {})\n", encoding="utf-8")
+    assert eng._strip_self_imports("src/_product_logic.py") is True
+    body = (src / "_product_logic.py").read_text(encoding="utf-8")
+    assert "from _product_logic import" not in body
+    assert "import json" in body and "def get_health" in body
+    compile(body, "_product_logic.py", "exec")          # no circular import
+    # idempotent: a clean file is not rewritten
+    assert eng._strip_self_imports("src/_product_logic.py") is False
+
+
 def test_harden_entry_wraps_unguarded_json_loads(tmp_path):
     """Phase 2 net: an LLM entry that parses the body without try/except must be
     wrapped so a malformed body answers 400, never 500. Idempotent."""
