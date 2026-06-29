@@ -3814,7 +3814,7 @@ def %(callable)s(environ, start_response):
         # re-reworking the first, and never reached the others at a budget of 3.
         # Default 6 = ~3 surfaces × 2 attempts; only failing runs ever spend it.
         self._product_repair_rounds = int(
-            project.get("product_repair_rounds", 6))
+            project.get("product_repair_rounds", 3))
         # unified gate policies — the `gates:` block wins over legacy keys
         gates = project.get("gates") or {}
         g_rev = gates.get("review") or {}
