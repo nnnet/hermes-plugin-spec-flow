@@ -430,6 +430,35 @@ def test_monolithic_entry_is_harvested_then_synthesized(tmp_path):
     assert st == 400
 
 
+def test_harvest_drops_self_referential_product_logic_imports(tmp_path):
+    # v116 root: a prior assembly cycle left synth-generated aliases
+    # (`from _product_logic import handle_health as _h0`) inside the monolithic
+    # entry. Harvesting must NOT carry them into _product_logic.py — a module
+    # importing from itself is a circular import and the assembled product
+    # ImportErrors at boot ("cannot import name ... from partially initialized
+    # module '_product_logic'").
+    eng = _engine(tmp_path)
+    src = pathlib.Path(eng.workspace.root) / "src"
+    src.mkdir(parents=True, exist_ok=True)
+    poisoned = ("from _product_logic import handle_health as _h0\n"
+                "from _product_logic import get_notes as _h1\n" + _MONOLITH_APP)
+    (src / "app.py").write_text(poisoned)
+
+    assert eng._harvest_entry_handlers(_CONTRACT) is True
+    body = (src / "_product_logic.py").read_text(encoding="utf-8")
+    assert "from _product_logic import" not in body, \
+        "harvest must never write a self-import into the harvest module"
+    compile(body, "_product_logic.py", "exec")     # no circular import / valid
+
+    # the full assembly still boots and serves its contract
+    mapping2, unresolved2 = eng._resolve_route_handlers(_CONTRACT)
+    assert unresolved2 == []
+    code = eng._synthesize_entry_code(_CONTRACT, mapping2, unresolved2)
+    app = _load_entry(code, tmp_path / "m2.db", src)
+    st, _h, _b = _call(app, "GET", "/health")
+    assert st == 200
+
+
 def test_harden_entry_wraps_unguarded_json_loads(tmp_path):
     """Phase 2 net: an LLM entry that parses the body without try/except must be
     wrapped so a malformed body answers 400, never 500. Idempotent."""

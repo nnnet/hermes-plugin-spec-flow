@@ -3317,6 +3317,15 @@ def %(callable)s(environ, start_response):
                     isinstance(t, ast.Name) and t.id in callables
                     for t in n.targets):
                 continue                              # drop `application = wsgi_app`
+            elif isinstance(n, ast.ImportFrom) and (n.module or "") == "_product_logic":
+                # NEVER carry a `from _product_logic import … as _hN` alias INTO the
+                # harvest module itself — that is a self-import -> circular import,
+                # and the assembled product ImportErrors at boot (live v116: the
+                # monolithic entry already held synth-generated aliases from a prior
+                # assembly cycle; harvesting them here made _product_logic import
+                # from itself). The synth re-adds the correct aliases in the ENTRY,
+                # which is where they belong.
+                continue
             else:
                 keep.append(n)                        # imports, constants, helpers
         if not has_handler:
