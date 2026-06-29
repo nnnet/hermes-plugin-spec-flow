@@ -775,12 +775,55 @@ def goal_wants_notes(constitution, goal: str = "") -> bool:
 # The probe SCRIPT run in a FRESH python subprocess so that worker-test
 # sys.modules mocks and conftest fixtures CANNOT leak into the assembly —
 # this is the whole point of B2: import the real product entry, no mocking.
+def _derive_boot_routes(constitution, goal: str = ""):
+    """Derive the boot-gate routes from the case WORDING — never hardcode a path.
+
+    Scans the goal + constitution for ``VERB /path`` mentions and classifies a
+    liveness GET (health/status/ready/live/ping), the JSON round-trip path (one
+    path with both POST and GET), and an HTML page route (a GET path described
+    near page/form/html/render wording). Any of the three may be "" when the
+    case does not declare it — the probe then skips that check. Pure text,
+    model-independent. (A late HITL page like /ui is NOT in the base goal, so it
+    is checked by its own node, not smuggled in here as a literal.)"""
+    parts = constitution if isinstance(constitution, (list, tuple)) \
+        else [str(constitution or "")]
+    text = (goal or "") + "\n" + "\n".join(str(p) for p in parts)
+    low = text.lower()
+    methods: dict = {}
+    for m in re.finditer(r"\b(GET|POST|PUT|DELETE|PATCH)\s+(/[A-Za-z0-9_./-]+)",
+                         text, re.I):
+        p = m.group(2).rstrip("/.,;:)\"'")
+        methods.setdefault(p, set()).add(m.group(1).upper())
+    ok_route = html_route = notes_route = ""
+    for p, ms in methods.items():
+        pl = p.lower()
+        if not ok_route and any(k in pl for k in
+                                ("health", "status", "ready", "live", "ping")):
+            ok_route = p
+        if not notes_route and "POST" in ms and "GET" in ms:
+            notes_route = p
+    for p, ms in methods.items():
+        if "GET" in ms and p not in (ok_route, notes_route):
+            i = low.find(p.lower())
+            if i >= 0 and any(k in low[max(0, i - 90):i + 90]
+                              for k in ("html", "page", "browser", "form",
+                                        "render")):
+                html_route = p
+                break
+    return ok_route, html_route, notes_route
+
+
 _BOOT_PROBE = r'''
 import glob, importlib, io, json, os, sys, tempfile
 from pathlib import Path
 
 ws = Path(sys.argv[1]).resolve()
 want_notes = sys.argv[2] == "1"
+# routes are DERIVED from the case wording and passed in — no hardcoded paths.
+# Any empty route means the case did not declare it; that check is skipped.
+ok_route = sys.argv[3] if len(sys.argv) > 3 else ""
+html_route = sys.argv[4] if len(sys.argv) > 4 else ""
+notes_route = sys.argv[5] if len(sys.argv) > 5 else "/notes"
 sys.path.insert(0, str(ws / "src"))
 # give the product a private, throwaway sqlite db if it reads these env vars
 db = os.path.join(tempfile.mkdtemp(prefix="bootgate-"), "boot.db")
@@ -837,32 +880,35 @@ def call(method, path, payload=None, query=""):
     raw = b"".join(chunks if chunks else [])
     return cap.get("status", 0), raw
 
-# minimum contract: GET /health -> 200, GET /ui returns HTML
-st, _ = call("GET", "/health")
-if st != 200:
-    fail("GET /health -> %s (expected 200)" % st)
-
-st, raw = call("GET", "/ui")
-text = (raw or b"").decode("utf-8", "replace").lower()
-if st != 200 or ("<" not in text):
-    fail("GET /ui -> %s / not HTML" % st)
-
-if want_notes:
-    st, raw = call("POST", "/notes", {"text": "bootgate"})
-    if st not in (200, 201):
-        fail("POST /notes -> %s" % st)
-    st, raw = call("GET", "/notes")
+# minimum contract — every route DERIVED from the case wording (no hardcode);
+# an empty route means the case did not declare it, so that check is skipped.
+if ok_route:
+    st, _ = call("GET", ok_route)
     if st != 200:
-        fail("GET /notes -> %s" % st)
+        fail("GET %s -> %s (expected 200)" % (ok_route, st))
+
+if html_route:
+    st, raw = call("GET", html_route)
+    text = (raw or b"").decode("utf-8", "replace").lower()
+    if st != 200 or ("<" not in text):
+        fail("GET %s -> %s / not HTML" % (html_route, st))
+
+if want_notes and notes_route:
+    st, raw = call("POST", notes_route, {"text": "bootgate"})
+    if st not in (200, 201):
+        fail("POST %s -> %s" % (notes_route, st))
+    st, raw = call("GET", notes_route)
+    if st != 200:
+        fail("GET %s -> %s" % (notes_route, st))
     try:
         data = json.loads(raw or b"{}")
         items = data.get("items", data if isinstance(data, list) else [])
         texts = " ".join(str(i.get("text", "")) for i in items
                          if isinstance(i, dict))
     except Exception as exc:  # noqa: BLE001
-        fail("GET /notes body not JSON: %r" % (exc,))
+        fail("GET %s body not JSON: %r" % (notes_route, exc))
     if "bootgate" not in texts:
-        fail("POST then GET /notes did not round-trip the note")
+        fail("POST then GET %s did not round-trip the note" % notes_route)
 
 print("BOOTGATE_OK")
 '''
@@ -887,10 +933,12 @@ def boot_gate(root: str, constitution, goal: str = "",
     if entry is None:
         return True, "(no entry declared — boot-gate skipped)"
     want_notes = "1" if goal_wants_notes(constitution, goal) else "0"
+    ok_route, html_route, notes_route = _derive_boot_routes(constitution, goal)
     tmo = timeout if timeout is not None else PYTEST_TIMEOUT
     try:
         proc = subprocess.run(
-            [sys.executable, "-c", _BOOT_PROBE, str(root), want_notes],
+            [sys.executable, "-c", _BOOT_PROBE, str(root), want_notes,
+             ok_route, html_route, notes_route],
             capture_output=True, text=True, timeout=tmo)
     except subprocess.TimeoutExpired:
         return False, f"boot-gate TIMED OUT after {tmo}s assembling {entry}"
