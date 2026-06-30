@@ -5229,12 +5229,15 @@ def %(callable)s(environ, start_response):
         """#122: small-product floor predicate. Returns the declared route count
         (> 0) when THIS is the root product node (depth 0, no parent) of a
         product-depth run whose contract declares at most ``_small_product_routes``
-        routes and the node carries no open decision and no explicit ``atomic``
-        claim — i.e. the whole micro-service should be ONE atomic leaf. Returns 0
-        otherwise. Deterministic and model-independent: the route count comes from
-        the human-text contract (``_product_contract``), never from model output.
-        Larger products (> N routes) return 0 and keep decomposing."""
-        if not (depth == 0 and parent is None and "atomic" not in node
+        routes and the node carries no open decision — i.e. the whole
+        micro-service should be ONE leaf. Returns 0 otherwise. Deterministic and
+        model-independent: the route count comes from the human-text contract
+        (``_product_contract``), never from model output. Larger products
+        (> N routes) return 0 and keep decomposing. A node the decomposer ALREADY
+        marked ``atomic: true`` is left to the normal gate (it is already a leaf,
+        nothing to override); an ``atomic: false`` split IS overridden — that is
+        the whole point of the floor."""
+        if not (depth == 0 and parent is None and not node.get("atomic")
                 and self._small_product_routes and self.depth >= DEPTH_PRODUCT):
             return 0
         if int((node.get("metrics") or {}).get("open_decisions", 0) or 0) != 0:
@@ -5336,31 +5339,46 @@ def %(callable)s(environ, start_response):
         # `wsgi_app`/`application` entries, e2e RED, 343 calls). Larger products
         # (> N routes) keep decomposing. Deterministic, model-independent; only
         # collapses an over-split tiny root, never splits a leaf.
+        # #122: small-product floor. The ROOT product node of a product-depth
+        # run whose contract declares <= _small_product_routes routes is built as
+        # ONE leaf — a single module owns every route + its storage and the
+        # engine synthesizes the entry. This is a deterministic ARCHITECTURE
+        # policy that OVERRIDES the LOC-heuristic leaf_check for a micro-service:
+        # it stops the decomposer from shattering a tiny service into rival
+        # whole-app modules that fail to compose at import (v125 root: 8 leaves,
+        # 3 rival `wsgi_app`/`application` entries, e2e RED, 343 calls). Honest —
+        # an explicit policy verdict + emit, NOT forged metrics that trick the
+        # guardrail. Larger products (> N routes) fall through to the normal gate.
         _nr = self._small_product_root(node, depth, parent)
         if _nr:
             node["atomic"] = True
+            node.pop("children", None)
+            leaf_out = {"verdict": "leaf",
+                        "reasons": [f"small product: {_nr} route(s) <= "
+                                    f"{self._small_product_routes}"],
+                        "basis": ("small-product floor: one module owns all "
+                                  "routes + storage; engine synthesizes entry")}
             self.emit("decompose", "engine", "", nid,
                       "small product → single atomic leaf",
                       f"{_nr} declared route(s) <= {self._small_product_routes}: "
-                      "one module owns all routes + storage, engine "
-                      "synthesizes the entry (no rival whole-app modules)",
+                      "no rival whole-app modules; engine synthesizes the entry",
                       "small_product", "leaf", level=L_MILESTONE)
-
-        # the gate: leaf vs branch. Atomicity is the PRIMARY judgment — an
-        # explicit ``atomic`` field, else inferred from whether the decomposer
-        # proposed children — and leaf_check reconciles it with the thresholds
-        # (the guardrail that prunes over-decomposition / forces under-).
-        if "atomic" in node:
-            atomic_claim = bool(node["atomic"])
-        elif node.get("children"):
-            atomic_claim = False        # proposed a split ⇒ claims not atomic
         else:
-            atomic_claim = None         # no signal ⇒ pure thresholds
-        # A node may arrive without metrics (a decomposer JSON that omitted the
-        # field, or an engine-synthesised node): default to {} so leaf_check
-        # judges by atomic + thresholds instead of KeyError-crashing the WHOLE
-        # run (live v106). Consistent with the setdefault on the spike path.
-        leaf_out = self._leaf(node.get("metrics") or {}, atomic=atomic_claim)
+            # the gate: leaf vs branch. Atomicity is the PRIMARY judgment — an
+            # explicit ``atomic`` field, else inferred from whether the decomposer
+            # proposed children — and leaf_check reconciles it with the thresholds
+            # (the guardrail that prunes over-decomposition / forces under-).
+            if "atomic" in node:
+                atomic_claim = bool(node["atomic"])
+            elif node.get("children"):
+                atomic_claim = False        # proposed a split ⇒ claims not atomic
+            else:
+                atomic_claim = None         # no signal ⇒ pure thresholds
+            # A node may arrive without metrics (a decomposer JSON that omitted
+            # the field, or an engine-synthesised node): default to {} so
+            # leaf_check judges by atomic + thresholds instead of KeyError-
+            # crashing the WHOLE run (live v106). Consistent with the spike path.
+            leaf_out = self._leaf(node.get("metrics") or {}, atomic=atomic_claim)
         verdict = leaf_out["verdict"]
         reasons = leaf_out["reasons"]
         if leaf_out.get("mismatch"):

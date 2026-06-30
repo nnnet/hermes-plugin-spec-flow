@@ -59,11 +59,22 @@ def test_open_decision_blocks_collapse(tmp_path):
     assert eng._small_product_root(node, 0, None) == 0
 
 
-def test_explicit_atomic_claim_is_left_alone(tmp_path):
+def test_explicit_atomic_true_is_left_to_normal_gate(tmp_path):
+    # already a leaf — nothing for the floor to override
     eng = _engine(tmp_path, n_routes=4)
     node = _root()
     node["atomic"] = True
     assert eng._small_product_root(node, 0, None) == 0
+
+
+def test_decomposer_split_is_overridden(tmp_path):
+    # the real v126 case: the decomposer proposed a split (atomic:false / children)
+    # for a 3-route micro-service. The floor MUST override it — that is the point.
+    eng = _engine(tmp_path, n_routes=4)
+    node = _root()
+    node["atomic"] = False
+    node["children"] = [{"id": "db_layer"}, {"id": "wsgi_app"}]
+    assert eng._small_product_root(node, 0, None) == 4
 
 
 def test_floor_off_when_threshold_zero(tmp_path):
