@@ -5330,39 +5330,48 @@ def %(callable)s(environ, start_response):
             self.tasks[sid].status = "done"
             self._completed += 1
 
-        # #122: small-product floor. The ROOT product node (depth 0) of a
+        # #122/#123: small-product floor. The ROOT product node of a
         # product-depth run whose contract declares <= _small_product_routes
-        # routes is forced to ONE atomic leaf: a single module owns every route
-        # and its storage, and the engine synthesizes the entry. This stops the
-        # decomposer from shattering a micro-service into rival whole-app modules
-        # that fail to compose at import (v125 root: 8 leaves, 3 rival
-        # `wsgi_app`/`application` entries, e2e RED, 343 calls). Larger products
-        # (> N routes) keep decomposing. Deterministic, model-independent; only
-        # collapses an over-split tiny root, never splits a leaf.
-        # #122: small-product floor. The ROOT product node of a product-depth
-        # run whose contract declares <= _small_product_routes routes is built as
-        # ONE leaf — a single module owns every route + its storage and the
-        # engine synthesizes the entry. This is a deterministic ARCHITECTURE
-        # policy that OVERRIDES the LOC-heuristic leaf_check for a micro-service:
-        # it stops the decomposer from shattering a tiny service into rival
-        # whole-app modules that fail to compose at import (v125 root: 8 leaves,
-        # 3 rival `wsgi_app`/`application` entries, e2e RED, 343 calls). Honest —
-        # an explicit policy verdict + emit, NOT forged metrics that trick the
-        # guardrail. Larger products (> N routes) fall through to the normal gate.
+        # routes is collapsed to a SINGLE base-product leaf — one module owns
+        # every base route + its storage and the engine synthesizes the entry.
+        # This stops the decomposer from shattering a micro-service into rival
+        # whole-app modules that fail to compose at import (v125: 8 leaves, 3
+        # rival `wsgi_app`/`application` entries, e2e RED, 343 calls).
+        # The root STAYS A BRANCH with that one child, NOT a bare leaf: the
+        # depth-0 late-requirement + assembly machinery lives in the branch path,
+        # so a leaf root would SKIP late injections (#123: web_ui /ui never
+        # materialised — the contract demanded /ui but nothing built get_ui).
+        # Late requirements still attach as further root children. Deterministic
+        # ARCHITECTURE policy + emit, NOT forged metrics that trick leaf_check.
+        # Larger products (> N routes) fall through to the normal gate.
         _nr = self._small_product_root(node, depth, parent)
         if _nr:
-            node["atomic"] = True
-            node.pop("children", None)
-            leaf_out = {"verdict": "leaf",
+            core = {
+                "id": "core",
+                "title": "Product core — all base routes + storage in one module",
+                "requirement": (node.get("requirement") or self._goal
+                                or node.get("title") or "Build the product"),
+                "atomic": True,
+                "metrics": {"modules": 1, "tasks": max(2, _nr),
+                            "interfaces": _nr, "estimated_loc": 100,
+                            "open_decisions": 0, "single_concern": True,
+                            "testable_criteria": True},
+                "spec_markdown": node.get("spec_markdown", ""),
+            }
+            node["children"] = [core]
+            node.pop("atomic", None)            # the ROOT stays a branch
+            leaf_out = {"verdict": "branch",
                         "reasons": [f"small product: {_nr} route(s) <= "
-                                    f"{self._small_product_routes}"],
-                        "basis": ("small-product floor: one module owns all "
-                                  "routes + storage; engine synthesizes entry")}
+                                    f"{self._small_product_routes} → one core leaf"],
+                        "basis": ("small-product floor: one base module owns all "
+                                  "routes + storage; root stays a branch so late "
+                                  "requirements still materialise")}
             self.emit("decompose", "engine", "", nid,
-                      "small product → single atomic leaf",
+                      "small product → single core leaf (root stays branch)",
                       f"{_nr} declared route(s) <= {self._small_product_routes}: "
-                      "no rival whole-app modules; engine synthesizes the entry",
-                      "small_product", "leaf", level=L_MILESTONE)
+                      "base collapsed to one module; late requirements still "
+                      "attach as further root children",
+                      "small_product", "branch", level=L_MILESTONE)
         else:
             # the gate: leaf vs branch. Atomicity is the PRIMARY judgment — an
             # explicit ``atomic`` field, else inferred from whether the decomposer
