@@ -3010,6 +3010,28 @@ class Engine:
                 uniq.append(mp)
         return uniq
 
+    def _leaf_owned_routes(self, node: dict) -> list:
+        """The DECLARED routes THIS leaf owns: a route whose path token appears
+        in the leaf's own text (requirement / title / authored spec). The single
+        source of route ownership, shared by the route -> handler binding
+        (Phase 1), the leaf handler gate (Phase 2) and the plan-ownership report
+        (Phase 6) — derived ONCE, deterministically, never guessed. Returns a
+        list of ``(method, path)``; empty for a non-HTTP leaf."""
+        try:
+            routes = self._declared_route_set(self._product_contract() or {})
+        except Exception:        # noqa: BLE001
+            return []
+        if not routes:
+            return []
+        text = " ".join(str(node.get(k) or "")
+                        for k in ("requirement", "title", "spec_markdown"))
+        owned = []
+        for m, p in routes:
+            stem = (p or "").rstrip("/") or "/"
+            if re.search(r"(?<![\w/])" + re.escape(stem) + r"(?![\w])", text):
+                owned.append((m, p))
+        return owned
+
     def _leaf_route_binding(self, node: dict) -> str:
         """Phase 1: the canonical route -> handler binding for the routes THIS
         leaf owns, emitted as engine-declared DATA (never inferred). A declared
@@ -3018,19 +3040,7 @@ class Engine:
         ``def <handler>(payload, query)`` EXACTLY, so the assembled entry imports
         each handler by name and the binding is never guessed at assembly time.
         Empty string when this leaf owns no declared route (non-HTTP leaf)."""
-        try:
-            routes = self._declared_route_set(self._product_contract() or {})
-        except Exception:        # noqa: BLE001
-            return ""
-        if not routes:
-            return ""
-        text = " ".join(str(node.get(k) or "")
-                        for k in ("requirement", "title", "spec_markdown"))
-        owned = []
-        for m, p in routes:
-            stem = (p or "").rstrip("/") or "/"
-            if re.search(r"(?<![\w/])" + re.escape(stem) + r"(?![\w])", text):
-                owned.append((m, p))
+        owned = self._leaf_owned_routes(node)
         if not owned:
             return ""
         def _behaviour(method: str) -> str:
@@ -3061,6 +3071,73 @@ class Engine:
                 "the parsed query string (e.g. a `q` filter on GET).\n"
                 "Status semantics: unknown path -> 404; known path with an "
                 "unsupported method -> 405; malformed JSON body -> 400.")
+
+    def _leaf_handler_gate(self, node: dict, nid: str, depth: int,
+                           code_rel: "Optional[str]") -> bool:
+        """Phase 2 (deterministic, hard, model-independent): a leaf contracted by
+        the route -> handler binding to expose ``def <handler>(payload, query)``
+        MUST actually define that symbol in the file it wrote. A missing handler
+        is the v120 break (POST /notes never defined, so the round-trip silently
+        failed) — caught HERE at the leaf, naming the exact missing symbol, not
+        only surfacing later at assembly. AST-only: no import, no execution, no
+        model opinion.
+
+        The gate asks for EXACTLY what the binding ORDERED — the same ownership
+        derivation (`_leaf_owned_routes`) — so it can never demand a handler the
+        leaf was not contracted to build, and a non-HTTP leaf is a clean no-op.
+        On a miss it records a FAIL + loop + doctor cause so the existing
+        recovery reworks the leaf; the assembled suite (Phase 7) remains the
+        final authority. Returns True when every contracted handler is present.
+        """
+        if not (code_rel and getattr(self.workspace, "root", None)):
+            return True
+        owned = self._leaf_owned_routes(node)
+        if not owned:
+            return True
+        defined: "dict[str, list]" = {}
+        try:
+            src_text = (Path(self.workspace.root) / code_rel).read_text(
+                encoding="utf-8", errors="replace")
+            tree = ast.parse(src_text)
+        except (OSError, SyntaxError):
+            # a missing or unparseable file means none of the contracted
+            # handlers are present — every owned route is reported missing below
+            tree = None
+        if tree is not None:
+            for n in tree.body:
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    defined[n.name] = [a.arg for a in n.args.args]
+        missing = []        # (canonical_name, method, path)
+        for m, p in owned:
+            want = _canonical_handler_symbol(m, p)
+            params = defined.get(want)
+            # Present == a module-level def of the canonical name with a
+            # DISPATCHABLE shape: >=1 positional arg whose first param is not a
+            # storage dependency (conn/session/...). Arity stays lenient (1 or
+            # 2 params) to AGREE with the resolver, which adapts a single-param
+            # `(query)` handler as well as the canonical `(payload, query)`; the
+            # real failure mode is the NAME absent, not an off-by-one arg list.
+            ok = (params is not None and len(params) >= 1
+                  and params[0].lower() not in self._DEP_FIRST_PARAMS)
+            if not ok:
+                missing.append((want, m, p))
+        if not missing:
+            return True
+        human = "; ".join("%s %s -> def %s(payload, query)" % (m, p, w)
+                          for w, m, p in missing)
+        self.loops.append({"type": "missing-handler", "task": nid,
+                           "detail": "leaf does not define contracted "
+                                     "handler(s): " + human})
+        self.emit("review", "engine", "", nid,
+                  "handler gate: contracted route handler missing in leaf module",
+                  "%s: %s" % (code_rel, human), "handler_gate", "FAIL",
+                  level=L_MILESTONE)
+        self._doctor_advise(node, nid, depth, "handler_gate", "FAIL",
+                            {"scope_findings": [
+                                "%s does not define %s — contracted handler "
+                                "missing" % (code_rel, w)
+                                for w, _m, _p in missing]})
+        return False
 
     def _plan_ownership_report(self) -> list:
         """Phase 6 (deterministic, report-only): for every DECLARED route, how
@@ -5739,6 +5816,11 @@ def %(callable)s(environ, start_response):
                 # module before it is judged 'implemented' (the v041 empty-change
                 # failure). Inert for ordinary nodes.
                 self._late_req_delta_gate(node, nid, depth, code_rel)
+                # Phase 2: a leaf contracted (route -> handler binding) to expose
+                # a canonical handler must actually DEFINE it — caught here at
+                # the leaf, not only at assembly. Deterministic AST gate; a miss
+                # records FAIL + loop so the recovery reworks the leaf.
+                self._leaf_handler_gate(node, nid, depth, code_rel)
                 self._judge_leaf(nid, title, fn, code_rel, test_rel)
                 # Single-authority invariant (root cause of the v078 NOT READY):
                 # record the real code file THIS leaf delivered so the root
