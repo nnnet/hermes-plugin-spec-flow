@@ -1,0 +1,19 @@
+.claude/plans/2026-06-30T14-16__p6-green-weak-model-test-and-code-quality.md
+  s_a7f45290e91181::t_550c4111262e62 1-80
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.4",
+  "base_commit_sha": "d39c69584c4fbced255a0d06423d3d30b8ab0237",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
