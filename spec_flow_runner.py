@@ -808,6 +808,18 @@ def _snake(s: str) -> str:
 # active set with SPEC_FLOW_AMEND_METHODS (comma list; default = all, in
 # registration order). The engine keeps the highest-scoring module above
 # _AMEND_MIN_SCORE as the surface owner.
+#
+# ROLE BOUNDARY (Phase 4): these similarity detectors exist for ONE purpose —
+# routing a LATE requirement into the module that already owns its surface
+# (anti-duplication) and warning the spec author when a late spec restates an
+# existing surface. They are deliberately CONFINED to that role. They MUST NOT
+# take part in route -> handler binding or entry assembly: that path is
+# deterministic and binds by the EXACT canonical handler name
+# (_canonical_handler_symbol, Phase 1) with the name-similarity scoring deleted
+# from the resolver (Phase 3). A guessed binding is a false-green risk; a
+# guessed anti-dup routing is recoverable (the late node keeps its own leaf).
+# The separation is locked by tests/coverage/test_overlap_detectors_role.py,
+# which asserts the binding/assembly functions reference no _amend_* detector.
 _AMEND_MIN_SCORE = 0.34
 
 # generic English/Russian-transliteration-safe stop list; deliberately NOT a
