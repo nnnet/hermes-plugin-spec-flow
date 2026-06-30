@@ -33,6 +33,23 @@ SMOKE_DIR = "tests/smoke"
 
 _FILE_RE = re.compile(r"((?:tests|src)/[\w/]+\.py)")
 
+
+def hermetic_env(root: str) -> dict:
+    """Subprocess env that judges the product on its OWN src only.
+
+    The product's ``src/`` becomes the SOLE ``PYTHONPATH`` entry, so
+    ``import db`` / ``import core`` always resolve to the ASSEMBLED modules. A
+    foreign same-named package on the inherited ``PYTHONPATH`` (e.g. another
+    repo's ``src/db``) can then neither SHADOW a product module — which gave
+    the misleading v131 boot error ``cannot import insert_note from db
+    (/some/other/repo/.../db/__init__.py)`` while the product's own ``db.py``
+    was mid-build — nor SATISFY a product import it should not (a false green
+    from an ambient package). ``site-packages`` (stdlib, pytest) is untouched;
+    ``PYTHONPATH`` only PREPENDS to ``sys.path``, it does not replace it."""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(Path(root) / "src")
+    return env
+
 _REPAIR_TASK = """You are the integration repair worker of a Spec-Driven
 Development run. The workspace test suite FAILED. pytest output (tail):
 ---
@@ -78,7 +95,8 @@ def run_suite(root: str, include_smoke: bool,
         cmd += ["--ignore", SMOKE_DIR]
     with llm_backend.PYTEST_LOCK:
         proc = subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=PYTEST_TIMEOUT, cwd=root)
+                              timeout=PYTEST_TIMEOUT, cwd=root,
+                              env=hermetic_env(root))
     out = (proc.stdout or "") + (proc.stderr or "")
     # pytest exit 5 = no tests collected — nothing to verify is not a failure
     return proc.returncode in (0, 5), out[-2000:]
@@ -221,7 +239,8 @@ def _run_one(root: str, rel: str) -> bool:
         proc = subprocess.run(
             [sys.executable, "-m", "pytest", rel, "-q", "--no-header",
              "-p", "no:cacheprovider", "--import-mode=importlib"],
-            capture_output=True, text=True, timeout=PYTEST_TIMEOUT, cwd=root)
+            capture_output=True, text=True, timeout=PYTEST_TIMEOUT, cwd=root,
+            env=hermetic_env(root))
     return proc.returncode in (0, 5)
 
 
@@ -233,7 +252,8 @@ def _run_suite_green(root: str, include_smoke: bool) -> bool:
         cmd += ["--ignore", SMOKE_DIR]
     with llm_backend.PYTEST_LOCK:
         proc = subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=PYTEST_TIMEOUT, cwd=root)
+                              timeout=PYTEST_TIMEOUT, cwd=root,
+                              env=hermetic_env(root))
     return proc.returncode in (0, 5)
 
 
@@ -245,7 +265,8 @@ def _run_without(root: str, rels: list, drop: str, include_smoke: bool) -> bool:
         cmd += ["--ignore", SMOKE_DIR]
     with llm_backend.PYTEST_LOCK:
         proc = subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=PYTEST_TIMEOUT, cwd=root)
+                              timeout=PYTEST_TIMEOUT, cwd=root,
+                              env=hermetic_env(root))
     return proc.returncode in (0, 5)
 
 

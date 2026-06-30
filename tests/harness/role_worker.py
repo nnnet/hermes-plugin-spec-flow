@@ -1422,12 +1422,13 @@ def _leaf_bar(ws_root: str, fn: str, baseline: int, pv) -> tuple[bool, str]:
 def _run_pytest(ws_root: str, test_rel: str) -> tuple[bool, str]:
     """Run the leaf's tests for REAL. Returns (passed, output tail)."""
     import sys as _sys
+    from . import pytest_verifier as _pv
     with llm_backend.PYTEST_LOCK:
         proc = subprocess.run(
             [_sys.executable, "-m", "pytest", test_rel, "-q", "--no-header",
              "-p", "no:cacheprovider"],
             capture_output=True, text=True, timeout=PYTEST_TIMEOUT,
-            cwd=ws_root)
+            cwd=ws_root, env=_pv.hermetic_env(ws_root))
     out = (proc.stdout or "") + (proc.stderr or "")
     return proc.returncode == 0, out[-1500:]
 

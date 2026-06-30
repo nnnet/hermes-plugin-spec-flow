@@ -32,6 +32,7 @@ from typing import Optional
 # Reuse the existing AST/detector machinery — do not duplicate it.
 from .pytest_verifier import (
     PYTEST_TIMEOUT,
+    hermetic_env,
     _module_exports,
     _safe_rel,
     _cross_module_import_violations,
@@ -699,7 +700,8 @@ def tests_collect(root: str) -> list:
            "--no-header", "-p", "no:cacheprovider", "--import-mode=importlib"]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=PYTEST_TIMEOUT, cwd=root)
+                              timeout=PYTEST_TIMEOUT, cwd=root,
+                              env=hermetic_env(root))
     except (subprocess.TimeoutExpired, OSError) as exc:  # noqa: BLE001
         return [f"pytest --collect-only failed to run: {exc}"]
     if proc.returncode in (0, 5):
@@ -939,7 +941,8 @@ def boot_gate(root: str, constitution, goal: str = "",
         proc = subprocess.run(
             [sys.executable, "-c", _BOOT_PROBE, str(root), want_notes,
              ok_route, html_route, notes_route],
-            capture_output=True, text=True, timeout=tmo)
+            capture_output=True, text=True, timeout=tmo,
+            env=hermetic_env(root))
     except subprocess.TimeoutExpired:
         return False, f"boot-gate TIMED OUT after {tmo}s assembling {entry}"
     except OSError as exc:  # noqa: BLE001
