@@ -1,0 +1,30 @@
+tests/coverage/test_entry_synthesis.py
+  s_a7f45290e91181::t_a051848583d2b7 521-522,530-532
+  s_a7f45290e91181::t_5fbe9a54e21808 726-727,729
+  s_a7f45290e91181::t_131732171b1405 395,397
+  s_a7f45290e91181::t_0a13ca5d21fa38 383,385
+  s_a7f45290e91181::t_7d3531722edbfb 157-160
+  s_a7f45290e91181::t_f3f39db19a561e 574
+  s_a7f45290e91181::t_4fcf7b7eb4cdd9 43
+  s_a7f45290e91181::t_668b60150527c2 57
+  s_a7f45290e91181::t_fa849b81807355 62
+spec_flow_runner.py
+  s_a7f45290e91181::t_31b706e429d5be 3217-3224
+  s_a7f45290e91181::t_f17a6f73f5f560 3114,3119-3132
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.4",
+  "base_commit_sha": "1b2d15314ecb4defab8fda6fe1cb31c4ede30995",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
