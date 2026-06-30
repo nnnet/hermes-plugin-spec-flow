@@ -32,7 +32,10 @@ echo "[run-detached] launching pid-of-setsid… ts=${TS} args=$* log=${LOG}" >"$
 # </dev/null => no stdin tie to the caller; >>LOG => own log (append, keep the
 # heartbeat); & + disown => the caller returns immediately and owns nothing.
 # PYTHONUNBUFFERED + python3 -u => line/stream flushes survive an abrupt kill.
-PYTHONUNBUFFERED=1 setsid python3 -u "${HERE}/lib/run_cases.py" "$@" \
+# PYTHONFAULTHANDLER=1 => a C-level fault (segfault/abort) in ANY thread dumps
+# every thread's stack to stderr (-> LOG) instead of dying silently; belt-and-
+# suspenders with run_cases' own faulthandler.enable() (covers a pre-import crash).
+PYTHONFAULTHANDLER=1 PYTHONUNBUFFERED=1 setsid python3 -u "${HERE}/lib/run_cases.py" "$@" \
     </dev/null >>"${LOG}" 2>&1 &
 PID=$!
 disown "${PID}" 2>/dev/null || true

@@ -31,14 +31,33 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import importlib.util
 import json
 import os
+import signal
 import sys
 import tempfile
 import types
 from datetime import datetime
 from pathlib import Path
+
+# Death-trace instrumentation. A run is multi-threaded (parallel leaves are
+# threads, not processes). A C-level fault in ANY thread (segfault in a native
+# extension, an abort) kills the whole process SILENTLY — no Python traceback,
+# no terminal_state in meta.json, the run just vanishes (v124 died inside
+# run_project after a provider 504 with zero evidence; _write_terminal_meta's
+# ABORTED path never even ran). faulthandler dumps every thread's C+Python stack
+# to stderr (-> the detached log via 2>&1) on SIGSEGV/SIGFPE/SIGABRT/SIGBUS, and
+# on SIGTERM/SIGUSR1 so an external kill or a manual `kill -USR1 <pid>` on a
+# wedged run reveals where each thread is stuck. Observability only — never
+# alters control flow.
+faulthandler.enable()
+for _sig in (signal.SIGTERM, signal.SIGUSR1):
+    try:
+        faulthandler.register(_sig, all_threads=True, chain=True)
+    except (ValueError, OSError):  # platform without the signal — best-effort
+        pass
 
 
 def _stop_run(run_dir: Path) -> None:
