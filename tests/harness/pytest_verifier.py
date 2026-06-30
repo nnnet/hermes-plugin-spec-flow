@@ -533,6 +533,93 @@ def autofix_non_ascii(root: str, offenders: list) -> list:
     return fixed
 
 
+def _stdlib_allowset_assigns(tree: ast.AST) -> list:
+    """Find assignments that SEED a name from ``sys.stdlib_module_names`` — the
+    allow-set a generated 'stdlib-only' acceptance test builds, e.g.
+    ``stdlib = getattr(sys, "stdlib_module_names", None) or {...}``.
+    Returns [(var_name, end_lineno, col_offset), ...]."""
+    out = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+            continue
+        # the name is reached either as `sys.stdlib_module_names` (Attribute)
+        # or `getattr(sys, "stdlib_module_names", ...)` (string Constant).
+        seeds = any(
+            (isinstance(a, ast.Attribute) and a.attr == "stdlib_module_names")
+            or (isinstance(a, ast.Constant) and a.value == "stdlib_module_names")
+            for a in ast.walk(node.value))
+        if seeds:
+            out.append((node.targets[0].id, node.end_lineno, node.col_offset))
+    return out
+
+
+def autofix_local_import_stdlib_test(root: str) -> list:
+    """A generated 'no third-party imports' acceptance test parses a src module
+    and asserts every import's top name is in ``sys.stdlib_module_names`` (or a
+    hardcoded stdlib set). It wrongly flags the product's OWN sibling module —
+    e.g. ``core.py`` does ``from app import application`` and the test fails
+    with ``non-stdlib import: app`` though ``app`` is the product's synthesized
+    entry, never a third-party dependency. The engine's own detectors already
+    exclude local src modules (``contract_checks._local_modules``); the weak
+    model just didn't replicate that nuance.
+
+    Honest + model-independent (same spirit as ``autofix_non_ascii``): we do NOT
+    weaken the test. We MONOTONICALLY widen its allow-set with the names of the
+    product's real ``src/*.py`` modules, discovered at RUNTIME inside the test.
+    A genuine third-party import (a pip package) is never a ``src/*.py`` stem,
+    so it still fails — the criterion's true intent ('no pip installs') is kept,
+    only the local-vs-third-party conflation is corrected. The rewrite is kept
+    only if the file still COMPILES. Returns the list of relpaths fixed."""
+    base = Path(root)
+    tdir = base / "tests"
+    if not tdir.is_dir():
+        return []
+    fixed = []
+    for f in sorted(tdir.rglob("*.py")):
+        try:
+            text = f.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if "stdlib_module_names" not in text:
+            continue                          # fast path: unrelated test
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            continue                          # leave broken files to other fixers
+        assigns = _stdlib_allowset_assigns(tree)
+        if not assigns:
+            continue
+        lines = text.splitlines()
+        # insert bottom-up so earlier line numbers stay valid
+        for var, end_lineno, col in sorted(assigns, key=lambda a: -a[1]):
+            indent = " " * col
+            inject = [
+                f"{indent}import pathlib as _eng_pl  # engine autofix: a "
+                "product's OWN src module is not third-party",
+                f"{indent}{var} = set({var}) | {{p.stem for p in "
+                "(_eng_pl.Path(__file__).resolve().parent.parent / 'src')"
+                ".glob('*.py')}",
+            ]
+            lines[end_lineno:end_lineno] = inject
+        new = "\n".join(lines)
+        if not new.endswith("\n"):
+            new += "\n"
+        if new == text:
+            continue
+        try:
+            compile(new, str(f), "exec")
+        except SyntaxError:
+            continue                          # never ship a broken rewrite
+        try:
+            f.write_text(new, encoding="utf-8")
+            fixed.append(str(f.relative_to(base)))
+        except OSError:
+            continue
+    return fixed
+
+
 def _module_exports(path: Path) -> set | None:
     """Top-level names a module binds (def/class/assignment/re-import) — the
     names another module can legally `from <mod> import`. None if unparsable."""
@@ -670,6 +757,17 @@ def make_verifier(model: Optional[str] = None,
             _fixed = autofix_non_ascii(root, _non_ascii_offenders(root))
             if _fixed:
                 llm_log.log({"event": "autofix_non_ascii", "role": "verifier",
+                             "node": str(ctx.get("node")), "files": _fixed})
+                passed, out = run_suite(root, include_smoke, targets)
+        # Deterministic repair of the 'stdlib-only' acceptance test that
+        # misclassifies the product's OWN src module as a third-party import
+        # (e.g. `non-stdlib import: app`). Widen its allow-set with the real
+        # local modules — monotonic, so a genuine pip import still fails.
+        if not passed:
+            _fixed = autofix_local_import_stdlib_test(root)
+            if _fixed:
+                llm_log.log({"event": "autofix_local_import_stdlib_test",
+                             "role": "verifier",
                              "node": str(ctx.get("node")), "files": _fixed})
                 passed, out = run_suite(root, include_smoke, targets)
         first_red = ""
