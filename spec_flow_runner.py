@@ -3042,6 +3042,48 @@ class Engine:
                 + "\nStatus semantics: unknown path -> 404; known path with an "
                 "unsupported method -> 405; malformed JSON body -> 400.")
 
+    def _plan_ownership_report(self) -> list:
+        """Phase 6 (deterministic, report-only): for every DECLARED route, how
+        many leaf specs claim it. 0 owners = orphan (no leaf builds the route);
+        >=2 = duplicate (two leaves both claim it, e.g. the v122 second
+        get_notes). Returns a list of plain-string findings (JSON-safe).
+
+        DIAGNOSTIC ONLY — it never flips READY. Ownership is matched by the route
+        path appearing in a leaf spec, which is a heuristic; actual serving is
+        enforced by the real boot/suite gate (Phase 7), so a spec-phrasing quirk
+        can never false-red a product that genuinely works."""
+        ws = self.workspace
+        if not (getattr(ws, "enabled", False) and getattr(ws, "root", None)):
+            return []
+        try:
+            routes = self._declared_route_set(self._product_contract() or {})
+        except Exception:        # noqa: BLE001
+            return []
+        if not routes:
+            return []
+        specs = Path(ws.root) / "specs"
+        spec_texts = []
+        if specs.exists():
+            for p in sorted(specs.glob("*.md")):
+                if "." in p.stem:        # skip archived specs/<id>.vN.md
+                    continue
+                try:
+                    spec_texts.append((p.stem, p.read_text(
+                        encoding="utf-8", errors="replace")))
+                except OSError:
+                    continue
+        findings = []
+        for m, path in routes:
+            stem = (path or "").rstrip("/") or "/"
+            owners = sorted({s for s, t in spec_texts if re.search(
+                r"(?<![\w/])" + re.escape(stem) + r"(?![\w])", t)})
+            if not owners:
+                findings.append("route %s %s: no owner leaf (orphan)" % (m, path))
+            elif len(owners) > 1:
+                findings.append("route %s %s: %d owner leaves (%s) — duplicate"
+                                % (m, path, len(owners), ", ".join(owners)))
+        return findings
+
     # first-parameter names that mark a STORAGE/DEPENDENCY function (not an HTTP
     # handler): the router cannot supply these, so a route must not wire to them.
     _DEP_FIRST_PARAMS = frozenset({
@@ -6289,6 +6331,13 @@ def %(callable)s(environ, start_response):
         # not just at leaf time. Any failing test forces NOT READY.
         for _tid in (self._assembled_suite_failures() or []):
             record("suite", _tid, False, "assembled test suite RED")
+        # Phase 6 (report-only): surface decomposition-plan ownership problems
+        # (orphan / duplicate routes) as deterministic findings. Diagnostic only
+        # — Phase 7's real boot/suite, not this text match, decides READY.
+        for _pf in self._plan_ownership_report():
+            self.emit("integrate", "engine", "", "L0:plan",
+                      "decomposition plan check", _pf, "plan_gate", "",
+                      level=L_MILESTONE)
 
         ready = bool(lines) and not failed
         verdict = "READY" if ready else "NOT READY"
