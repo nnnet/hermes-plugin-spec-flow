@@ -3111,17 +3111,25 @@ class Engine:
         "txn", "tx", "pool", "client", "store", "repo", "repository", "dao"})
 
     def _resolve_route_handlers(self, contract: dict) -> tuple:
-        """Pure-AST resolver: map each declared (method, path) to the best leaf
+        """Pure-AST resolver: map each declared (method, path) to the leaf
         handler already built under src/. A handler is a module-level function
         whose signature is NOT raw WSGI ``(environ, start_response)`` — i.e. a
         high-level ``(payload, query) -> (status, body)`` business function (the
         shape leaves converge on; live v088 had all six leaves in this shape but
-        no entry to dispatch them). Scoring: resource token in name (+3), method
-        synonym in name (+2), 2-arg signature (+1). Returns
-        ``(mapping, unresolved)`` where mapping is
-        ``{(method, path): (module_stem, func, abi)}`` (abi in {"pq","p","none"})
-        and unresolved is the list of (method, path) with no candidate. No import,
-        no execution — independent of model quality."""
+        no entry to dispatch them).
+
+        Phase 3: resolution is by EXACT canonical name only. The Phase 1 binding
+        gives each owning leaf the canonical handler name and the leaf emits it,
+        so ``_canonical_handler_symbol(method, path)`` is looked up directly. The
+        name-similarity SCORING heuristic (resource token / method synonym) was
+        removed — it guessed, and a deviating leaf now stays UNRESOLVED (honest
+        red via the boot/suite gate) instead of being wired to a name-resembling
+        function. Two concrete (non-guessing) fallbacks remain: a handler that
+        literally names the route in its body (raw-WSGI ``_handle_*``), and the
+        declared HTML page route. Returns ``(mapping, unresolved)`` where mapping
+        is ``{(method, path): (module_stem, func, abi)}`` (abi in
+        {"pq","p","ws"}) and unresolved is the list of (method, path) with no
+        handler. No import, no execution — independent of model quality."""
         root = Path(self.workspace.root) / "src"
         entry_name = Path(contract.get("entry") or "").name
         html_route = ((contract.get("boot") or {}).get("html_route")
@@ -3206,61 +3214,14 @@ class Engine:
             if explicit:
                 mapping[(method, path)] = explicit
                 continue
-            seg = path.rstrip("/").rsplit("/", 1)[-1]
-            res = "".join(ch for ch in seg.lower()
-                          if ch.isalnum())          # resource token
-            syn = self._METHOD_SYNONYMS.get(method, ())
-            # synonyms of OTHER HTTP methods — a name carrying one of these while
-            # serving a different method is a strong negative signal (e.g.
-            # `get_notes` must NOT win `POST /notes` just by containing "notes").
-            other_syn = tuple(s for m, syns in self._METHOD_SYNONYMS.items()
-                              if m != method for s in syns if s not in syn)
-            res_sing = res.rstrip("s") if res else ""
-            best = None
-            best_score = 0
-            # a DATA route returns/consumes JSON (any write method, or the declared
-            # json round-trip path) — a GET page route may legitimately serve HTML.
-            json_route = ((contract.get("boot") or {}).get("json_roundtrip")
-                          or "").rstrip("/")
-            is_data_route = (method in ("POST", "PUT", "PATCH", "DELETE")
-                             or path.rstrip("/") == json_route)
-            for stem, name, abi, low, ish, _bp in cands:
-                # ELIGIBILITY: the handler must relate to this route's RESOURCE.
-                # A method-synonym match alone is NOT enough — otherwise `get_notes`
-                # falsely wins GET /ui / GET /about / GET /health just by carrying
-                # "get" (live v091). A route with no resource-matching handler stays
-                # unresolved (honest) instead of being wired to an unrelated leaf.
-                res_hit = bool(res and (res in low or
-                                        (len(res_sing) >= 3 and res_sing in low)))
-                root_hit = (not res and name.lower() in
-                            ("index", "home", "root", "app", "main"))
-                if not (res_hit or root_hit):
-                    continue
-                score = 0
-                if res and res in low:
-                    score += 3
-                if res_sing and res_sing in low:
-                    score += 1                       # singular/plural tolerance
-                if any(s in low for s in syn):
-                    score += 3                       # matches THIS method
-                if any(("_" + s) in low or low.startswith(s) or low.endswith(s)
-                       for s in other_syn):
-                    score -= 3                       # carries a CONFLICTING method
-                if abi == "pq":
-                    score += 1
-                if root_hit:
-                    score += 2
-                if ish and is_data_route:
-                    # an HTML/page handler is implausible for a DATA route — it
-                    # returns markup, not the JSON the route's contract needs (live
-                    # v117: render_notes_page, is_html, wrongly won POST /notes and
-                    # the round-trip 500'd). GET page routes keep their HTML handler.
-                    score -= 4
-                if score > best_score:
-                    best_score, best = score, (stem, name, abi)
-            if best and best_score >= 2:
-                mapping[(method, path)] = best
-                continue
+            # Phase 3: the name-similarity SCORING heuristic (resource token /
+            # method-synonym scoring) was REMOVED. Leaves now receive the
+            # canonical handler name (Phase 1 binding) and emit it, so the
+            # exact-match above wires every route. A route with no
+            # canonical-named handler stays UNRESOLVED (honest red via the
+            # boot/suite gate), never wired to a name-RESEMBLING guess. Only
+            # concrete signals remain below: a handler that literally names the
+            # route in its body, and the declared HTML page route.
             # PATH-STRING signal: a self-dispatching handler that names THIS exact
             # route in its body serves it even when its function name does not
             # carry the resource (live v104: a raw-WSGI _handle_ping tested

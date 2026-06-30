@@ -40,7 +40,7 @@ def all_notes():
 
 _NOTES_POST = '''\
 import db_layer
-def notes_post(payload, query):
+def post_notes(payload, query):
     text = (payload or {}).get("text")
     if not text:
         return (400, {"error": "text required"})
@@ -54,12 +54,12 @@ def get_notes(payload, query):
 '''
 
 _UI = '''\
-def ui_get(payload, query):
+def get_ui(payload, query):
     return (200, "<html><body><h1>Notes</h1></body></html>")
 '''
 
 _ABOUT = '''\
-def about_page(payload, query):
+def get_about(payload, query):
     return (200, "<html><body>about</body></html>")
 '''
 
@@ -154,7 +154,10 @@ def test_raw_wsgi_handler_is_wired_and_dispatched(tmp_path):
         "        return [b'pong']\n"
         "    start_response('404 Not Found', [])\n"
         "    return [b'']\n"
-        "def get_notes(payload, query):\n    return (200, {'items': []})\n")
+        "def get_notes(payload, query):\n    return (200, {'items': []})\n"
+        # spec-complete: a leaf following the binding ships the canonical
+        # post_notes too, so every declared route has its handler.
+        "def post_notes(payload, query):\n    return (201, {'id': 1})\n")
     contract = {
         "entry": "src/app.py", "callable": ["wsgi_app"],
         "boot": {"json_roundtrip": "/notes"},
@@ -377,9 +380,9 @@ def _db():
     c.execute("CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY "
               "AUTOINCREMENT, text TEXT NOT NULL)")
     return c
-def handle_health(payload, query):
+def get_health(payload, query):
     return (200, {"status": "ok"})
-def post_note(payload, query):
+def post_notes(payload, query):
     t = (payload or {}).get("text")
     if not t:
         return (400, {"error": "text required"})
@@ -389,9 +392,9 @@ def get_notes(payload, query):
     c = _db(); rows = c.execute("SELECT id, text FROM notes ORDER BY id DESC"
                                 ).fetchall(); c.close()
     return (200, {"items": [{"id": r[0], "text": r[1]} for r in rows]})
-def ui_get(payload, query):
+def get_ui(payload, query):
     return (200, "<html><body>notes</body></html>")
-def about_page(payload, query):
+def get_about(payload, query):
     return (200, "<html>about</html>")
 def wsgi_app(environ, start_response):   # the model's own (to be replaced)
     start_response("200 OK", [("Content-Type", "text/plain")])
@@ -515,7 +518,8 @@ def test_resolver_html_handler_loses_a_data_route(tmp_path):
         "    return (200, '<!doctype html><html>notes</html>')\n",
         encoding="utf-8")
     (src / "data.py").write_text(
-        "def create_note(payload, query):\n"
+        # the data leaf follows the binding: canonical post_notes
+        "def post_notes(payload, query):\n"
         "    return (201, {'id': 1})\n", encoding="utf-8")
     contract = {"entry": "src/app.py", "callable": ["wsgi_app"],
                 "boot": {"json_roundtrip": "/notes"},
@@ -523,7 +527,9 @@ def test_resolver_html_handler_loses_a_data_route(tmp_path):
     mapping, _u = eng._resolve_route_handlers(contract)
     bound = mapping.get(("POST", "/notes"))
     assert bound is not None, "POST /notes must resolve to a handler"
-    assert bound[1] == "create_note", "a data route must bind the data handler"
+    # exact-match binds the canonical data handler; the HTML page handler
+    # (render_notes_page, not canonically named) never wins the data route.
+    assert bound[1] == "post_notes", "a data route must bind the data handler"
 
 
 def test_harden_entry_wraps_unguarded_json_loads(tmp_path):
@@ -565,7 +571,7 @@ def test_route_without_resource_handler_not_falsely_wired(tmp_path):
     src = pathlib.Path(eng.workspace.root) / "src"
     src.mkdir(parents=True, exist_ok=True)
     (src / "notes_post.py").write_text(
-        "def post_note(payload, query):\n    return (201, {'id': 1})\n"
+        "def post_notes(payload, query):\n    return (201, {'id': 1})\n"
         "def get_notes(payload, query):\n    return (200, {'items': []})\n")
     contract = {"entry": "src/app.py", "callable": ["wsgi_app"],
                 "boot": {"ok_route": "/health", "html_route": "/ui",
@@ -717,9 +723,10 @@ def test_storage_layer_fn_is_not_wired_as_handler(tmp_path):
     assert all("insert_note" not in str(w) and "list_notes" not in str(w)
                for w in wired), f"db-layer fn wrongly wired: {mapping}"
     assert ("POST", "/notes") in unresolved and ("GET", "/notes") in unresolved
-    # a clean (payload, query) handler in the SAME module is still wired
+    # a clean (payload, query) handler in the SAME module is still wired —
+    # canonically named, per the binding the leaf received
     (src / "api.py").write_text(
-        "def create_note(payload, query):\n    return (201, {'id': 1})\n")
+        "def post_notes(payload, query):\n    return (201, {'id': 1})\n")
     mapping2, _ = eng._resolve_route_handlers(_SPLIT_CONTRACT)
     assert ("POST", "/notes") in mapping2, "real handler must still resolve"
 
