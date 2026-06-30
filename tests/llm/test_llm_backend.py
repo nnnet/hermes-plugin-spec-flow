@@ -104,3 +104,27 @@ def test_per_model_breaker_retires_a_5xx_model(fake_openai):
     bad_calls = sum(1 for r in srv.requests if "bad" in r.get("model", ""))
     assert bad in lb._MODEL_DOWN, "model should be circuit-broken after 2x 5xx"
     assert bad_calls == 2, f"retired model must not be retried; got {bad_calls}"
+
+
+def test_retired_single_model_chain_rolls_to_healthy_fallback(fake_openai):
+    """v133 cost sink (#83): a one-model weak tier whose only model retired kept
+    paying its 75s timeout EVERY call — `or chain[-1:]` forced the dead model
+    back even though a healthy cross-provider fallback existed. A fully-retired
+    chain must roll to the least-failed survivor (the rotation), not the corpse."""
+    def router(payload):
+        m = payload.get("model", "")
+        return (504, "gw timeout") if "bad" in m else (200, ok("fine"))
+    srv = fake_openai(router, retries=1)
+    bad, good = "openrouter/bad:free", "openrouter/good:free"
+    # single-model chain (no per-call fallbacks); `good` is the global rotation.
+    lb.configure_workers({"model_breaker_5xx": 1,
+                          "fallback_models": [good]})
+    lb.BASE_URL = srv.base_url
+    outs = [lb.ask("hi", model=bad, role="implementer", step="s")
+            for _ in range(4)]
+    assert all(o == "fine" for o in outs), outs
+    bad_calls = sum(1 for r in srv.requests if "bad" in r.get("model", ""))
+    # bad retires after its 1st 504; the remaining 3 calls must skip it and use
+    # the healthy rotation rather than re-paying the dead model's timeout.
+    assert bad in lb._MODEL_DOWN
+    assert bad_calls == 1, f"retired model re-tried {bad_calls}x (should be 1)"

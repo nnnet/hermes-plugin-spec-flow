@@ -813,10 +813,21 @@ def ask(prompt: str, *, model: str, role: str, step: str,
                              "detail": str(last_exc)[:160]})
                 if consecutive_error_rounds >= max_error_rounds:
                     break
-        # drop models the run already saw 5xx out repeatedly — they cost a full
-        # timeout per call for nothing. Keep the last as a desperate try if the
-        # whole chain is down (better one attempt than a no-op round).
-        live = [m for m in chain if m not in _MODEL_DOWN] or chain[-1:]
+        # drop models the run already saw fail repeatedly — they cost a full
+        # timeout per call for nothing. When the WHOLE chain is retired, do NOT
+        # blindly re-try the dead chain[-1] (v133: a one-model weak tier paid
+        # mimo's 75s timeout 28× AFTER it was retired — the only healthy
+        # fallback claude/sonnet had itself tripped on 2 transient 5xx, so
+        # `or chain[-1:]` forced the dead mimo back every call, ~35 min wasted).
+        # Instead revive the LEAST-FAILED known model, preferring the
+        # cross-provider rotation (fallback_models) and breaking ties by fewest
+        # recorded failures, so a flaky single-model tier rolls to the healthiest
+        # survivor instead of a guaranteed timeout. Model-independent (no names).
+        live = [m for m in chain if m not in _MODEL_DOWN]
+        if not live:
+            _cand = list(dict.fromkeys(list(rotation) + list(chain)))
+            _cand.sort(key=lambda _m: _MODEL_5XX.get(_m, 0))
+            live = _cand[:1] or chain[-1:]
         _brk = int((cfg or {}).get("model_breaker_5xx", 2))
         for i, m in enumerate(live):
             _spend_call()
