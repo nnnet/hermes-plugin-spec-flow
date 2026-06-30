@@ -3827,10 +3827,22 @@ def %(callable)s(environ, start_response):
         if harvested:
             # keep `from <entry> import <handler>` working for any unit tests the
             # model wrote against the (now relocated) monolith: re-export its names.
+            # NON-FATAL: the harvest module is a best-effort FALLBACK for stray
+            # symbols; the resolved canonical handlers are bound LATER in `code`
+            # (``from <leaf> import get_health as _h0`` …). A broken/poisoned
+            # _product_logic.py must NEVER abort the entry before those binds run —
+            # v128 died exactly here: `from _product_logic import *` raised, the
+            # _hN aliases never bound, and `_ROUTES` hit `NameError: _h0` so the
+            # product would not boot and the doctor ground on it forever. Wrapping
+            # the harvest in try/except keeps the product serving its resolved
+            # routes even when the fallback harvest is unusable.
             code = code.replace(
                 "from urllib.parse import parse_qs\n",
                 "from urllib.parse import parse_qs\n"
-                "from _product_logic import *  # noqa: F401,F403 re-export harvested\n",
+                "try:  # best-effort re-export of harvested symbols (never fatal)\n"
+                "    from _product_logic import *  # noqa: F401,F403\n"
+                "except Exception:  # noqa: BLE001 — a broken harvest must not\n"
+                "    pass           # abort the resolved-handler entry below\n",
                 1)
         entry = contract["entry"]
         # Root guard for the v110/v115/v116 invalid-generated-import class: an
