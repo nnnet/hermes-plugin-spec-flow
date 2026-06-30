@@ -2121,6 +2121,26 @@ class Engine:
             return []
         return _dup_surface_findings(spec_md or "", modules)
 
+    def _test_func_names(self) -> set:
+        """Set of pytest function names (``def test_*``) across the workspace
+        tests/ tree. The late-req delta gate compares this before vs after a leaf
+        implements to require the leaf to SHIP a new test of its own behaviour."""
+        ws = self.workspace
+        if not (getattr(ws, "enabled", False) and getattr(ws, "root", None)):
+            return set()
+        tdir = Path(ws.root) / "tests"
+        if not tdir.exists():
+            return set()
+        names = set()
+        for f in tdir.rglob("test_*.py"):
+            try:
+                src = f.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for m in re.findall(r"^\s*def\s+(test_\w+)", src, re.M):
+                names.add(m)
+        return names
+
     def _late_req_delta_gate(self, node: dict, nid: str, depth: int,
                              code_rel: str) -> bool:
         """437: delta as acceptance. A LATE requirement leaf must produce a REAL
@@ -2214,6 +2234,27 @@ class Engine:
             if isinstance(_ds, dict):
                 _ds["delta_path"] = code_rel
                 _ds["delta_routes"] = list(routes)
+            return False
+        # Phase 5: a LATE requirement must SHIP A TEST of its own behaviour.
+        # Compared to the test-function names captured just before this leaf
+        # implemented, at least one NEW test must appear. An AMEND (note_search
+        # filters get_notes — no new route or symbol) otherwise passes the code
+        # and route checks above on the EXISTING handler while the new behaviour
+        # and its proof are silently absent (the v119 false green). No new test
+        # => treat as an empty delta => the doctor reworks the leaf to add one.
+        _base = node.get("_test_baseline")
+        if _base is not None and not (self._test_func_names() - _base):
+            self.loops.append({"type": "empty-delta", "task": nid,
+                               "detail": f"late requirement {nid} shipped no "
+                                         f"verifying test"})
+            self.emit("review", "engine", "", nid,
+                      "delta gate: late requirement shipped no verifying test",
+                      "no new test function vs the pre-implement baseline",
+                      "delta_gate", "FAIL", level=L_MILESTONE)
+            self._doctor_advise(node, nid, depth, "delta_gate", "FAIL",
+                                {"scope_findings": [
+                                    f"{code_rel} adds no new symbol — empty delta "
+                                    f"(no verifying test for the late requirement)"]})
             return False
         # The delta is real now (module present, route handlers in place). If an
         # EARLIER pass on this leaf opened an empty_delta cause (the leaf first
@@ -5620,6 +5661,12 @@ def %(callable)s(environ, start_response):
                               f"{nid}:route",
                               "process tiering → solo coder (simple leaf)",
                               "solo", "tier", level=L_DETAIL)
+                # Phase 5: snapshot test-function names BEFORE this leaf
+                # implements so the late-req delta gate can require THIS leaf to
+                # ship a NEW test (a sibling's test, already merged, must not
+                # count for it). Captured pre-implement; the gate reads post-merge.
+                if node.get("_late_req"):
+                    node["_test_baseline"] = self._test_func_names()
                 if self._leaf_seconds:
                     ictx["deadline"] = time.time() + self._leaf_seconds
                 try:
