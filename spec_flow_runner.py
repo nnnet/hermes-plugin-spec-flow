@@ -5553,6 +5553,36 @@ def %(callable)s(environ, start_response):
                 self._visit(asm_extra, depth + 1, child_contract_ctx, phase,
                             parent=title, ancestors=_kids)
 
+            # #127: re-poll standing requirements at the ROOT integrate seam.
+            # The depth-0 placement window above runs ONCE, BEFORE the engine
+            # assembly leaf (product_entry). In the product + small-product-floor
+            # path the build is fast and a requirement injected during assembly
+            # (live: the HITL dispatcher fires web_ui off an assembly-time trace
+            # event) lands AFTER that single window — its route enters the
+            # contract (boot-gate RED) yet no leaf owns it: an orphan 404 that
+            # never reaches an honest READY (v131/v132). Materialize any STILL-
+            # uncovered standing requirement here and build it before the verdict
+            # so its handler exists for the root integrate + reconcile to wire
+            # into the declared entry. uncovered == not yet a task (NOT a gate
+            # weakening). Bounded loop: a freshly built leaf may itself surface a
+            # scoped follow-up; in a normal run the first window already placed
+            # everything so this is a no-op (p4/p5 unaffected).
+            if depth == 0:
+                _repoll = 0
+                while _repoll < 4:
+                    _repoll += 1
+                    late = [x for x in self._requirement_nodes()
+                            if x["id"] not in self.tasks]
+                    if not late:
+                        break
+                    for extra in late:
+                        self._attach_late_req(extra, node, depth, title, nid,
+                                              ancestors, child_ids)
+                    for extra in late:
+                        self._visit(extra, depth + 1, child_contract_ctx,
+                                    phase, parent=title, ancestors=_kids)
+                        child_ids.append(extra["id"])
+
             # a branch delegates impl to its children, then integrates them
             drv.go(EV_BRANCH_INTEGRATE)
             integ = f"{nid}:integrate"
