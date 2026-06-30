@@ -53,3 +53,21 @@ def test_no_contract_means_no_binding(tmp_path):
     eng._product_contract = lambda: {}
     node = {"id": "x", "title": "t", "requirement": "POST /notes"}
     assert eng._leaf_route_binding(node) == ""
+
+
+def test_behaviour_contract_present(tmp_path):
+    # Phase 0: the binding carries the per-route behavioural contract derived
+    # from the method, so a weak model is told POST must persist + round-trip
+    # (the v120 break) and GET must read back.
+    eng = _engine(tmp_path)
+    eng._product_contract = lambda: {
+        "entry": "src/app.py",
+        "boot": {"json_roundtrip": "/notes", "ok_route": "/health"},
+        "routes": [],
+    }
+    node = {"id": "notes_api", "title": "Notes API",
+            "requirement": "Expose POST /notes and GET /notes", "spec_markdown": ""}
+    block = eng._leaf_route_binding(node)
+    assert "PERSIST" in block and "round-trip" in block      # POST behaviour
+    assert "q` filter" in block or "q filter" in block        # GET behaviour
+    assert "404" in block and "405" in block and "400" in block

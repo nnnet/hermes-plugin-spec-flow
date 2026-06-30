@@ -3033,13 +3033,33 @@ class Engine:
                 owned.append((m, p))
         if not owned:
             return ""
+        def _behaviour(method: str) -> str:
+            # Phase 0: the per-route behavioural contract, derived deterministically
+            # from the HTTP method — no model needed. Targets the v120 break where
+            # POST /notes did not persist, so the round-trip silently failed.
+            return {
+                "POST": "accept a JSON body, PERSIST it to storage, and return the "
+                        "created record (at least its id); a later GET on this path "
+                        "MUST return it — the round-trip must work",
+                "PUT": "accept a JSON body, store/replace the record, return it",
+                "PATCH": "apply the JSON body to the existing record, return it",
+                "DELETE": "remove the addressed record, return a success status",
+                "GET": "return the persisted data as JSON (a list, newest-first, "
+                       "when it is a collection; honour a `q` filter on `query`)",
+            }.get((method or "GET").upper(), "serve the route per its requirement")
+
         lines = "\n".join(
-            "- `%s %s` -> `def %s(payload, query)`"
-            % (m, p, _canonical_handler_symbol(m, p)) for m, p in owned)
-        return ("## Route -> handler binding (engine-declared)\n"
-                "Name each handler EXACTLY as listed and expose it at module "
-                "level so the assembled entry imports it by this name:\n" + lines
-                + "\nStatus semantics: unknown path -> 404; known path with an "
+            "- `%s %s` -> `def %s(payload, query)` — %s"
+            % (m, p, _canonical_handler_symbol(m, p), _behaviour(m))
+            for m, p in owned)
+        return ("## Route -> handler contract (engine-declared)\n"
+                "Name each handler EXACTLY as listed, expose it at module level, "
+                "and satisfy its stated behaviour. The assembled product is TESTED "
+                "against this contract — a handler that does not persist or return "
+                "as stated fails the run:\n" + lines
+                + "\n`payload` is the parsed JSON body (POST/PUT/PATCH); `query` is "
+                "the parsed query string (e.g. a `q` filter on GET).\n"
+                "Status semantics: unknown path -> 404; known path with an "
                 "unsupported method -> 405; malformed JSON body -> 400.")
 
     def _plan_ownership_report(self) -> list:
