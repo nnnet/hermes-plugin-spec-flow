@@ -687,6 +687,12 @@ def make_decomposer(workspace_dir: Optional[str] = None,
 # default (size 1 == today's single call); set SPEC_FLOW_CREATOR_ENSEMBLE=2..4.
 
 
+# A coder reply with zero parseable files is a provider hiccup, not a verdict:
+# retry along the fallback chain up to this many tries before accepting an
+# empty leaf (which the boot-gate would then fail). Bounds the extra cost.
+_MIN_NONEMPTY_ATTEMPTS = 3
+
+
 def _ensemble_size(complexity: str = "") -> int:
     """Number of creator candidates to generate. Scaled to node complexity: a
     trivial single-concern leaf (leaf_small) gets ONE candidate — the ensemble's
@@ -760,22 +766,28 @@ def _ensemble_generate(prompt: str, *, node: str, system: str, allowed: list,
     _ensemble_size). ``meta`` is forwarded to the universal call log
     (step/mode/...). ``params`` carries a specialist's sampling config."""
     n = _ensemble_size(complexity)
-    if n <= 1:
-        return _dialog_round(prompt, role="implementer", node=node,
-                             system=system, allowed=allowed,
-                             disallowed=disallowed, cwd=cwd, model=model,
-                             channel=channel, specialty=specialty, meta=meta,
-                             params=params)
     chain = llm_backend.chain_for("implementer", specialty, tier) or [model]
+    # A coder reply that yields ZERO parseable files (a provider timeout
+    # degraded the call to empty/prose — v130 root: tester/coder timed out at
+    # 75s, the leaf wrote nothing, the assembled product had no module and the
+    # boot-gate failed) must NOT silently produce an empty leaf. Even for a
+    # leaf_small (ensemble size 1) we retry along the fallback chain until at
+    # least one file lands, capped at _MIN_NONEMPTY_ATTEMPTS. Model-independent
+    # reliability: a leaf is only allowed to be RED on a real test failure,
+    # never on a provider hiccup that wrote nothing.
+    cap = max(n, min(len(chain), _MIN_NONEMPTY_ATTEMPTS))
     best = None     # (score_tuple, raw)
-    for i in range(n):
-        m = chain[i % len(chain)]
+    i = 0
+    while i < cap:
+        # legacy single-call path keeps the resolved model for the first try;
+        # any extra try walks the fallback chain to escape a flaky provider.
+        m = model if (n <= 1 and i == 0) else chain[i % len(chain)]
+        cmeta = meta if (n <= 1 and i == 0) else {**(meta or {}), "candidate": i}
         raw = _dialog_round(prompt, role="implementer", node=node,
                             system=system, allowed=allowed,
                             disallowed=disallowed, cwd=cwd, model=m,
                             channel=channel, specialty=specialty,
-                            meta={**(meta or {}), "candidate": i},
-                            params=params)
+                            meta=cmeta, params=params)
         clean, nfiles, why = _candidate_compiles(raw)
         # candidate EVALUATION marker (engine decision), not a call log — the
         # call itself was logged once by timed_ask. No `model` here so it is
@@ -790,8 +802,14 @@ def _ensemble_generate(prompt: str, *, node: str, system: str, allowed: list,
             llm_log.log({"event": "creator_ensemble", "node": node,
                          "chosen_model": m, "candidates": i + 1, "clean": True})
             return raw
+        i += 1
+        # done once the configured ensemble ran AND we hold a NON-EMPTY
+        # candidate; keep retrying past n only while every reply so far wrote
+        # zero files (the provider-hiccup case the retry exists for).
+        if i >= n and best[0][1] > 0:
+            break
     llm_log.log({"event": "creator_ensemble", "node": node,
-                 "candidates": n, "clean": False})
+                 "candidates": i, "clean": False, "empty": best[0][1] == 0})
     return best[1]
 
 
