@@ -3404,7 +3404,27 @@ class Engine:
         if ok_route and ("GET", ok_route) in unresolved_set:
             rows.append('    (%r, %r): ("health", None),' % ("GET", ok_route))
         routes_block = "\n".join(rows)
-        imports_block = "\n".join(imports)
+        # Re-export each wired handler under its ORIGINAL name so a generated
+        # test can `from <entry> import <handler>` (live v134: test_app.py did
+        # `from app import post_notes` but the entry bound only the _hN aliases
+        # -> ImportError RED-ed an otherwise-serving product; product was READY,
+        # every route incl. /ui served). Only names UNIQUE across the wired
+        # handlers are re-exported — a genuine cross-leaf name clash stays
+        # aliased-only, never silently shadowed — and never one that would
+        # shadow the router callable, a callable alias, or a module global.
+        _reserved = ({callable_name, "json", "parse_qs"}
+                     | set(alias_names))
+        _name_counts: dict = {}
+        for (_stem, _name) in alias_for:
+            _name_counts[_name] = _name_counts.get(_name, 0) + 1
+        reexports = ["%s = %s" % (_name, alias_for[(_stem, _name)])
+                     for (_stem, _name) in sorted(alias_for)
+                     if (_name and _name.isidentifier()
+                         and not _name.startswith("_")
+                         and _name_counts[_name] == 1
+                         and _name not in _reserved)]
+        imports_block = "\n".join(imports + (([""] + reexports)
+                                             if reexports else []))
         tmpl = '''\
 """Product entry — generated deterministically by the spec-flow engine.
 

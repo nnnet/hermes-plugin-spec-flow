@@ -255,6 +255,47 @@ def test_synth_entry_exposes_every_declared_callable_alias(tmp_path):
     assert ns["app"] is ns["wsgi_app"] is ns["application"]
 
 
+def test_synth_entry_reexports_wired_handlers_by_name(tmp_path):
+    """Live v134: the generated test_app.py did `from app import post_notes,
+    get_notes, get_health` but the synthesized entry bound only the _hN aliases
+    -> ImportError RED-ed an otherwise-serving product (product was READY, every
+    route incl. /ui served). The entry must re-export each wired handler under
+    its ORIGINAL name, bound to the actual leaf function."""
+    eng = _engine(tmp_path)
+    src = pathlib.Path(eng.workspace.root) / "src"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "core.py").write_text(
+        "def get_health(payload, query):\n    return (200, {'status': 'ok'})\n"
+        "def get_notes(payload, query):\n    return (200, {'items': []})\n"
+        "def post_notes(payload, query):\n    return (200, {'id': 1})\n")
+    contract = {
+        "entry": "src/app.py", "callable": ["wsgi_app", "application"],
+        "boot": {"ok_route": "/health"},
+        "routes": [["GET", "/health"], ["GET", "/notes"], ["POST", "/notes"]],
+    }
+    mapping, unresolved = eng._resolve_route_handlers(contract)
+    code = eng._synthesize_entry_code(contract, mapping, unresolved)
+    ns: dict = {}
+    # isolate from any foreign `core` already on the path / in the cache (the
+    # workflow-engine ships a `core` package) — the product runs hermetically
+    # in a subprocess; this unit test must do the same in-process.
+    _saved = sys.modules.pop("core", None)
+    sys.path.insert(0, str(src))
+    try:
+        exec(compile(code, "app.py", "exec"), ns)
+        import core as _leaf
+    finally:
+        sys.path.remove(str(src))
+        sys.modules.pop("core", None)
+        if _saved is not None:
+            sys.modules["core"] = _saved
+    for name in ("get_health", "get_notes", "post_notes"):
+        assert name in ns, "entry must re-export handler %s" % name
+        assert callable(ns[name])
+    # bound to the real leaf functions, not a wrapper
+    assert ns["post_notes"] is _leaf.post_notes
+
+
 def test_html_route_resolves_to_html_handler_named_after_its_data(tmp_path):
     """Live v103: the model named the UI page handler after the DATA it renders
     (`get_notes_html`), not the route (`/ui`), so the resource-token match found
