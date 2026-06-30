@@ -1,0 +1,24 @@
+tests/coverage/test_coder_empty_retry.py
+  s_a7f45290e91181::t_831ed5c413752a 1-77
+.claude/HANDOFF.md
+  s_a7f45290e91181::t_f7b63778c8431e 3-14
+tests/harness/role_worker.py
+  s_a7f45290e91181::t_a54405a2966443 690-695
+  s_a7f45290e91181::t_00f859a2764d16 770-778,780-785,790,805-810,812
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.4",
+  "base_commit_sha": "fe573b925bce3617b1eb6920ddd55aa1f9428853",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "nvidia/nemotron-3-super-120b-a12b-20230311:free"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
