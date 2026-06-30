@@ -1,0 +1,21 @@
+spec_flow_runner.py
+  s_a7f45290e91181::t_7f50a94d0e5459 3036-3050,3052-3062
+tests/coverage/test_leaf_route_binding.py
+  s_a7f45290e91181::t_37e7a61a22cee3 56-73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.4",
+  "base_commit_sha": "641761b3da6882722d7c26b1fa91dcaa4b6dfa75",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "nvidia/nemotron-3-super-120b-a12b-20230311:free"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
