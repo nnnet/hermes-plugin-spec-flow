@@ -1,0 +1,22 @@
+spec_flow_runner.py
+  s_a7f45290e91181::t_4df749aba51036 811-822
+tests/coverage/test_overlap_detectors_role.py
+  s_a7f45290e91181::t_760047d6263721 71-73
+  s_a7f45290e91181::t_4c67bb70809707 1-70,74-90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.4",
+  "base_commit_sha": "8517f0bc27f5ae78d60df1f97605bfed6fcbdfef",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
