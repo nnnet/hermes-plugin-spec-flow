@@ -1814,6 +1814,10 @@ class Engine:
         # #8: auto-spike thresholds (0 = off) — set in run() from the project
         self._spike_open = 0
         self._spike_loc = 0
+        # #122: small-product floor — a product whose contract declares <= this
+        # many routes is built as ONE atomic leaf (single module owns all routes
+        # + storage); 0 = off. Set in run() from the project.
+        self._small_product_routes = 5
         # #10: specialty routing — project meta, the implementer's declared
         # specialties, and the auto-infer switch; set in run()
         self._project_meta: dict = {}
@@ -4038,6 +4042,11 @@ def %(callable)s(environ, start_response):
         _spk = project.get("auto_spike") or {}
         self._spike_open = int(_spk.get("open_decisions", 0) or 0)
         self._spike_loc = int(_spk.get("estimated_loc", 0) or 0)
+        # #122: small-product floor (0 = off). A product-depth run whose contract
+        # declares <= N routes builds the root as ONE atomic leaf so a micro
+        # service is never shattered into rival whole-app modules whose imports
+        # fail to compose (v125: 8 leaves, 3 rival entries, e2e RED, 343 calls).
+        self._small_product_routes = int(project.get("small_product_routes", 5) or 0)
         # #10: specialty routing — the project dict (carries default_specialty)
         # + the auto-infer switch. The set of declared specialties stays empty
         # here (allow any): chain_for() falls back to the role chain for a
@@ -5215,6 +5224,24 @@ def %(callable)s(environ, start_response):
             else:
                 node.pop("children", None)
 
+    def _small_product_root(self, node: dict, depth: int,
+                            parent: Optional[str]) -> int:
+        """#122: small-product floor predicate. Returns the declared route count
+        (> 0) when THIS is the root product node (depth 0, no parent) of a
+        product-depth run whose contract declares at most ``_small_product_routes``
+        routes and the node carries no open decision and no explicit ``atomic``
+        claim — i.e. the whole micro-service should be ONE atomic leaf. Returns 0
+        otherwise. Deterministic and model-independent: the route count comes from
+        the human-text contract (``_product_contract``), never from model output.
+        Larger products (> N routes) return 0 and keep decomposing."""
+        if not (depth == 0 and parent is None and "atomic" not in node
+                and self._small_product_routes and self.depth >= DEPTH_PRODUCT):
+            return 0
+        if int((node.get("metrics") or {}).get("open_decisions", 0) or 0) != 0:
+            return 0
+        nr = len(self._declared_route_set(self._product_contract() or {}))
+        return nr if 0 < nr <= self._small_product_routes else 0
+
     def _visit(self, node: dict, depth: int, contract_ctx: Optional[dict], phase: str,
                parent: Optional[str] = None, ancestors: tuple = ()):
         if "metrics" not in node:
@@ -5299,6 +5326,25 @@ def %(callable)s(environ, start_response):
                       spike["recommendation"])
             self.tasks[sid].status = "done"
             self._completed += 1
+
+        # #122: small-product floor. The ROOT product node (depth 0) of a
+        # product-depth run whose contract declares <= _small_product_routes
+        # routes is forced to ONE atomic leaf: a single module owns every route
+        # and its storage, and the engine synthesizes the entry. This stops the
+        # decomposer from shattering a micro-service into rival whole-app modules
+        # that fail to compose at import (v125 root: 8 leaves, 3 rival
+        # `wsgi_app`/`application` entries, e2e RED, 343 calls). Larger products
+        # (> N routes) keep decomposing. Deterministic, model-independent; only
+        # collapses an over-split tiny root, never splits a leaf.
+        _nr = self._small_product_root(node, depth, parent)
+        if _nr:
+            node["atomic"] = True
+            self.emit("decompose", "engine", "", nid,
+                      "small product → single atomic leaf",
+                      f"{_nr} declared route(s) <= {self._small_product_routes}: "
+                      "one module owns all routes + storage, engine "
+                      "synthesizes the entry (no rival whole-app modules)",
+                      "small_product", "leaf", level=L_MILESTONE)
 
         # the gate: leaf vs branch. Atomicity is the PRIMARY judgment — an
         # explicit ``atomic`` field, else inferred from whether the decomposer
