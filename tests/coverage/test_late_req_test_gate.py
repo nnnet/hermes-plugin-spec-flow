@@ -45,7 +45,7 @@ def test_func_names_collects_tests(tmp_path):
 def test_late_req_without_new_test_fails(tmp_path):
     eng, root = _engine(tmp_path)
     node = {"id": "late1", "_late_req": True,
-            "_test_baseline": eng._test_func_names()}   # baseline = {} (no tests)
+            "_test_baseline": sorted(eng._test_func_names())}   # baseline = {} (no tests)
     # leaf implemented code but shipped NO test
     ok = eng._late_req_delta_gate(node, "late1", 1, "src/thing.py")
     assert ok is False
@@ -55,7 +55,7 @@ def test_late_req_without_new_test_fails(tmp_path):
 def test_late_req_with_new_test_passes(tmp_path):
     eng, root = _engine(tmp_path)
     node = {"id": "late1", "_late_req": True,
-            "_test_baseline": eng._test_func_names()}   # baseline = {}
+            "_test_baseline": sorted(eng._test_func_names())}   # baseline = {}
     # the leaf shipped a NEW test after the baseline snapshot
     (root / "tests" / "test_thing.py").write_text(
         "def test_thing_behaviour():\n    assert True\n", encoding="utf-8")
@@ -69,3 +69,16 @@ def test_non_late_node_unaffected(tmp_path):
     node = {"id": "plain"}            # no _late_req, no baseline
     ok = eng._late_req_delta_gate(node, "plain", 1, "src/thing.py")
     assert ok is True
+
+
+def test_baseline_is_json_serializable(tmp_path):
+    # the node is persisted to meta/checkpoints — a set baseline crashed the
+    # JSON writer at end of run (v121). The stored form must be a plain list.
+    import json
+    eng, root = _engine(tmp_path)
+    (root / "tests" / "test_a.py").write_text(
+        "def test_one():\n    pass\n", encoding="utf-8")
+    node = {"id": "late1", "_late_req": True,
+            "_test_baseline": sorted(eng._test_func_names())}
+    json.dumps(node)            # must not raise
+    assert isinstance(node["_test_baseline"], list)

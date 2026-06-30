@@ -2243,7 +2243,7 @@ class Engine:
         # and its proof are silently absent (the v119 false green). No new test
         # => treat as an empty delta => the doctor reworks the leaf to add one.
         _base = node.get("_test_baseline")
-        if _base is not None and not (self._test_func_names() - _base):
+        if _base is not None and not (self._test_func_names() - set(_base)):
             self.loops.append({"type": "empty-delta", "task": nid,
                                "detail": f"late requirement {nid} shipped no "
                                          f"verifying test"})
@@ -5666,7 +5666,9 @@ def %(callable)s(environ, start_response):
                 # ship a NEW test (a sibling's test, already merged, must not
                 # count for it). Captured pre-implement; the gate reads post-merge.
                 if node.get("_late_req"):
-                    node["_test_baseline"] = self._test_func_names()
+                    # stored as a sorted LIST (JSON-serializable: the node is
+                    # persisted to meta/checkpoints; a set would crash the writer)
+                    node["_test_baseline"] = sorted(self._test_func_names())
                 if self._leaf_seconds:
                     ictx["deadline"] = time.time() + self._leaf_seconds
                 try:
