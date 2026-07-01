@@ -3621,6 +3621,8 @@ def %(callable)s(environ, start_response):
             payload = json.loads(raw)
         except Exception:                       # malformed body -> 400, never 500
             return _send(start_response, 400, {"error": "invalid json"})
+    elif method in ("POST", "PUT", "PATCH"):    # a write with no body is a client
+        return _send(start_response, 400, {"error": "empty request body"})
     try:
         if abi == "health":
             status, body = 200, {"status": "ok"}
@@ -3630,6 +3632,8 @@ def %(callable)s(environ, start_response):
             status, body = fn(payload)
         else:
             status, body = fn()
+    except KeyError as exc:                      # missing required field -> client 400
+        return _send(start_response, 400, {"error": "missing required field: %%s" %% exc})
     except Exception as exc:                    # a leaf bug -> clean 500, no crash
         return _send(start_response, 500, {"error": "handler failed: %%s" %% exc})
     return _send(start_response, status, body)

@@ -387,6 +387,36 @@ def test_malformed_body_is_400_never_500(tmp_path):
     assert st == 400, "malformed body must be 4xx, got %s" % st
 
 
+def test_client_input_error_is_400_never_500(tmp_path):
+    # The deterministic router GUARANTEES a client input error surfaces as 4xx,
+    # never a 5xx, independent of handler quality. Two classes of the same fault:
+    #   (a) a write (POST/PUT/PATCH) with an EMPTY body, and
+    #   (b) a well-formed body MISSING a required field, where a weak handler does
+    #       `payload["text"]` and raises KeyError.
+    # Before this guarantee a weak handler turned (a)/(b) into a 500 the doctor
+    # could not heal (live v141: test_empty_body_on_post_400 assert 500 == 400).
+    eng = _engine(tmp_path)
+    _seed_src(eng.workspace.root)
+    src_dir = pathlib.Path(eng.workspace.root) / "src"
+    # replace the well-behaved seed with a WEAK handler that does not validate.
+    (src_dir / "notes_post.py").write_text(
+        "import db_layer\n"
+        "def post_notes(payload, query):\n"
+        "    return (201, {'id': db_layer.store_note(payload['text'])})\n")
+    mapping, unresolved = eng._resolve_route_handlers(_CONTRACT)
+    code = eng._synthesize_entry_code(_CONTRACT, mapping, unresolved)
+    app = _load_entry(code, tmp_path / "n.db", src_dir)
+    # (a) empty body on a POST -> 400, not 500
+    st, _h, _b = _call(app, "POST", "/notes", body=b"")
+    assert st == 400, "empty POST body must be 4xx, got %s" % st
+    # (b) well-formed JSON missing the required field -> 400, not 500
+    st, _h, _b = _call(app, "POST", "/notes", body=b"{}")
+    assert st == 400, "missing required field must be 4xx, got %s" % st
+    # a VALID body still succeeds (guarantee does not over-reject)
+    st, _h, _b = _call(app, "POST", "/notes", body=b'{"text": "hi"}')
+    assert st in (200, 201), "valid POST must succeed, got %s" % st
+
+
 def test_unknown_route_404_wrong_method_405(tmp_path):
     eng = _engine(tmp_path)
     _seed_src(eng.workspace.root)
