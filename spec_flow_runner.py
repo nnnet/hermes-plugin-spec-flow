@@ -2791,7 +2791,26 @@ class Engine:
             routes.setdefault(m.group(2).rstrip(".,;:)"), set()).add(
                 m.group(1).upper())
         if not routes:
-            return {}            # no HTTP route described ⇒ not a runnable web product
+            # No HTTP route ⇒ not a WEB product. It may still be a runnable
+            # NON-WEB product (library / CLI / pipeline). #C3: infer the SHAPE
+            # from the human text; when the human named an entry file and an
+            # exposed capability, return a MEDIUM-AGNOSTIC contract (kind + entry
+            # + exposes) with NO routes/boot — the engine synthesises the library
+            # entry (re-export of the public API) and judges it by BEHAVIOUR (a
+            # capability probe), never by an HTTP status. Empty boot/routes keep
+            # the HTTP readers (_declared_route_set etc.) trivially no-op; the
+            # kind key routes assembly + acceptance onto the non-web branches.
+            kind = _project_kind(texts)
+            if kind not in ("lib", "cli"):
+                return {}        # unknown shape ⇒ no assembly, no boot-gate
+            em2 = re.search(r"(src/[A-Za-z0-9_./-]+\.py)", blob)
+            exposed = list(dict.fromkeys(
+                re.findall(r"exposes?\s+`?([a-z_][a-z0-9_]*)`?", low)))
+            if not em2 or not exposed:
+                return {}        # entry file / capability not named ⇒ no guess
+            return {"kind": kind, "entry": em2.group(1),
+                    "exposes": exposed, "callable": exposed,
+                    "boot": {}, "routes": []}
         # The entry FILE and its callable must be NAMED by the human (e.g.
         # "src/app.py exposes wsgi_app"). If the human declared routes but never
         # named where they live, the engine does NOT guess a default file/callable
@@ -2858,6 +2877,11 @@ class Engine:
         # 'src/app.py'/'wsgi_app'. No contract => no assembly (library/CLI/…).
         c = self._product_contract()
         if not c:
+            return None
+        if c.get("kind") in ("lib", "cli"):
+            # NON-WEB product: the engine synthesises the library/CLI entry
+            # deterministically (re-export of the public API — see
+            # _try_synthesize_lib_entry). No LLM assembly leaf, no WSGI glue.
             return None
         entry = c["entry"]
         _rivals = self._rival_wsgi_entries(entry)
@@ -3902,6 +3926,59 @@ def %(callable)s(environ, start_response):
                   "integrate_verify", "", level=L_MILESTONE)
         return True
 
+    def _try_synthesize_lib_entry(self, contract: dict) -> bool:
+        """#C3 — deterministic assembly of a NON-WEB product entry.
+
+        Maps each declared exposed capability to the src module that DEFINES it
+        (the AST symbol registry from ``_available_interfaces``) and writes an
+        entry that re-exports the public API. This is the medium-agnostic
+        analogue of the WSGI router: the engine owns the wiring so assembly is
+        independent of model quality — no invented import names, no hand-written
+        glue. Returns True iff EVERY exposed symbol resolves to a built module
+        and the entry is written; False (the LLM implementer stays responsible)
+        when a capability is not yet built — then the capability probe honestly
+        RED-s the product and the doctor reworks the owning leaf."""
+        ws = self.workspace
+        entry_stem = Path(contract["entry"]).stem
+        exposed = [s.split("(")[0].strip()
+                   for s in (contract.get("exposes")
+                             or contract.get("callable") or [])]
+        exposed = [s for s in exposed if s]
+        if not exposed:
+            return False
+        # symbol -> owning module stem, from the AST registry of built modules
+        # (never the entry itself). _available_interfaces yields, per module,
+        # entries like "name(args)", "class Name", "CONST".
+        ifaces = self._available_interfaces(exclude=entry_stem)
+        owner_by_symbol: dict = {}
+        for sym in exposed:
+            for mod, names in ifaces.items():
+                if mod == entry_stem:
+                    continue
+                bare = {n.split("(")[0].replace("class ", "").strip()
+                        for n in names}
+                if sym in bare:
+                    owner_by_symbol[sym] = mod
+                    break
+        if len(owner_by_symbol) != len(exposed):
+            return False        # a capability is not built yet — LLM stays on it
+        code = _synthesize_lib_entry(owner_by_symbol)
+        try:
+            dst = Path(ws.root) / "src" / (entry_stem + ".py")
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if dst.is_file() and dst.read_text(encoding="utf-8") == code:
+                return True     # idempotent — skip the write when unchanged
+            dst.write_text(code, encoding="utf-8")
+        except OSError:
+            return False
+        self.emit("integrate", "verifier", "spec-integrate", "L0:integrate",
+                  "engine-owned library entry: %s re-exports %d capabilities"
+                  % (contract["entry"], len(owner_by_symbol)),
+                  "deterministic non-web assembly — the engine wires the public "
+                  "API from its owning modules (no model glue)",
+                  "integrate_verify", "", level=L_MILESTONE)
+        return True
+
     def _try_synthesize_entry(self) -> bool:
         """Deterministically (re)build the product entry from the contract when
         EVERY declared route resolves to a built leaf handler. The engine — not
@@ -3918,6 +3995,8 @@ def %(callable)s(environ, start_response):
         contract = self._product_contract()
         if not contract or not contract.get("entry"):
             return False
+        if contract.get("kind") in ("lib", "cli"):
+            return self._try_synthesize_lib_entry(contract)
         harvested = False
         try:
             mapping, unresolved = self._resolve_route_handlers(contract)
@@ -6555,6 +6634,35 @@ def %(callable)s(environ, start_response):
                   "PASS" if passed else f"FAIL — {reason}",
                   "", "PASS" if passed else "FAIL", level=L_MILESTONE)
 
+    def _nonweb_capability_boots(self, c: dict) -> "tuple":
+        """#C4 ROOT behaviour-gate for a NON-WEB product (library / CLI).
+
+        Imports the engine-synthesised entry in a fresh, src-only subprocess and
+        asserts EACH declared capability is present and callable. The
+        medium-agnostic analogue of the WSGI boot-gate: a library is judged by
+        'does the described capability run', never by an HTTP status. No
+        test-harness import (tests/ is not importable in a real run). Returns
+        (ok, detail); RED when the entry was not assembled or a capability is
+        absent — the doctor then reworks the owning leaf."""
+        ws = self.workspace
+        src = Path(ws.root) / "src"
+        entry_stem = Path(c["entry"]).stem
+        if not (src / (entry_stem + ".py")).is_file():
+            return False, "product entry %s was not assembled" % c["entry"]
+        for sym in (c.get("exposes") or c.get("callable") or []):
+            probe = _capability_probe_src(entry_stem, sym)
+            try:
+                proc = subprocess.run(
+                    ["python3", "-c", probe], capture_output=True, text=True,
+                    timeout=60, cwd=str(src))
+                sout = (proc.stdout or "") + (proc.stderr or "")
+            except Exception as exc:  # noqa: BLE001
+                return False, "capability probe could not run: %s" % exc
+            if "CAPABILITY_OK" not in sout:
+                return False, ("assembled product does not expose capability "
+                               "'%s': %s" % (sym, sout.strip()[:280]))
+        return True, ""
+
     def _assembled_product_boots(self) -> "tuple":
         """Un-mockable B2 at the ROOT: boot the real assembled WSGI entry in a
         fresh subprocess and drive its frozen contract. Returns (ok, detail).
@@ -6571,6 +6679,8 @@ def %(callable)s(environ, start_response):
         c = self._product_contract()
         if not c:
             return True, ""                 # no declared runnable product → n/a
+        if c.get("kind") in ("lib", "cli"):
+            return self._nonweb_capability_boots(c)
         boot = c["boot"]
         probe_cfg = json.dumps({
             "callable": c["callable"],

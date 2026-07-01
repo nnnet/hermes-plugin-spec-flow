@@ -1,0 +1,161 @@
+# Project 7 — the NON-WEB end-to-end case. Its purpose is to prove the engine is
+# MEDIUM-AGNOSTIC: it must build a working product that has NO HTTP and NO web
+# surface at all — an importable Python library — and reach an HONEST READY.
+#
+# The whole live pipeline is exercised exactly as p6, but the runnable product is
+# a LIBRARY, not a WSGI app:
+#   * `_product_contract` derives a medium-agnostic contract (kind=lib + entry +
+#     exposes) from the human text — NO routes, NO boot triple;
+#   * the engine synthesises the library ENTRY deterministically (re-export of
+#     the public API from its owning modules — the non-web analogue of the WSGI
+#     router), so assembly never depends on model quality;
+#   * acceptance is by BEHAVIOUR: the capability probe imports the entry in a
+#     fresh subprocess and asserts each declared capability is present + callable
+#     — a library is judged by "does the described capability run", not curl.
+#
+# Nothing is seeded. The `acceptance:` block is the declarative oracle. If this
+# reaches READY with no HTTP anywhere, the engine is genuinely general.
+name: p7-word-stats-lib
+node_engine: fsm
+
+parallel: {children: 3}
+isolation: worktree
+
+goal: >
+  A small, reusable Python library for word statistics over a piece of text.
+  It is IMPORTED by other code, not served over HTTP — there are no endpoints
+  and no web interface. The package entry src/wordlib.py exposes word_count
+  (the number of words in a string) and also exposes split_words (the list of
+  words in a string, in order). Standard library only.
+
+target: >
+  Importing the library and calling the exposed capabilities returns the right
+  results: word_count("a b c") == 3 and split_words("a b") == ["a", "b"].
+  Binary success — the acceptance suite is green and the assembled library
+  exposes every declared capability, callable.
+
+policy: {measurable_target: true, spend_per_action_usd: 0, human_in_loop: true,
+         involves_outreach: false, consent_obtained: true, legal_exposure: false,
+         legality_reviewed: true}
+
+constitution:
+  - "This is a LIBRARY, not a service: standard library ONLY, no HTTP, no server,
+     no web framework. The public API is imported from the package entry
+     src/wordlib.py, which exposes `word_count` and exposes `split_words`."
+  - "The public API is FROZEN: word_count(text) -> int is the number of
+     whitespace-separated words; split_words(text) -> list[str] is those words in
+     order. Accept exactly these signatures — no extras required."
+  - "Each capability lives in its OWN small module under src/ (one concern per
+     module); the entry src/wordlib.py only re-exports them. No duplicate
+     definition of a capability across modules."
+
+hitl:
+  approve_required: false
+  worker_may_ask_human: true
+  human_may_intervene: true
+
+# Autonomous HITL script. As in p6, a human states a requirement IN WORDS only;
+# proving it works is the SYSTEM's job. Here the late requirement is ALSO non-web
+# — it exercises late-requirement routing in the library medium (a new capability
+# that overlaps the existing word-stats surface must be folded in, not forked).
+injections:
+  llm_route: true
+  requirements:
+    - name: unique_words
+      when: {event: "minimal impl"}
+      statement: |
+        COUNT DISTINCT WORDS (added by the human mid-run; binding).
+
+        The library should also let a reader know how many DIFFERENT words a
+        piece of text contains (case-insensitive; "The the" counts as one).
+        Expose it from the same package entry as the other word statistics —
+        build on the existing word-splitting rather than a separate one. Build it
+        AND prove it with a test through the public API. Standard library only.
+  answers:
+    default: "Proceed with the simplest correct standard-library approach that satisfies the requirement as written; do not block on this."
+
+doctor:
+  enabled: true
+causes:
+  empty_delta:     {ladder: [reject_empty, rework, escalate_tier]}
+  task_too_large:  {ladder: [split, record]}
+evaluator:
+  tier: strong
+  temperature: 0.0
+  votes: 1
+  require_cite: true
+
+review:
+  on_reject: rework
+  max_rework: 2
+
+# B1/B2 — the honest hard floor for a NON-WEB product. With pre_gate on, the ROOT
+# integrate (L0) runs the un-mockable capability boot-gate: it imports the
+# assembled library entry in a fresh subprocess and asserts EACH declared
+# capability is present and callable. A library that does not import or is missing
+# a capability is RED even when the per-module pytest suite is green.
+integrate:
+  pre_gate: true
+
+# Acceptance oracle (declarative), behaviour stated as import-and-call, NOT curl.
+acceptance:
+  smoke:
+    - "the library imports: `from wordlib import word_count, split_words` works"
+  e2e:
+    - "word_count('a b c') == 3 and split_words('a b') == ['a', 'b']"
+
+# Workers: identical infra to p6 (same Bifrost transport + the 3 allowed models +
+# claude subscription gateway). Only the PRODUCT shape differs — the engine, not
+# the config, decides web vs library.
+workers:
+  backend: openai
+  base_url: http://127.0.0.1:8080/v1
+  claude_gateway:
+    base_url: http://127.0.0.1:8080/v1
+    model_map:
+      claude/sonnet: anthropic/claude-sonnet-4-6
+      sonnet: anthropic/claude-sonnet-4-6
+  retries: 6
+  timeout: 75
+  leaf_depth: 3
+  max_children: 3
+  max_decompose_calls: 40
+  creator_ensemble: 2
+  max_concurrent_llm_requests: 3
+  provider_concurrency:
+    claude: 1
+    anthropic: 1
+  provider_timeout:
+    claude: 180
+    anthropic: 180
+  cycle_models: false
+  quota_wait_s: 20
+  quota_retries: 3
+  fallback_models: [claude/sonnet]
+  tiers:
+    weak:   {models: [claude/sonnet, xiaomimimo/mimo-v2.5], temperature: 0.2}
+    medium: {models: [claude/sonnet, xiaomimimo/mimo-v2.5], temperature: 0.1}
+    strong: {models: [claude/sonnet, xiaomimimo/mimo-v2.5-pro], temperature: 0.0}
+  complexity_to_tier: {leaf_small: weak, leaf_big: medium, branch: strong}
+  providers:
+    - {name: xiaomimimo, kind: openai, model_prefix: "xiaomimimo/", requests_per_day: 1000}
+    - {name: claude-cli, kind: claude, model_prefix: "claude/"}
+  defaults:
+    models: ["claude/sonnet", "xiaomimimo/mimo-v2.5", "xiaomimimo/mimo-v2.5-pro"]
+  stages:
+    decompose:
+      models: ["claude/sonnet", "xiaomimimo/mimo-v2.5"]
+    implement:
+      models: ["claude/sonnet", "xiaomimimo/mimo-v2.5"]
+      team:
+        specialists:
+          - {role: architect, model: "claude/sonnet", params: {temperature: 0.2}}
+          - {role: coder,     model: "claude/sonnet", params: {temperature: 0.4, max_tokens: 6000}}
+          - {role: tester,    provider: hermes,          agent: "tester",
+             gateway: "http://127.0.0.1:8642", model: "xiaomimimo/mimo-v2.5"}
+          - {role: fixer,     provider: mission-control, agent_template: "fixer",
+             api: "http://127.0.0.1:3000", model: "claude/sonnet"}
+    review:
+      models: ["xiaomimimo/mimo-v2.5", "claude/sonnet"]
+    verify:
+      models: ["xiaomimimo/mimo-v2.5-pro", "claude/sonnet"]
