@@ -1082,6 +1082,24 @@ _ORCHESTRA_ROLE_PROMPTS = {
         " diff blocks against the current files)."),
 }
 
+def _interfaces_block(ctx: dict) -> str:
+    """#113: a MANDATORY-import instruction that lists the REAL public surface of
+    every already-built sibling module (name + signatures), so a consumer leaf
+    imports the producer's actual symbols instead of inventing them (root of the
+    recurring red product: v137 web_ui imported save_note/init_db while core
+    exposes create_note). Medium-agnostic — the list is the same whether the
+    product is a web app, a CLI, or a library. Empty when nothing is built yet."""
+    ifaces = ctx.get("available_interfaces") or {}
+    if not ifaces:
+        return ""
+    body = "\n".join("  - %s exposes: %s" % (m, ", ".join(ifaces[m]))
+                     for m in sorted(ifaces))
+    return ("\n\nALREADY-BUILT MODULES — import ONLY these real names. Do NOT"
+            "\ninvent a module or symbol name; use the exact module and"
+            "\nsignature shown. A name not listed here does not exist yet:\n"
+            + body)
+
+
 _ARCHITECT_TASK = """You are the ARCHITECT sub-role of the implementer team for
 ONE leaf of a Spec-Driven Development run.
 
@@ -1113,7 +1131,7 @@ def _orchestra_run(ctx: dict, ws_root: str, nid: str, fn: str, *,
     spec_body = _inline_file(ws_root, ctx.get("spec", ""))
     base_prompt = _IMPLEMENT_CHAT_TASK.format(
         title=ctx["title"], id=nid, spec=ctx.get("spec", ""),
-        spec_body=spec_body, fn=fn)
+        spec_body=spec_body, fn=fn) + _interfaces_block(ctx)
     handoff: dict[str, Any] = {"architect_plan": "", "test_output": ""}
     passed, test_out, wrote = False, "(no files written)", False
     baseline = 0
@@ -1166,7 +1184,7 @@ def _orchestra_run(ctx: dict, ws_root: str, nid: str, fn: str, *,
             if role == "architect":
                 prompt = _ARCHITECT_TASK.format(
                     title=ctx["title"], id=nid, spec=ctx.get("spec", ""),
-                    spec_body=spec_body, fn=fn)
+                    spec_body=spec_body, fn=fn) + _interfaces_block(ctx)
                 handoff["architect_plan"] = _dialog_round(
                     prompt, role="implementer", node=nid, system=s_system,
                     allowed=allowed, disallowed=disallowed, cwd=ws_root,
@@ -1622,6 +1640,7 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         model = _model_for("implementer", specialty, tier)
         prompt = _IMPLEMENT_TASK.format(title=ctx["title"], id=nid,
                                         spec=ctx["spec"], fn=fn) \
+            + _interfaces_block(ctx) \
             + memory.recall_block_for("implementer", ctx["title"]) \
             + _ASK_RULE
         note = channel.poll_note() if channel is not None else None

@@ -5780,6 +5780,51 @@ def %(callable)s(environ, start_response):
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
 
+    def _available_interfaces(self, exclude: str = "") -> dict:
+        """#113: the PUBLIC interface of every already-built ``src`` module, as
+        data — ``{module_stem: ["name(args)", "class Name", "CONST", ...]}``.
+
+        Why: the recurring root of a red product is a CONSUMER leaf that guesses
+        the PRODUCER's symbols (v137: web_ui imported save_note/init_db while
+        core exposes create_note). Handing the coder the producer's REAL surface
+        turns guessing into reading. Deterministic AST scan, MEDIUM-AGNOSTIC —
+        the published surface is identical for a web, CLI, library, or pipeline
+        leaf; nothing here assumes HTTP. ``exclude`` drops the module the current
+        leaf is writing (a leaf never imports itself). Topological order (#42)
+        means a leaf's dependencies are already built, so their files exist here.
+        """
+        root = getattr(self.workspace, "root", None)
+        if not root:
+            return {}
+        sdir = Path(root) / "src"
+        if not sdir.is_dir():
+            return {}
+        out: dict = {}
+        for p in sorted(sdir.glob("*.py")):
+            if p.stem == exclude or p.stem.startswith("_"):
+                continue
+            try:
+                tree = ast.parse(p.read_text(encoding="utf-8"))
+            except (OSError, SyntaxError, ValueError):
+                continue
+            syms: list = []
+            for n in tree.body:
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if n.name.startswith("_"):
+                        continue
+                    args = [a.arg for a in n.args.args]
+                    syms.append("%s(%s)" % (n.name, ", ".join(args)))
+                elif isinstance(n, ast.ClassDef):
+                    if not n.name.startswith("_"):
+                        syms.append("class %s" % n.name)
+                elif isinstance(n, ast.Assign):
+                    for t in n.targets:
+                        if isinstance(t, ast.Name) and not t.id.startswith("_"):
+                            syms.append(t.id)
+            if syms:
+                out[p.stem] = syms
+        return out
+
     def _leaf_pipeline(self, node: dict, contract_ctx: Optional[dict],
                        depth: int = 0, parent: Optional[str] = None,
                        drv: Optional["_NodeDriver"] = None,
@@ -5918,6 +5963,13 @@ def %(callable)s(environ, start_response):
                     node["_test_baseline"] = sorted(self._test_func_names())
                 if self._leaf_seconds:
                     ictx["deadline"] = time.time() + self._leaf_seconds
+                # #113: publish the REAL interface of every already-built sibling
+                # so the coder imports the producer's ACTUAL symbols instead of
+                # inventing them (root of the recurring red product). Read once,
+                # here, from the assembled src — deterministic, medium-agnostic.
+                _ifaces = self._available_interfaces(exclude=code_fn)
+                if _ifaces:
+                    ictx["available_interfaces"] = _ifaces
                 try:
                     self._invoke_implementer(ictx, nid, code_fn)
                 except NotImplementedError:
