@@ -1057,6 +1057,66 @@ def _interface_edge_violations(tree: dict) -> list:
     return viol
 
 
+def _project_kind(texts) -> str:
+    """#C3 — the project's SHAPE from the human text, so the engine synthesises
+    the RIGHT entry (not always a WSGI app). Medium-agnostic and deterministic:
+
+      'web'  — HTTP routes are described (METHOD /path)
+      'cli'  — a command-line tool is described (argv / sub-command / CLI)
+      'lib'  — an importable library/API is described
+      ''     — unknown; the engine synthesises no entry (today's behaviour)
+
+    Pure, no LLM. Routes win first (a web app is unambiguous)."""
+    blob = "\n".join(str(t) for t in (texts or []))
+    low = blob.lower()
+    if re.search(r"\b(GET|POST|PUT|DELETE|PATCH)\s+/", blob):
+        return "web"
+    if any(k in low for k in ("command line", "command-line", "cli tool",
+                              " cli ", "argv", "argparse", "sub-command",
+                              "subcommand", "terminal command", "console script")):
+        return "cli"
+    if any(k in low for k in ("library", "importable", "public api",
+                              "module that exposes", "package that exposes",
+                              "reusable function", "python package")):
+        return "lib"
+    return ""
+
+
+def _synthesize_lib_entry(owner_by_symbol: dict) -> str:
+    """#C3 — a LIBRARY entry that re-exports the public API from its owning
+    modules, so ``from <pkg> import <symbol>`` works. The non-web analogue of the
+    WSGI router: deterministic assembly of the top-level surface from the symbol
+    registry, no guessing. ``owner_by_symbol``: {symbol_name: module_stem}."""
+    by_mod: dict = {}
+    for sym, mod in owner_by_symbol.items():
+        by_mod.setdefault(mod, []).append(sym)
+    lines = ['"""Package entry — re-exports the public API '
+             '(engine-synthesised)."""']
+    for mod in sorted(by_mod):
+        lines.append("from %s import %s" % (mod, ", ".join(sorted(by_mod[mod]))))
+    lines.append("__all__ = [%s]"
+                 % ", ".join(repr(s) for s in sorted(owner_by_symbol)))
+    return "\n".join(lines) + "\n"
+
+
+def _capability_probe_src(entry_module: str, symbol: str) -> str:
+    """#C4 — a BEHAVIOUR-acceptance probe for a non-web product: import the
+    entry and assert the described capability is present and callable. This is
+    the medium-agnostic analogue of the web boot-gate's ``GET /health`` — a
+    library/CLI/pipeline is judged by 'does the described capability run', not
+    by an HTTP status. Returns runnable probe source; the caller executes it in
+    a fresh, hermetic subprocess (src-only path). Pure/deterministic."""
+    sym = symbol.split("(")[0].strip()
+    return (
+        "import importlib, sys\n"
+        "m = importlib.import_module(%r)\n"
+        "assert hasattr(m, %r), 'entry %s does not expose %s'\n"
+        "assert callable(getattr(m, %r)) or getattr(m, %r) is not None, "
+        "'%s is not usable'\n"
+        "print('CAPABILITY_OK')\n"
+        % (entry_module, sym, entry_module, sym, sym, sym, sym))
+
+
 def _amend_find_owner(statement: str, modules: list, methods=None,
                       candidates_text=None, llm=None) -> "Optional[str]":
     """Decide which existing module (if any) owns the surface this requirement
