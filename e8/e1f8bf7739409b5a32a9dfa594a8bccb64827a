@@ -1,0 +1,21 @@
+spec_flow_runner.py
+  s_a7f45290e91181::t_2035e6bcc2e620 3624-3625,3635-3636
+tests/coverage/test_entry_synthesis.py
+  s_a7f45290e91181::t_74f16110525d7e 390-419
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.6",
+  "base_commit_sha": "e8e1f8bf7739409b5a32a9dfa594a8bccb64827a",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
