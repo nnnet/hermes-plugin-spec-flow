@@ -1,0 +1,29 @@
+tests/coverage/test_interface_edge_gate.py
+  s_a7f45290e91181::t_538416b72a9388 17-19
+  s_a7f45290e91181::t_3c0b25c0cf0cef 56-67
+  s_a7f45290e91181::t_b3ddb655a318b6 1-16,20-55,68-77
+spec_flow_runner.py
+  s_a7f45290e91181::t_a52b92819ede63 1017-1059
+  s_a7f45290e91181::t_5841c9721ff238 6659
+  s_a7f45290e91181::t_1ee34f66639dfc 6016-6023
+  s_a7f45290e91181::t_7b8180029b1fd1 6654-6658,6660-6662
+tests/harness/role_worker.py
+  s_a7f45290e91181::t_ebc97dbd1bed64 478-481,488-491
+  s_a7f45290e91181::t_77321e4b3ccf14 1099-1119,1121-1128
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.6",
+  "base_commit_sha": "92bea1f9006b98af5b69aa0a7fb3262bd81d5df1",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "nvidia/nemotron-3-super-120b-a12b-20230311:free"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
