@@ -23,13 +23,19 @@
 контракт кормится кодеру через `_interfaces_block` (вместе с реальными
 интерфейсами #113с1). 10 офлайн-тестов вкл не-веб. Медиум-независимо.
 
-### Слайс 3/4 — ЯДРА ГОТОВЫ (`cfb8f6b`), интеграция остаётся
-СДЕЛАНО (чистые функции, 6 тестов): `_project_kind(texts)` (web|cli|lib|''),
+### Слайс 3/4 — ЯДРА + ИНТЕГРАЦИЯ ✅ (`cfb8f6b` ядра, `d73359d` интеграция)
+ЯДРА (чистые функции, 6 тестов): `_project_kind(texts)` (web|cli|lib|''),
 `_synthesize_lib_entry(owner_by_symbol)` (реэкспорт API — не-веб аналог WSGI-роутера),
 `_capability_probe_src(entry, symbol)` (приёмка по поведению — не-веб аналог boot-gate).
-ОСТАЁТСЯ ИНТЕГРАЦИЯ: вшить в `_product_contract` (возвращать не-веб контракт по kind) +
-`_product_check`/boot-gate (звать capability-probe для lib/cli). Без этого не-веб продукт
-всё ещё судится только собранным набором. Это большой заход в ядро — следующим шагом.
+ИНТЕГРАЦИЯ ВШИТА (`d73359d`): `_product_contract` при отсутствии HTTP-роутов выводит
+форму через `_project_kind` и возвращает медиум-независимый контракт
+`{kind, entry, exposes}` без routes/boot (веб-путь не тронут — routes выигрывают
+первыми; p4/p5/p6 объявляют routes → в ветку не заходят); `_try_synthesize_lib_entry`
+(новый) — детерм. сборка не-веб входа по AST-реестру символов, реэкспорт API,
+отказ (LLM остаётся ответствен) когда способность не собрана; `_try_synthesize_entry`
+ветвит на неё по kind; `_nonweb_capability_boots` (новый) — root-гейт по поведению
+(импорт входа в герметичном подпроцессе + capability-probe); `_assembled_product_boots`
+и `_assembly_node` ветвят по kind (не-веб → без LLM assembly-листа). Офлайн 487 зелёных.
 
 ### Слайс 3 (описание) — точка входа по ФОРМЕ проекта (не всегда WSGI)
 `_synthesize_entry_code` сейчас всегда строит WSGI-роутер. Обобщить: форма входа
@@ -47,10 +53,15 @@ CLI — запустить команду и проверить вывод; дл
 из спеки), а не сгенерированные юнит-тесты. Файлы: pytest_verifier boot-gate,
 contract_checks.
 
-### Слайс 5 — не-веб E2E кейс (доказать общность)
-Добавить `tests/scenarios/pX_cli_or_lib.yaml` — проект БЕЗ HTTP (напр. CLI-утилита
-или библиотека-парсер). Прогнать движок depth=product и получить честный READY
-на не-веб продукте. Это ловит любой оставшийся HTTP-центризм.
+### Слайс 5 — не-веб E2E кейс ✅ создан (`d73359d`), живой прогон остаётся
+СДЕЛАНО: `tests/scenarios/p7_word_stats_lib.yaml` — библиотека статистики слов БЕЗ
+HTTP (`kind=lib`, `exposes word_count/split_words`, `integrate.pre_gate: true` →
+capability boot-gate = честный пол). Плюс офлайн-тесты вшивки + защита формулировок
+от дрейфа (`tests/coverage/test_nonweb_pipeline_wiring.py`, 6 тестов). Раннер видит
+кейс (`run_cases.py` глобит `scenarios/*.yaml`; `--case p7`). ОСТАЁТСЯ: живой
+отвязанный прогон `--case p7_word_stats_lib --depth product` до `meta.status=READY`
+(заблокирован провайдером — claude через Bifrost→Meridian отдаёт HTTP 400 на
+preflight; спросить юзера про рестарт Meridian).
 
 ## Правила
 - Медиум-независимо: ничего HTTP-специфичного в ядре; веб — адаптер.
