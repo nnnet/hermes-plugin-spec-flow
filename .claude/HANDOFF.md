@@ -1,3 +1,36 @@
+# HANDOFF — 2026-07-01 (день) — C3-C5 ИНТЕГРАЦИЯ (следующий шаг, точно)
+
+## Готово этой дугой (всё запушено, офлайн зелёные)
+#127 /ui · #83 каскад · #113с1 публикация интерфейса · #128 репейр импортов ·
+#129 C2 типизированные рёбра+гейт плана · C3/C4 ЯДРА (`cfb8f6b`):
+`_project_kind`, `_synthesize_lib_entry`, `_capability_probe_src` в
+`spec_flow_runner.py` (module-level, рядом с `_amend_find_owner`) + 6 тестов
+`tests/coverage/test_medium_agnostic_entry.py`.
+
+## СЛЕД. ШАГ — вшить C3/C4 ядра в конвейер (не-веб проект → READY)
+1. `_product_contract` (`spec_flow_runner.py:~2663`) сейчас HTTP-центричен
+   (routes) → для не-веб возвращает {}. Добавить: если `_project_kind(...)` = lib|cli
+   и в тексте объявлен entry+символ → вернуть контракт с `kind`, `entry`,
+   `exposes`(символ), БЕЗ routes.
+2. Синтез входа: где строится WSGI (`_synthesize_entry_code`) — ветвить по kind:
+   web→как есть; lib→`_synthesize_lib_entry(owner_by_symbol)` (owner из
+   `_available_interfaces`/символ-реестра).
+3. Приёмка: `_product_check`/boot-gate (`spec_flow_runner.py:~6382`, contract_checks
+   boot_gate) — для lib|cli звать `_capability_probe_src(entry, symbol)` в
+   герметичном подпроцессе (`hermetic_env`) вместо curl /health.
+4. C5: `tests/scenarios/p7_*.yaml` — не-веб проект (напр. библиотека wordcount),
+   depth=product, БЕЗ HTTP; офлайн-тест + живой прогон до READY.
+Правило: медиум-независимо, гейты не ослаблять, офлайн зелёный→коммит.
+
+## БЛОКЕР прогона: провайдер claude/sonnet через Bifrost→Meridian = HTTP 400
+v138 дважды упал на preflight (claude smoke 400, устойчиво). Meridian(:3456)+
+Bifrost(:8080) подняты, но подписка отбивает 400 — вероятно протухшая сессия
+Meridian. Рестарт Meridian (`scripts/meridian.sh`) — только с разрешения юзера
+(общий сервис). До починки провайдера живой p6/не-веб прогон не стартует; офлайн
+(475) — верификация.
+
+---
+
 # HANDOFF — 2026-07-01 — ИСТИННЫЙ КОРЕНЬ «ни один прогон не зелёный»
 
 ## Диагноз (обобщённо, НЕ про HTTP)
