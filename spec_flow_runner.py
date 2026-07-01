@@ -1014,6 +1014,49 @@ _AMEND_DET_ORDER = ("explicit_file", "shared_route", "symbol_overlap",
                     "token_overlap", "surface_overlap")
 
 
+def _interface_edge_violations(tree: dict) -> list:
+    """#113/C2 — deterministic PLAN gate over TYPED dependency edges.
+
+    A node may declare ``exposes: [symbol, ...]`` (its public surface) and typed
+    needs ``needs: [{"from": "<node-id>", "symbols": [...]}]``. Every needed
+    symbol MUST appear in the producer's declared ``exposes``. A need on a symbol
+    no node produces is a broken interface edge — caught HERE, before a single
+    line is written (the cheapest possible), instead of surfacing as an invented
+    import at integrate. Medium-agnostic: symbols, never routes/HTTP. Pure and
+    LLM-free. Undeclared edges (empty exposes/needs) are lenient — back-compat,
+    so a decomposer that does not yet populate them changes nothing. Returns a
+    list of plain-string findings (JSON-safe)."""
+    exposes: dict = {}
+    needs: list = []
+
+    def _walk(n):
+        if not isinstance(n, dict):
+            return
+        nid = n.get("id")
+        if nid:
+            exposes.setdefault(nid, set()).update(n.get("exposes") or [])
+        for e in (n.get("needs") or []):
+            if not isinstance(e, dict):
+                continue
+            dep = e.get("from")
+            for s in (e.get("symbols") or []):
+                needs.append((nid, dep, s))
+        for c in (n.get("children") or []):
+            _walk(c)
+
+    _walk(tree or {})
+    viol: list = []
+    for cid, dep, sym in needs:
+        if dep not in exposes:
+            viol.append("node '%s' needs '%s' from '%s' but '%s' is not a node"
+                        % (cid, sym, dep, dep))
+        elif sym not in exposes[dep]:
+            _have = ", ".join(sorted(exposes[dep])) or "nothing"
+            viol.append("node '%s' needs '%s' from '%s' but '%s' exposes %s"
+                        % (cid, sym, dep, dep, _have))
+    return viol
+
+
 def _amend_find_owner(statement: str, modules: list, methods=None,
                       candidates_text=None, llm=None) -> "Optional[str]":
     """Decide which existing module (if any) owns the surface this requirement
@@ -5970,6 +6013,14 @@ def %(callable)s(environ, start_response):
                 _ifaces = self._available_interfaces(exclude=code_fn)
                 if _ifaces:
                     ictx["available_interfaces"] = _ifaces
+                # C2: the DECLARED interface contract from the plan (typed edges)
+                # — what this node must expose + the exact symbols it imports
+                # from each dependency (agreed at decomposition, so producer and
+                # consumer never diverge, even for a not-yet-built sibling).
+                if node.get("exposes"):
+                    ictx["declared_exposes"] = list(node.get("exposes"))
+                if node.get("needs"):
+                    ictx["declared_needs"] = node.get("needs")
                 try:
                     self._invoke_implementer(ictx, nid, code_fn)
                 except NotImplementedError:
@@ -6599,6 +6650,15 @@ def %(callable)s(environ, start_response):
         for _pf in self._plan_ownership_report():
             self.emit("integrate", "engine", "", "L0:plan",
                       "decomposition plan check", _pf, "plan_gate", "",
+                      level=L_MILESTONE)
+        # C2: deterministic PLAN gate over TYPED dependency edges — a node's
+        # declared `needs` symbol must appear in the producer's declared
+        # `exposes`. Report-only, medium-agnostic (symbols, not routes),
+        # LLM-free; lenient when the decomposer left the fields empty.
+        for _pf in _interface_edge_violations(
+                (getattr(self, "_project_meta", None) or {}).get("tree") or {}):
+            self.emit("integrate", "engine", "", "L0:plan",
+                      "interface edge check", _pf, "plan_gate", "",
                       level=L_MILESTONE)
 
         ready = bool(lines) and not failed

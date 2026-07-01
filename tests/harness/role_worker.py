@@ -475,13 +475,20 @@ Reply with ONLY a JSON object (no prose, no fence):
 {{"atomic": true|false,
   "metrics": {{"modules": n, "tasks": n, "interfaces": n, "estimated_loc": n,
               "open_decisions": n, "single_concern": bool, "testable_criteria": bool}},
-  "children": [{{"id": "snake_case", "title": "short", "depends_on": ["sibling_id"]}}],
+  "children": [{{"id": "snake_case", "title": "short",
+                 "exposes": ["func_name(args)"],
+                 "depends_on": ["sibling_id"],
+                 "needs": [{{"from": "sibling_id", "symbols": ["func_name(args)"]}}]}}],
   "depends_on": ["existing-node-id"],
   "spike": {{"question": "...", "recommendation": "..."}},
   "spec_markdown": "<markdown, see below>"}}
 Omit "children"/"depends_on"/"spike" when not applicable; atomic=true means
 NO children and metrics within: modules<=1, tasks<=5, interfaces<=2,
 estimated_loc<=100, open_decisions==0.
+"exposes" = the EXACT public function/class names (with args) this node will
+provide for siblings to import. "needs" = for each sibling you depend on, the
+EXACT symbols you will import from it — copy them VERBATIM from that sibling's
+"exposes" so a consumer never invents a name the producer does not provide.
 Decompose by product FEATURE, never by test phase: do NOT create nodes for
 end-to-end scenarios, smoke harnesses, test fixtures or 'integration
 testing' — the platform already owns the assembled-product check, and a
@@ -1089,15 +1096,36 @@ def _interfaces_block(ctx: dict) -> str:
     recurring red product: v137 web_ui imported save_note/init_db while core
     exposes create_note). Medium-agnostic — the list is the same whether the
     product is a web app, a CLI, or a library. Empty when nothing is built yet."""
+    parts: list = []
+    # C2 — the DECLARED contract from the plan (typed edges): what THIS node must
+    # expose, and the exact symbols it must import from each dependency. Present
+    # even for a dependency not built yet (parallel siblings), so producer and
+    # consumer agree on names decided at decomposition.
+    exp = ctx.get("declared_exposes") or []
+    if exp:
+        parts.append("\n\nYOUR MODULE MUST EXPOSE EXACTLY these public names"
+                     " (siblings import them by these names):\n"
+                     + "\n".join("  - " + str(s) for s in exp))
+    dep_lines = []
+    for e in (ctx.get("declared_needs") or []):
+        if not isinstance(e, dict):
+            continue
+        frm, syms = e.get("from"), ", ".join(e.get("symbols") or [])
+        if frm and syms:
+            dep_lines.append("  from %s import %s" % (frm, syms))
+    if dep_lines:
+        parts.append("\n\nYOUR DECLARED DEPENDENCIES — import EXACTLY these,"
+                     " do NOT invent a name:\n" + "\n".join(dep_lines))
+    # the REAL surface of everything already built (#113 slice 1)
     ifaces = ctx.get("available_interfaces") or {}
-    if not ifaces:
-        return ""
-    body = "\n".join("  - %s exposes: %s" % (m, ", ".join(ifaces[m]))
-                     for m in sorted(ifaces))
-    return ("\n\nALREADY-BUILT MODULES — import ONLY these real names. Do NOT"
-            "\ninvent a module or symbol name; use the exact module and"
-            "\nsignature shown. A name not listed here does not exist yet:\n"
-            + body)
+    if ifaces:
+        body = "\n".join("  - %s exposes: %s" % (m, ", ".join(ifaces[m]))
+                         for m in sorted(ifaces))
+        parts.append("\n\nALREADY-BUILT MODULES — import ONLY these real names."
+                     " Do NOT invent a module or symbol name; use the exact"
+                     " module and signature shown. A name not listed here does"
+                     " not exist yet:\n" + body)
+    return "".join(parts)
 
 
 _ARCHITECT_TASK = """You are the ARCHITECT sub-role of the implementer team for
