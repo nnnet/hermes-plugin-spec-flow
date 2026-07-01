@@ -576,6 +576,123 @@ def _stdlib_allowset_assigns(tree: ast.AST) -> list:
     return out
 
 
+def _src_public_symbols(root: str) -> dict:
+    """{module_stem: set(public top-level symbol names)} for every ``src/*.py``.
+
+    Public = a top-level ``def``/``class``/assignment whose name does not start
+    with ``_``. This is the product's REAL symbol table — medium-agnostic: it
+    makes no assumption about HTTP/routes/web, so it is the same for a CLI, a
+    library, or a data pipeline. Test: src with core.py defining ``save`` and
+    ``_hidden`` yields {"core": {"save"}}."""
+    out: dict = {}
+    sdir = Path(root) / "src"
+    if not sdir.is_dir():
+        return out
+    for p in sorted(sdir.glob("*.py")):
+        try:
+            tree = ast.parse(p.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, ValueError):
+            continue
+        names: set = set()
+        for n in tree.body:
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef,
+                              ast.ClassDef)):
+                if not n.name.startswith("_"):
+                    names.add(n.name)
+            elif isinstance(n, ast.Assign):
+                for t in n.targets:
+                    if isinstance(t, ast.Name) and not t.id.startswith("_"):
+                        names.add(t.id)
+        out[p.stem] = names
+    return out
+
+
+def repair_local_imports(root: str) -> list:
+    """Deterministically re-point a leaf's ``from X import Y`` to the module that
+    ACTUALLY defines Y, when X does not provide it (X missing, or X real but
+    lacking Y) and EXACTLY ONE real ``src`` module provides Y.
+
+    This is the general form of route→handler binding: it binds a real symbol to
+    its real owning module, by the product's own symbol table — model-independent
+    (the weak model invents a sibling name like ``db`` / ``src.storage``; the
+    engine repairs it from data, no LLM round, no provider cost) and
+    medium-agnostic (no HTTP assumption — a CLI/library leaf importing a
+    mis-named dependency is repaired the same way). A symbol owned by NO module,
+    or by >1 (ambiguous), is left untouched — a genuine RED the doctor still
+    owns. Only the FROM-IMPORT form is repaired; a bare ``import X`` + ``X.attr``
+    is left alone (rewriting attribute access would be guessing). A rewrite is
+    kept only if the file still compiles. Returns the repairs applied."""
+    reg = _src_public_symbols(root)
+    if not reg:
+        return []
+    counts: dict = {}
+    owner: dict = {}
+    for stem, syms in reg.items():
+        for s in syms:
+            counts[s] = counts.get(s, 0) + 1
+            owner[s] = stem            # unique only when counts[s] == 1
+    fixed: list = []
+    sdir = Path(root) / "src"
+    for p in sorted(sdir.glob("*.py")):
+        stem = p.stem
+        try:
+            text = p.read_text(encoding="utf-8")
+            tree = ast.parse(text)
+        except (OSError, SyntaxError, ValueError):
+            continue
+        lines = text.splitlines(keepends=True)
+        repl: list = []      # (start_line_idx, end_line_idx, new_block, note)
+        for n in tree.body:
+            if not isinstance(n, ast.ImportFrom) or n.level:
+                continue
+            mod = n.module or ""
+            groups: dict = {}          # target module -> [(name, asname)]
+            residual: list = []        # (name, asname) with no unique real owner
+            need_fix = False
+            for a in n.names:
+                sym = a.name
+                if mod in reg and sym in reg[mod]:
+                    groups.setdefault(mod, []).append((sym, a.asname))
+                    continue
+                tgt = owner.get(sym) if counts.get(sym) == 1 else None
+                if tgt and tgt != stem:
+                    groups.setdefault(tgt, []).append((sym, a.asname))
+                    need_fix = True
+                else:
+                    residual.append((sym, a.asname))
+            if not need_fix:
+                continue
+            start = n.lineno - 1
+            indent = lines[start][:len(lines[start])
+                                  - len(lines[start].lstrip())]
+
+            def _spec(items):
+                return ", ".join(nm + (" as " + asn if asn else "")
+                                 for nm, asn in items)
+            new_lines = ["from %s import %s" % (tgt, _spec(items))
+                         for tgt, items in groups.items()]
+            if residual:               # keep genuine misses on the original
+                new_lines.append("from %s import %s" % (mod, _spec(residual)))
+            block = "".join(indent + nl + "\n" for nl in new_lines)
+            repl.append((start, n.end_lineno or n.lineno, block,
+                         "%s: `from %s` -> %s" % (
+                             p.name, mod,
+                             ", ".join(t for t in groups if t != mod))))
+        if not repl:
+            continue
+        new = lines[:]
+        for start, end, block, _note in sorted(repl, key=lambda r: -r[0]):
+            new[start:end] = [block]
+        candidate = "".join(new)
+        try:
+            ast.parse(candidate)       # keep only a rewrite that still compiles
+        except SyntaxError:
+            continue
+        p.write_text(candidate, encoding="utf-8")
+        fixed.extend(note for *_x, note in repl)
+    return fixed
+
+
 def autofix_local_import_stdlib_test(root: str) -> list:
     """A generated 'no third-party imports' acceptance test parses a src module
     and asserts every import's top name is in ``sys.stdlib_module_names`` (or a
@@ -745,6 +862,17 @@ def make_verifier(model: Optional[str] = None,
         if config.env("PRE_GATE", bool, default=False):
             try:
                 from . import contract_checks
+                # Deterministic import repair BEFORE the gate spends an LLM
+                # rework round: re-point a leaf's `from X import Y` to the module
+                # that really defines Y (the weak model invents sibling names
+                # like `db` / `src.storage`). Model-independent, medium-agnostic,
+                # zero provider cost — only a genuinely-missing symbol survives
+                # to the gate as an honest RED the doctor still owns.
+                _repaired = repair_local_imports(root)
+                if _repaired:
+                    llm_log.log({"event": "import_repair", "role": "verifier",
+                                 "node": str(ctx.get("node")),
+                                 "repairs": _repaired[:40]})
                 gate_viol = contract_checks.run_all(root)
                 if include_smoke:
                     ok, detail = contract_checks.boot_gate(
