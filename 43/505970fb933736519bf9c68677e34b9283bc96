@@ -1,0 +1,21 @@
+.claude/HANDOFF.md
+  s_a7f45290e91181::t_2a33abbb5e016d 36-51,53-54
+.claude/plans/2026-07-01T10-30__general-engine-medium-agnostic.md
+  s_a7f45290e91181::t_a3f29078ce0b3f 1-56
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.6",
+  "base_commit_sha": "43505970fb933736519bf9c68677e34b9283bc96",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "nvidia/nemotron-3-super-120b-a12b-20230311:free"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
