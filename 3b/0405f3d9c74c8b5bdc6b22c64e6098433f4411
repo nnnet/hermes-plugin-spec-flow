@@ -1,0 +1,34 @@
+tests/harness/pytest_verifier.py
+  s_a7f45290e91181::t_4b766daf189501 636-643
+tests/audit/TAXONOMY.md
+  s_a7f45290e91181::t_0f2b4b6d2dd6d3 95-113
+spec_flow_runner.py
+  s_a7f45290e91181::t_48574bf85b1ef4 988-1090
+  s_a7f45290e91181::t_857490634456bc 7108
+  s_a7f45290e91181::t_7e224233971803 7065
+  s_a7f45290e91181::t_3413004bf20b72 7041-7044
+  s_a7f45290e91181::t_1a8b503e6b4e84 3588-3594
+  s_a7f45290e91181::t_6c36a902c646dc 3459-3463,3472-3473
+  s_a7f45290e91181::t_ca727fc985db1a 978-987
+  s_a7f45290e91181::t_3f773ac85c1b1b 3543-3587,3595-3631
+  s_a7f45290e91181::t_adeb0f8a73f44d 6993-7040,7045-7051
+  s_a7f45290e91181::t_915269dad1e75b 6703-6706
+tests/audit/test_assembly_seam_honesty.py
+  s_a7f45290e91181::t_2251ad915b5217 1-201
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.6",
+  "base_commit_sha": "3b0405f3d9c74c8b5bdc6b22c64e6098433f4411",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-fable-5"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
