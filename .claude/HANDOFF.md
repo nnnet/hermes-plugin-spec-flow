@@ -1,39 +1,41 @@
-# HANDOFF — spec-flow — feat/roadmap-phase-1
+# HANDOFF — аудит-гейтед храповик, sid babc3939
 
-## ВЕХА: p6 достиг честного READY (v144, Слайс 1 #113)
-`meta.status=READY`, `product :: all checks passed`, `delete_notes` ImportError=0,
-claude 200×12 / mimo 200×4 / ноль 429, ~20 мин. Первый честный зелёный p6 с
-поздней инъекцией.
+## Сделано (коммиты)
+- 137e7e5 #131 честное И: продукт NOT READY при красном корне.
+- a781f28 #132 метод-осознанный детектор дублей (пара метод+путь).
+- 500a70f #133 карточка листа acceptance/examples + гейт полноты (lenient).
+- bedf6bb АУДИТ цикл 1: tests/audit/ + фикс amend-in-place дыры v145.
+- fba270a АУДИТ Уровень Б + гейт в run-detached.sh.
 
-## Что закрыло (эта сессия, всё офлайн 495 зелёных, запушено e004922)
-1. Роутер 4xx-не-5xx (`e8e1f8b`) — пустое/неполное тело → 400.
-2. 429-квота-брейкер (`ad356c4`) — исчерпанный free-mimo → все роли на claude/Meridian.
-3. C3-C5 (`d73359d`) — медиум-независимость (не-веб продукт).
-4. **#113 Слайс 1 (`e004922`)** — движок ДЕТЕРМИНИРОВАННО пиннит публичный символ
-   листа (`_leaf_exposed_symbols` из маршрута через `_canonical_handler_symbol`)
-   в карточку `node["exposes"]`; кодер И тестер читают ОДНО имя; `_tester_symbol_rule`
-   запрещает выдумывать/множить (`delete_note` vs `delete_notes` устранён). Корень
-   рассинхрона тест↔код закрыт.
-5. Инфра: bifrost anthropic→Meridian:3456 (`a681e62`), таймаут 300 (`7e4508a`).
-   Дашборд :8092 поднят.
+## Механизм храповика (готов)
+tests/audit/ — дешёвый офлайн-гейт. run-detached.sh НЕ стартует пока
+`pytest tests/audit` красный (SPEC_FLOW_SKIP_AUDIT=1 для диагностики).
+README.md — конвенция +Z (провал прогона → новое правило аудита).
+Уровень А: tests/audit/test_requirement_class_paths.py (матрица классов).
+Уровень Б: tests/audit/test_honesty_invariants.py (роутер без заглушек+ветки
+400/404/405, READY=И, card-гейт). 8 зелёных, 0.04с.
 
-## Открытый вопрос по #113 Слайс 2/3
-- «6 owner leaves POST /notes» — `_plan_ownership_report` ЭВРИСТИКА (route-path в
-  тексте спеки), DIAGNOSTIC-ONLY НАМЕРЕННО (docstring: реальная власть — boot/suite
-  гейт). READY достигнут ВОПРЕКИ ей → это косметический шум, НЕ дефект. Жёсткий
-  reject (Слайс 2) МОЖЕТ ложно покраснить рабочий продукт → пересмотреть, нужен ли.
-- scope-детектор late-req УЖЕ ON по умолч. + 2 раунда переавторинга спеки
-  (`_review_gate` 4924-4967); после них при неснятом дубле НЕТ hard-red, лист
-  проходит. Реальный сигнал уже зелёный, так что hard-red не срочен.
+## Дыра v145 закрыта (amend-in-place)
+`красивый_вид` (правка src/web_ui.py) роутился в amend (code_target), но анти-форк
+гейты судили его как ВЛАДЕЛЬЦА /ui → handler-gate «missing» + scope-lint «duplicate»
+→ empty_delta reject → RED. Фикс: узел с code_target владеет НИЧЕМ —
+`_leaf_owned_routes`/`_leaf_exposed_symbols`/`_late_req_scope_findings` → [] для
+аменда. Amend и анти-форк — два разных пути.
 
-## СЛЕД. ШАГ (спросить/решить с юзером)
-p6 зелёный на Слайсе 1. Варианты: (а) Слайс 3 (полная карточка: handler/signature/
-preconditions/returns/errors/acceptance/examples + гейт полноты — «всё из спеки в
-полном объёме», юзер просил «делать всё»); (б) стабильность — прогнать p6 2-3× на
-рандомных инъекциях + p7 (не-веб) до READY, убедиться что зелёный устойчив; (в)
-Слайс 2 пересмотреть (дубль-владелец скорее ложный). Рекомендация: сначала (б)
-устойчивость (дёшево, подтверждает веху), затем (а) полная карточка.
+## СЕЙЧАС: прогон p6 через гейт (оракул)
+Лог: tests/runs-out/_detached_ratchet_p6.log; run dir 2026-07-02T...__v146.
+Гейт прошёл (audit green). Ждём: красивый_вид роутится в amend и НЕ отклоняется;
+честный READY при логическом И. Проверять: meta.json/PRODUCT-RESULTS.md/trace.jsonl.
 
-## Воспроизведение
-`bash tests/run-detached.sh --case p6_micro_notes --depth product --workers real --doctor-enabled`
-claude через Meridian рабочий; дашборд http://localhost:8092/.
+## Дальше по храповику
+- Прогон зелёный → DONE p6; затем p7_word_stats_lib (медиум-независимость).
+- Прогон красный → distill НОВУЮ причину в tests/audit/ (+Z) → фикс → аудит зелёный
+  → снова прогон. Кандидаты: ping_text card lenient (слабая модель не дала
+  acceptance); amend «no verifying test» (качество слабой модели vs дыра).
+- #139 Уровень В dry-plan (decompose+spec без сборки) — опционально.
+- #136 устойчивость в самом конце (p6 ×2-3 рандомные инъекции + p7).
+
+## Правила
+Аудит честный — не подгонять под зелёное. Фиксы — настоящие возможности движка,
+не костыли под кейс. Не облегчать тесты. Прогон только run-detached (setsid).
+claude=подписка Meridian. Параллельные агенты — worktree.
