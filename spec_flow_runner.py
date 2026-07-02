@@ -3253,6 +3253,29 @@ class Engine:
                 syms.append("%s(payload, query)" % name)
         return syms
 
+    def _card_completeness_findings(self, node: dict) -> list:
+        """#113 Slice 3: an atomic leaf that EXPOSES a public surface (owns a
+        route or declares `exposes`) is the single source of truth its coder and
+        tester both read — it MUST carry acceptance criteria, or the tester is
+        left to INVENT its own (the v144 gap). Returns the missing-card findings.
+
+        Deterministic and LENIENT: fires ONLY for an atomic, surface-exposing
+        leaf. A pure-edit/amend leaf (exposes nothing) never needs a card, so the
+        gate stays inert — no false red on a cardless housekeeping node."""
+        if node.get("children"):
+            return []                       # a branch node carries no card
+        if not self._leaf_exposed_symbols(node):
+            return []                       # exposes nothing → no card required
+        out: list = []
+        acc = node.get("acceptance")
+        if not acc or not [a for a in (acc if isinstance(acc, list) else [acc])
+                           if str(a).strip()]:
+            out.append(
+                "atomic leaf exposes a public surface but carries NO acceptance "
+                "criteria — add `acceptance` (Given-When-Then) so the tester "
+                "asserts the card, never its own invented criteria")
+        return out
+
     def _leaf_route_binding(self, node: dict) -> str:
         """Phase 1: the canonical route -> handler binding for the routes THIS
         leaf owns, emitted as engine-declared DATA (never inferred). A declared
@@ -4968,6 +4991,42 @@ def %(callable)s(environ, start_response):
             lint = _lint_spec_traceability(nid,
                                            str(node.get("spec_markdown")
                                                or ""))
+        # #113 Slice 3 — card completeness: an atomic leaf that EXPOSES a public
+        # surface must carry acceptance criteria, else the tester invents its own
+        # (v144). A bounded author round FILLS a missing card. LENIENT: inert for
+        # a node that exposes nothing, and never a hard red — a weak decomposer
+        # that cannot card is surfaced, not blocked; the boot/suite gate stays
+        # the real authority.
+        for _card_round in range(2):
+            gaps = self._card_completeness_findings(node)
+            if not gaps:
+                break
+            self.emit("review", "engine", "", nid,
+                      "card completeness: leaf exposes a surface but has no"
+                      " acceptance", "; ".join(gaps)[:300], "spec_lint", "FAIL",
+                      level=L_MILESTONE)
+            if "decomposer" not in self.agents:
+                break
+            self._decompose_calls += 1
+            cctx = self._decomposer_ctx(node, depth, parent, ancestors)
+            cctx["review_feedback"] = (
+                "DETERMINISTIC CARD GAP (code-checked, not an opinion):\n- "
+                + "\n- ".join(gaps)
+                + "\nReturn this leaf WITH an `acceptance` list (Given-When-Then)"
+                " and 1-2 `examples`, scoped to this leaf's concern only.")
+            cctx["previous_spec"] = str(node.get("spec_markdown") or "")
+            cctx["rework"] = True
+            try:
+                cout = self.agents["decomposer"](cctx) or {}
+            except Exception as exc:  # noqa: BLE001
+                self.emit("review", "spec-decomposer", "spec-flow-decompose",
+                          nid, "card-fill worker failed — keeping the card",
+                          str(exc)[:200], level=L_MILESTONE)
+                break
+            if cout.get("acceptance"):
+                node["acceptance"] = cout["acceptance"]
+            if cout.get("examples"):
+                node["examples"] = cout["examples"]
         # deterministic DECOMPOSITION-QUALITY lint BEFORE the reviewer: a LATE
         # requirement whose spec re-states an existing surface (duplicate) is
         # narrowed to its delta by a bounded author round carrying the EXACT
@@ -6252,6 +6311,15 @@ def %(callable)s(environ, start_response):
                     ictx["declared_exposes"] = _exposed
                 if node.get("needs"):
                     ictx["declared_needs"] = node.get("needs")
+                # #113 Slice 3: the atomic card's acceptance (Given-When-Then)
+                # and examples (input->output) are DATA both the coder and the
+                # tester read, so the tester's acceptance is EXACTLY the card's,
+                # never invented. Carried only when the decomposer supplied them
+                # (back-compat: a cardless plan leaves the prompt unchanged).
+                if node.get("acceptance"):
+                    ictx["acceptance"] = node.get("acceptance")
+                if node.get("examples"):
+                    ictx["examples"] = node.get("examples")
                 try:
                     self._invoke_implementer(ictx, nid, code_fn)
                 except NotImplementedError:

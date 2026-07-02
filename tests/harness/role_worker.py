@@ -1110,6 +1110,30 @@ def _tester_symbol_rule(ctx: dict) -> str:
                    " a plural). A name not in that list does not exist.")
 
 
+def _card_block(ctx: dict) -> str:
+    """#113 Slice 3: the atomic card's ACCEPTANCE (Given-When-Then) and EXAMPLES
+    (input->output), rendered verbatim for BOTH the coder and the tester. The
+    card is the single source of truth: the coder implements to satisfy exactly
+    these, the tester asserts EXACTLY these — neither invents its own criteria.
+    Empty when the decomposer supplied no card (back-compat, prompt unchanged)."""
+    def _lines(v):
+        if not v:
+            return []
+        return [str(v)] if isinstance(v, str) else [str(x) for x in v]
+    acc, ex = _lines(ctx.get("acceptance")), _lines(ctx.get("examples"))
+    if not acc and not ex:
+        return ""
+    parts = ["\n\nACCEPTANCE CARD (the single source of truth — implement to"
+             " satisfy it, test EXACTLY it, do NOT invent your own criteria):"]
+    if acc:
+        parts.append("\nAcceptance (each MUST hold):")
+        parts += ["\n  - " + a for a in acc]
+    if ex:
+        parts.append("\nExamples (input -> output):")
+        parts += ["\n  - " + e for e in ex]
+    return "".join(parts)
+
+
 def _interfaces_block(ctx: dict) -> str:
     """#113: a MANDATORY-import instruction that lists the REAL public surface of
     every already-built sibling module (name + signatures), so a consumer leaf
@@ -1180,7 +1204,7 @@ def _orchestra_run(ctx: dict, ws_root: str, nid: str, fn: str, *,
     spec_body = _inline_file(ws_root, ctx.get("spec", ""))
     base_prompt = _IMPLEMENT_CHAT_TASK.format(
         title=ctx["title"], id=nid, spec=ctx.get("spec", ""),
-        spec_body=spec_body, fn=fn) + _interfaces_block(ctx)
+        spec_body=spec_body, fn=fn) + _interfaces_block(ctx) + _card_block(ctx)
     handoff: dict[str, Any] = {"architect_plan": "", "test_output": ""}
     passed, test_out, wrote = False, "(no files written)", False
     baseline = 0
@@ -1233,7 +1257,7 @@ def _orchestra_run(ctx: dict, ws_root: str, nid: str, fn: str, *,
             if role == "architect":
                 prompt = _ARCHITECT_TASK.format(
                     title=ctx["title"], id=nid, spec=ctx.get("spec", ""),
-                    spec_body=spec_body, fn=fn) + _interfaces_block(ctx)
+                    spec_body=spec_body, fn=fn) + _interfaces_block(ctx) + _card_block(ctx)
                 handoff["architect_plan"] = _dialog_round(
                     prompt, role="implementer", node=nid, system=s_system,
                     allowed=allowed, disallowed=disallowed, cwd=ws_root,
@@ -1247,6 +1271,7 @@ def _orchestra_run(ctx: dict, ws_root: str, nid: str, fn: str, *,
                                + handoff["architect_plan"])
                 if role == "tester":
                     prompt += _tester_symbol_rule(ctx)
+                    prompt += _card_block(ctx)
                 raw = _ensemble_generate(
                     prompt, node=nid, system=s_system, allowed=allowed,
                     disallowed=disallowed, cwd=ws_root, model=s_model,
@@ -1688,7 +1713,7 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         model = _model_for("implementer", specialty, tier)
         prompt = _IMPLEMENT_TASK.format(title=ctx["title"], id=nid,
                                         spec=ctx["spec"], fn=fn) \
-            + _interfaces_block(ctx) \
+            + _interfaces_block(ctx) + _card_block(ctx) \
             + memory.recall_block_for("implementer", ctx["title"]) \
             + _ASK_RULE
         note = channel.poll_note() if channel is not None else None

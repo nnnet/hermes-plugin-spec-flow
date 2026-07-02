@@ -65,8 +65,18 @@ Rules:
 - if something is genuinely unknown, add a research spike:
   "spike": {{"question": "...", "recommendation": "..."}}
 
+ATOMIC-LEAF CARD (only when atomic=true — the leaf is the single source of truth
+its coder AND its tester both read): also return
+- "acceptance": 1-4 strings in Given-When-Then form ("Given <state>, when
+  <action>, then <observable result>") — the criteria that MUST hold. The tester
+  asserts EXACTLY these; do not leave it to be invented.
+- "examples": 1-2 concrete input -> output pairs ("POST /notes {{text:'hi'}} ->
+  {{id:1}}").
+- "signature" (optional): the public callable/route the leaf exposes.
+Keep the card SPECIFIC to this one leaf's concern, never the whole product.
+
 Return ONLY a JSON object, no prose, no markdown fence:
-{{"atomic": true, "metrics": {{...}}, "children": [{{"id": "...", "title": "..."}}], "depends_on": ["..."], "spike": {{...}}}}
+{{"atomic": true, "metrics": {{...}}, "acceptance": ["..."], "examples": ["..."], "children": [{{"id": "...", "title": "..."}}], "depends_on": ["..."], "spike": {{...}}}}
 """
 
 # Root-only shaping: applies to the FIRST decomposition (depth 0). Stated
@@ -309,10 +319,18 @@ def decompose(ctx: dict) -> dict:
     else:
         out = _solicit(prompt, nid, ctx["depth"])
     # keep only the keys the engine understands (incl. the atomicity judgment)
-    keep = {k: out[k] for k in ("atomic", "metrics", "children", "spike", "clarify") if k in out}
+    keep = {k: out[k] for k in ("atomic", "metrics", "children", "spike",
+                                "clarify", "acceptance", "examples", "signature")
+            if k in out}
     if ctx["depth"] >= _leaf_depth():
         keep.pop("children", None)          # convergence is enforced, not hoped for
         keep["atomic"] = True               # forced-leaf depth ⇒ declare atomic
+    # #113 Slice 3: the atomic card belongs to a LEAF only; a branch node carries
+    # no acceptance/examples (its children do). Drop them when not atomic so a
+    # branch never renders a card into its coder/tester prompts.
+    if not keep.get("atomic"):
+        for _k in ("acceptance", "examples", "signature"):
+            keep.pop(_k, None)
     # bound fan-out so a wide tree cannot blow the call budget
     if keep.get("children") and len(keep["children"]) > _max_children():
         keep["children"] = keep["children"][:_max_children()]

@@ -19,8 +19,11 @@ from __future__ import annotations
 from typing import Any, Callable
 
 # node keys the engine understands (everything except the nested child subtrees)
+# #113 Slice 3: acceptance/examples/signature carry the atomic card so an offline
+# blueprint leaf reads the same single-source card a live decomposer emits.
 _PASSTHROUGH = ("metrics", "title", "spike", "clarify", "contract", "drift",
-                "hitl", "review_fails", "atomic")
+                "hitl", "review_fails", "atomic",
+                "acceptance", "examples", "signature")
 
 
 def make(blueprint: dict) -> Callable[[dict], dict]:
