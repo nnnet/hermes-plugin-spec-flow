@@ -495,9 +495,8 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
     product_verdict = None
     pr_path = case_dir / "workspace" / "PRODUCT-RESULTS.md"
     if pr_path.exists():
-        head = pr_path.read_text(encoding="utf-8")[:400]
-        product_verdict = ("READY" if "✅" in head and "READY" in head
-                           else "NOT READY" if "NOT READY" in head else "—")
+        product_verdict = _product_verdict(
+            pr_path.read_text(encoding="utf-8"))
 
     return {
         "oracle_ok": oracle_ok,
@@ -515,6 +514,24 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
         "complete": summary["complete"] and not _root_red(res),
         "root_red": _root_red(res),
     }
+
+
+def _product_verdict(text: str) -> str:
+    """Parse the engine's readiness verdict from PRODUCT-RESULTS.md — from the
+    explicit `Status:` line ONLY. The old substring heuristic labelled v150's
+    honest `Status: ❌ NOT READY` as READY: "READY" is a substring of
+    "NOT READY", and the "✅" it looked for came from individual PASSING
+    check lines. A dishonest summary over an honest engine verdict is the
+    exact deception class this harness exists to prevent."""
+    m = re.search(r"^Status:\s*(.+)$", text[:600], re.M)
+    if not m:
+        return "—"
+    line = m.group(1)
+    if "NOT READY" in line:
+        return "NOT READY"
+    if "READY" in line:
+        return "READY"
+    return "—"
 
 
 def _root_red(res) -> bool:

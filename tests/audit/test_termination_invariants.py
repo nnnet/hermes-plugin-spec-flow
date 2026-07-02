@@ -67,6 +67,23 @@ def test_launcher_records_exit_code():
         " SIGKILL leaves an unattributable ghost death (v148)")
 
 
+# ── S6.9 the console summary NEVER inverts the engine's verdict ──────────────
+# v150: PRODUCT-RESULTS.md said `Status: ❌ NOT READY`, yet the run summary
+# printed "product READY" — the parser looked for the substrings "✅" (found
+# in individual PASSING check lines) and "READY" (a substring of NOT READY).
+
+def test_summary_verdict_parser_honest():
+    sys.path.insert(0, str(_TESTS / "lib"))
+    import run_cases as rc
+    red = ("# Product readiness\n\nStatus: ❌ NOT READY\n\n"
+           "- [smoke] ✅ PASS: boots\n- [suite] ❌ FAIL: tests red\n")
+    green = "# Product readiness\n\nStatus: ✅ READY\n\n- [smoke] ✅ PASS ok\n"
+    assert rc._product_verdict(red) == "NOT READY", (
+        "a NOT READY report must never be summarised as READY (v150)")
+    assert rc._product_verdict(green) == "READY"
+    assert rc._product_verdict("no status line here") == "—"
+
+
 # ── S6.7 dynamic: a tiny budget HALTS a runaway run honestly ─────────────────
 # (the offline v146 catcher — an always-failing coder with a 3-call budget
 # must end in seconds with a terminal RunResult and an explicit budget FAIL
