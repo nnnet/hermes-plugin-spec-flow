@@ -964,6 +964,12 @@ def _fallback_rotation(cfg: dict, chain: list[str]) -> list[str]:
     explicit = cfg.get("fallback_models")
     if explicit:
         rot = [str(m) for m in explicit]
+    elif explicit is not None:
+        # the case DECLARED an empty rotation — honour it literally; the
+        # legacy claude default below is only for configs that say nothing
+        # (an empty list silently swapped to claude made a "no fallbacks"
+        # config lie, and unit tests burned real subscription calls)
+        rot = []
     elif FALLBACK_MODEL:
         rot = [f"claude/{FALLBACK_MODEL}"
                if not FALLBACK_MODEL.startswith("claude/")

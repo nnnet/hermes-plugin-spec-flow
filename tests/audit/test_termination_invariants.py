@@ -52,6 +52,21 @@ def test_run_exhausted_is_a_run_stopper():
     assert exc is not None and issubclass(exc, eng.RunStopped)
 
 
+# ── S6.8 launcher attributability: every death leaves an exit-code record ────
+# v148: the detached run was SIGKILLed externally and left NOTHING — no
+# traceback, no terminal state, log frozen at startup. A run whose death cannot
+# be attributed (engine exit vs external kill vs group sweep) is an
+# observability hole: the ratchet cannot produce a rule from a ghost.
+
+def test_launcher_records_exit_code():
+    launcher = _TESTS / "run-detached.sh"
+    text = launcher.read_text(encoding="utf-8")
+    assert "rc=$?" in text and "KILLED by signal" in text, (
+        "run-detached.sh must wrap python in a supervisor that logs the exit"
+        " code (and decodes rc>=128 as a signal kill) — otherwise an external"
+        " SIGKILL leaves an unattributable ghost death (v148)")
+
+
 # ── S6.7 dynamic: a tiny budget HALTS a runaway run honestly ─────────────────
 # (the offline v146 catcher — an always-failing coder with a 3-call budget
 # must end in seconds with a terminal RunResult and an explicit budget FAIL

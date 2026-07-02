@@ -45,6 +45,12 @@ wait for a run to teach it to us.
 - S6.5 amend is a bounded targeted edit, not a full unbounded leaf lifecycle.
 - S6.6 a standing (late) requirement is materialised at most once per identity —
   re-poll is de-duplicated, never re-processed unboundedly (v146).
+- S6.7 a tiny global run-call budget HALTS a runaway run with an explicit FAIL
+  milestone and an honest NOT READY (dynamic; the v146 catcher).
+- S6.8 the detached launcher records the python exit code (and decodes
+  rc>=128 as "killed by signal S") — a death that leaves no attributable
+  record is an observability hole the ratchet cannot learn from (v148:
+  external SIGKILL, zero evidence).
 
 ## STAGE 7 — Gate liveness / adversarial (`test_gate_liveness.py`)
 - S7.1 each named gate reds on a crafted negative input (no dead gate that never
@@ -61,6 +67,30 @@ place loop/convergence bugs live.
   loops forever (the v146 catcher).
 - S8.3 a late AMEND injection in simulation edits the owner and terminates
   bounded — never re-decomposes in a loop.
+
+## STAGE 9 — Capability liveness (`test_parallel_liveness.py`)
+A DECLARED engine capability must be PROVEN reachable in its representative
+scenario by a dynamic offline test — "the code exists" is not evidence. This
+is the stage that catches ARCHITECTURAL/DESIGN bugs: a capability whose
+trigger conditions can never be met in the runs that need it (v148: parallel
+development was configured but unreachable — the fork decision was one-shot
+against the initial tree shape, late-injection windows had no parallel path,
+and a static depth gate starved online growth).
+- S9.1 PARALLELISM/base: independent siblings develop with REAL thread overlap
+  (lock-guarded peak counter in the worker) — the proof is structural, valid
+  even when the live provider serialises LLM calls into one lane.
+- S9.2 PARALLELISM/injections: requirements injected AFTER the initial shape
+  accumulate into a parallel wave (the fork policy is re-evaluated at every
+  window, including re-poll).
+- S9.3 PARALLELISM/recomposition: a fan-out materialising DEEPER than the
+  initial shape (a branch recomposed online) still forks — no static depth
+  starvation.
+- S9.4 (open) PARALLELISM/ordering: cross-LEVEL declared dependencies must be
+  honoured by wave partitioning — Kahn waves currently serialise only
+  intra-sibling deps; a research node on one level can lose the race to an
+  impl leaf under another branch (flaky p4 research_before_impl; task #146).
+- S9.5 (open) same liveness proof owed to: --resume, doctor remedies,
+  worktree isolation, memory tiers — one representative dynamic test each.
 
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.

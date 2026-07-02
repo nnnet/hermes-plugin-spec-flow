@@ -271,16 +271,17 @@ workers:
   # passes the paid-model guard exactly like haiku did). mimo runs via Bifrost
   # (xiaomimimo provider, quota-bearing/free-class). Sonnet leads HARD generative
   # work; mimo leads CHECK gates (pro = the strongest, used by the final verify).
-  # B (2026-06-25): sonnet LEADS generation at EVERY complexity tier — a
-  # mimo-led leaf split the WSGI app across two entries (v084 RED). Sonnet is
-  # the strongest builder available and carries no quota/429, so it leads
-  # weak/medium/strong generation; mimo stays as fallback AND still leads the
-  # review/verify CHECK stages (stage overrides below), keeping Xiaomi traffic
-  # visible in Bifrost.
+  # C (2026-07-02, operator): MIMO leads EVERY tier — no usage restriction, and
+  # mimo parallelises where claude is single-laned (provider_concurrency
+  # claude:1 → Bifrost anthropic concurrency:1 → Meridian), so parallel node
+  # development is real wall-clock. sonnet stays the fallback in every chain.
+  # (History: B/2026-06-25 had sonnet lead after a mimo-led leaf split the WSGI
+  # app, v084 — since then the engine gained deterministic entry synthesis,
+  # binding maps and the plan gate, which own that failure class.)
   tiers:
-    weak:   {models: [claude/sonnet, xiaomimimo/mimo-v2.5], temperature: 0.2}
-    medium: {models: [claude/sonnet, xiaomimimo/mimo-v2.5], temperature: 0.1}
-    strong: {models: [claude/sonnet, xiaomimimo/mimo-v2.5-pro], temperature: 0.0}
+    weak:   {models: [xiaomimimo/mimo-v2.5, claude/sonnet], temperature: 0.2}
+    medium: {models: [xiaomimimo/mimo-v2.5, claude/sonnet], temperature: 0.1}
+    strong: {models: [xiaomimimo/mimo-v2.5-pro, claude/sonnet], temperature: 0.0}
   complexity_to_tier: {leaf_small: weak, leaf_big: medium, branch: strong}
   providers:
     # Xiaomi MiMo — its OWN Bifrost provider "xiaomimimo" (custom OpenAI-compatible,
@@ -289,31 +290,32 @@ workers:
     # claude/* → subscription CLI (spends no API budget); used here for claude/sonnet.
     - {name: claude-cli, kind: claude, model_prefix: "claude/"}
   # ── SPEC-PIPELINE STAGES ────────────────────────────────────────────────
-  # decompose → implement → review → verify. HARD generative work (decompose,
-  # implement, architect, coder, fixer) leads claude/sonnet; CHECK gates (review,
-  # verify, tester) lead mimo (verify = the strongest, mimo-v2.5-pro). Only the 3
-  # allowed models appear; each list is primary-first with the others as fallback.
-  # NB all three are STRONG, so this run does NOT test model-independence on a weak
-  # builder — it prioritises reliability + green nodes (operator request).
+  # decompose → implement → review → verify. MIMO LEADS every stage (operator
+  # request 2026-07-02: mimo carries no usage restriction and — unlike claude,
+  # which Bifrost/Meridian serialise into ONE lane (provider_concurrency
+  # claude:1) — mimo parallelises, so the engine's parallel node development
+  # is real wall-clock, not just thread-structural). claude/sonnet stays in
+  # every chain as the reliable fallback. verify keeps the strongest checker
+  # (mimo-v2.5-pro).
   defaults:                             # shared chain when a stage adds no override
-    models: ["claude/sonnet", "xiaomimimo/mimo-v2.5", "xiaomimimo/mimo-v2.5-pro"]
+    models: ["xiaomimimo/mimo-v2.5", "claude/sonnet", "xiaomimimo/mimo-v2.5-pro"]
   stages:
-    decompose:                          # HARD (build the tree) → sonnet leads; mimo fallback
-      models: ["claude/sonnet", "xiaomimimo/mimo-v2.5"]
-    implement:                          # HARD (write the leaf) → sonnet leads; mimo fallback
-      models: ["claude/sonnet", "xiaomimimo/mimo-v2.5"]
-      # team specialists: architect/coder/fixer (build/repair = HARD) → sonnet;
-      # tester (a CHECK) → mimo. tester runs on a HERMES agent, fixer on a
-      # MISSION-CONTROL agent (provider seam, §3/§4); secrets are NEVER in this
-      # file — an unreachable service degrades to the listed `model:`.
+    decompose:                          # build the tree → mimo leads; sonnet fallback
+      models: ["xiaomimimo/mimo-v2.5", "claude/sonnet"]
+    implement:                          # write the leaf → mimo leads; sonnet fallback
+      models: ["xiaomimimo/mimo-v2.5", "claude/sonnet"]
+      # team specialists: mimo everywhere (parallel-friendly); sonnet remains
+      # the chain fallback via the stage models above. tester runs on a HERMES
+      # agent, fixer on a MISSION-CONTROL agent (provider seam, §3/§4); secrets
+      # are NEVER in this file — an unreachable service degrades to `model:`.
       team:
         specialists:
-          - {role: architect, model: "claude/sonnet", params: {temperature: 0.2}}        # hard → sonnet
-          - {role: coder,     model: "claude/sonnet", params: {temperature: 0.4, max_tokens: 6000}}  # hard → sonnet
+          - {role: architect, model: "xiaomimimo/mimo-v2.5", params: {temperature: 0.2}}
+          - {role: coder,     model: "xiaomimimo/mimo-v2.5", params: {temperature: 0.4, max_tokens: 6000}}
           - {role: tester,    provider: hermes,          agent: "tester",
              gateway: "http://127.0.0.1:8642", model: "xiaomimimo/mimo-v2.5"}  # check via hermes seam → mimo
           - {role: fixer,     provider: mission-control, agent_template: "fixer",
-             api: "http://127.0.0.1:3000", model: "claude/sonnet"}                        # repair = hard → sonnet
+             api: "http://127.0.0.1:3000", model: "xiaomimimo/mimo-v2.5-pro"}  # repair → strongest mimo
     review:                             # CHECK → mimo leads (sharp judge); sonnet fallback
       models: ["xiaomimimo/mimo-v2.5", "claude/sonnet"]
     verify:                             # CHECK / final gate → STRONGEST mimo-v2.5-pro leads; sonnet fallback

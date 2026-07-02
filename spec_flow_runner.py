@@ -4385,9 +4385,16 @@ def %(callable)s(environ, start_response):
         # overhead guard: forking 2 threads for 2 tiny children can cost
         # more than it saves — the case sets its own bar
         self._parallel_min_siblings = max(2, int(par.get("min_siblings", 2)))
-        # nested forks multiply concurrency multiplicatively — by default
-        # only top-level branches (depth 0) fork their children
-        self._parallel_depth_limit = int(par.get("depth_limit", 0))
+        # WHERE forks may happen: by default ANY depth may fork — the global
+        # semaphore below (not the tree shape) is the true concurrency
+        # governor, and _run_child_pool hands a waiting parent's slot to its
+        # children so nesting cannot multiply live threads. v148 lesson:
+        # complexity ACCUMULATES online (late injections, leaf recomposition
+        # promoting a leaf to a branch), so a static depth gate fixed at
+        # config time starves exactly the runs that outgrow their initial
+        # shape. A case may still pin `depth_limit` to top levels explicitly.
+        _dl = par.get("depth_limit")
+        self._parallel_depth_limit = None if _dl is None else int(_dl)
         # GLOBAL ceiling on concurrently running subtrees, whole tree —
         # depth_limit bounds WHERE forks happen, this bounds HOW MANY
         self._parallel_sem = threading.BoundedSemaphore(
@@ -5445,6 +5452,36 @@ def %(callable)s(environ, start_response):
         return any(d in ids and d != c.get("id")
                    for c in kids for d in (c.get("depends_on") or []))
 
+    def _should_fork(self, count: int, depth: int, where: str,
+                     task: str) -> bool:
+        """The ONE fork policy for every parallel window — base children,
+        late-requirement placements, and re-poll batches. Re-evaluated at
+        EVERY window as the tree grows, so complexity accumulated ONLINE
+        (late injections arriving as new root children, a leaf recomposed
+        into a branch) opens forks the initial tree shape did not have.
+        Every decision with >=2 candidates is emitted to the trace, so a run
+        (and the audit) can PROVE parallelism was offered even when the
+        provider serialises the actual LLM calls into one lane."""
+        if self._parallel_children <= 1 or count < 2:
+            return False
+        bar = max(2, self._parallel_min_siblings)
+        if count < bar:
+            self.emit("implement", "engine", "", task,
+                      f"fork declined at {where}: wave of {count} below"
+                      f" min_siblings {bar}", level=L_DETAIL)
+            return False
+        if (self._parallel_depth_limit is not None
+                and depth > self._parallel_depth_limit):
+            self.emit("implement", "engine", "", task,
+                      f"fork declined at {where}: depth {depth} beyond"
+                      f" depth_limit {self._parallel_depth_limit}",
+                      level=L_DETAIL)
+            return False
+        self.emit("implement", "engine", "", task,
+                  f"fork opened at {where}: wave of {count} develops in"
+                  f" parallel (depth {depth})", level=L_MILESTONE)
+        return True
+
     def _dependency_waves(self, kids: list) -> list:
         """Partition siblings into dependency WAVES (Kahn levels): a child is
         in the earliest wave after all its intra-sibling dependencies. Members
@@ -5881,25 +5918,25 @@ def %(callable)s(environ, start_response):
             # integrate, cutting rework rounds. Execution order only; the tree
             # keeps its declared order for display.
             kids = self._topo_order(node.get("children", []))
-            if (self._parallel_children > 1
-                    and depth <= self._parallel_depth_limit
-                    and len(kids) >= self._parallel_min_siblings):
+            if self._parallel_children > 1:
                 # stage 1 + waves: each child's WHOLE subtree runs in its own
                 # thread; independent siblings run together, a barrier between
                 # dependency WAVES lets a dependent see its dependency's
-                # commits. Previously ANY intra-sibling depends_on forced the
-                # whole branch sequential — an LLM decomposer declares deps
-                # liberally, so that gate erased nearly all concurrency.
-                # Trade-off (why opt-in): parallel siblings see the node
-                # registry as of fork time, so the dedup gate is weaker.
+                # commits. The fork decision is PER WAVE via _should_fork —
+                # no static pre-gate on the initial kids count, because the
+                # count that matters is the one at THIS window, after any
+                # online growth. Trade-off (why opt-in): parallel siblings
+                # see the node registry as of fork time, so the dedup gate
+                # is weaker.
                 for wave in self._dependency_waves(kids):
-                    if len(wave) >= 2:
+                    if self._should_fork(len(wave), depth, "children", nid):
                         self._run_child_pool(wave, depth, child_contract_ctx,
                                              phase, title, nid, ancestors)
                     else:
-                        self._visit(wave[0], depth + 1, child_contract_ctx,
-                                    phase, parent=title,
-                                    ancestors=ancestors + ((nid, title),))
+                        for child in wave:
+                            self._visit(child, depth + 1, child_contract_ctx,
+                                        phase, parent=title,
+                                        ancestors=ancestors + ((nid, title),))
                 child_ids = [c["id"] for c in kids]
             else:
                 for child in kids:
@@ -5942,16 +5979,15 @@ def %(callable)s(environ, start_response):
                 self._attach_late_req(      # wave grouping sees every code_target
                     extra, node, depth, title, nid, ancestors, child_ids)
             _kids = ancestors + ((nid, title),)
-            if (self._parallel_children > 1
-                    and depth <= self._parallel_depth_limit
-                    and len(placements) >= 2):
+            if self._parallel_children > 1 and len(placements) >= 2:
                 for wave in self._late_req_waves(placements):
-                    if len(wave) >= 2:
+                    if self._should_fork(len(wave), depth, "late-req", nid):
                         self._run_child_pool(wave, depth, child_contract_ctx,
                                              phase, title, nid, ancestors)
                     else:
-                        self._visit(wave[0], depth + 1, child_contract_ctx,
-                                    phase, parent=title, ancestors=_kids)
+                        for extra in wave:
+                            self._visit(extra, depth + 1, child_contract_ctx,
+                                        phase, parent=title, ancestors=_kids)
             else:
                 for extra in placements:
                     self._visit(extra, depth + 1, child_contract_ctx, phase,
@@ -5987,10 +6023,32 @@ def %(callable)s(environ, start_response):
                     for extra in late:
                         self._attach_late_req(extra, node, depth, title, nid,
                                               ancestors, child_ids)
-                    for extra in late:
-                        self._visit(extra, depth + 1, child_contract_ctx,
-                                    phase, parent=title, ancestors=_kids)
-                        child_ids.append(extra["id"])
+                    # complexity accumulated ONLINE: every requirement injected
+                    # since the first placement window is in THIS batch — the
+                    # fork policy re-evaluates here, so >=2 independent late
+                    # arrivals develop in parallel instead of dripping through
+                    # one at a time (v148: web_ui/note_search/ping_text built
+                    # strictly sequentially because this window had no
+                    # parallel path at all).
+                    if self._parallel_children > 1 and len(late) >= 2:
+                        for wave in self._late_req_waves(late):
+                            if self._should_fork(len(wave), depth, "re-poll",
+                                                 nid):
+                                self._run_child_pool(wave, depth,
+                                                     child_contract_ctx,
+                                                     phase, title, nid,
+                                                     ancestors)
+                            else:
+                                for extra in wave:
+                                    self._visit(extra, depth + 1,
+                                                child_contract_ctx, phase,
+                                                parent=title, ancestors=_kids)
+                        child_ids.extend(x["id"] for x in late)
+                    else:
+                        for extra in late:
+                            self._visit(extra, depth + 1, child_contract_ctx,
+                                        phase, parent=title, ancestors=_kids)
+                            child_ids.append(extra["id"])
 
             # a branch delegates impl to its children, then integrates them
             drv.go(EV_BRANCH_INTEGRATE)

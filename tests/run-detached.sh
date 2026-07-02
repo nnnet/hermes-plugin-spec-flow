@@ -50,7 +50,25 @@ echo "[run-detached] launching pid-of-setsid… ts=${TS} args=$* log=${LOG}" >"$
 # PYTHONFAULTHANDLER=1 => a C-level fault (segfault/abort) in ANY thread dumps
 # every thread's stack to stderr (-> LOG) instead of dying silently; belt-and-
 # suspenders with run_cases' own faulthandler.enable() (covers a pre-import crash).
-PYTHONFAULTHANDLER=1 PYTHONUNBUFFERED=1 setsid python3 -u "${HERE}/lib/run_cases.py" "$@" \
+# Supervisor shell: waits for python and RECORDS THE EXIT CODE in the log.
+# v148 died with zero evidence — no traceback, no faulthandler dump, log stopped
+# mid-run. That silence is only possible with SIGKILL (SIGTERM is registered in
+# run_cases' faulthandler and would dump stacks). The supervisor makes every
+# death attributable:
+#   "exited rc=N"            -> engine returned / python raised (N<128)
+#   "KILLED by signal S"     -> the python pid alone was killed (rc=128+S)
+#   NO rc line in the log    -> the whole session group was swept (cgroup kill):
+#                               the supervisor died with its child.
+PYTHONFAULTHANDLER=1 PYTHONUNBUFFERED=1 setsid bash -c '
+    python3 -u "$0" "$@"
+    rc=$?
+    ts="$(date "+%F %T")"
+    if [ "$rc" -ge 128 ]; then
+        echo "[run-detached] ${ts} python KILLED by signal $((rc-128)) (rc=${rc}) — external kill, not an engine exit"
+    else
+        echo "[run-detached] ${ts} python exited rc=${rc}"
+    fi
+' "${HERE}/lib/run_cases.py" "$@" \
     </dev/null >>"${LOG}" 2>&1 &
 PID=$!
 disown "${PID}" 2>/dev/null || true
