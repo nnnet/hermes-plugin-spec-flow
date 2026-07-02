@@ -3716,10 +3716,19 @@ class Engine:
         AST scan, linear per test function: track the LAST route call whose
         args carry the ("METHOD", "/path") string constants, and bind any
         following status assertion (a "NNN ..." string or bare 2xx int
-        comparison) to that call. A mismatch on a route THIS leaf owns records
-        FAIL + loop + doctor cause so the recovery reworks the TEST with the
-        exact expected value — no LLM opinion involved. Lenient by design:
-        no owned routes, no test file, or no recognisable assertions = no-op."""
+        comparison, an ``in (…)`` membership, or a unittest assertEqual/
+        assertIn) to that call. Findings (task #148, rule S10.6):
+          * a status mismatch on a route this leaf OWNS (the v149 collision);
+          * a SMEARED success assertion on an owned route — ``assert code in
+            (200, 201)`` hedges instead of asserting exactly the contracted
+            status;
+          * a SUCCESS (2xx-only) assertion after calling a route this leaf
+            does NOT own (foreign or undeclared) — double-guessing another
+            leaf's contract; negative checks (404/405) stay legal.
+        Records FAIL + loop + doctor cause so the recovery reworks the TEST
+        with the exact expected value — no LLM opinion involved. Lenient by
+        design: no owned routes, no test file, or no recognisable assertions
+        = no-op."""
         if not (test_rel and getattr(self.workspace, "root", None)):
             return True
         owned = {(m.upper(), p): _route_success_status(m)
@@ -3733,20 +3742,64 @@ class Engine:
         except (OSError, SyntaxError, ValueError):
             return True                     # unparseable test = other gates' job
 
-        def _status_of(cmp_node) -> "Optional[int]":
-            # "201 Created" / "200 OK" strings, or a bare 2xx int literal
+        def _status_const(cmp_node) -> "Optional[int]":
+            # "201 Created" / "404 Not Found" strings, or a bare status int
             if isinstance(cmp_node, ast.Constant):
                 v = cmp_node.value
-                if isinstance(v, str) and re.match(r"^2\d\d\b", v.strip()):
+                if isinstance(v, str) and re.match(r"^[1-5]\d\d\b", v.strip()):
                     return int(v.strip()[:3])
-                if isinstance(v, int) and 200 <= v < 300:
+                if isinstance(v, int) and 100 <= v < 600:
                     return v
             return None
 
+        def _statuses_in(container) -> "list[int]":
+            # status constants inside a (200, 201)-style tuple/list/set
+            if not isinstance(container, (ast.Tuple, ast.List, ast.Set)):
+                return []
+            return [s for s in map(_status_const, container.elts)
+                    if s is not None]
+
+        def _asserted_statuses(stmt) -> "tuple[list, list]":
+            """(exact, membership): the status constants an assertion pins —
+            plain `assert code == 201`, `assert code in (200, 201)`, and the
+            unittest twins assertEqual/assertIn."""
+            exact: list = []
+            member: list = []
+            if isinstance(stmt, ast.Assert) \
+                    and isinstance(stmt.test, ast.Compare):
+                cmp = stmt.test
+                if any(isinstance(op, (ast.In, ast.NotIn)) for op in cmp.ops):
+                    if not any(isinstance(op, ast.NotIn) for op in cmp.ops):
+                        for c in cmp.comparators:
+                            member += _statuses_in(c)
+                else:
+                    exact += [s for s in map(_status_const,
+                                             [cmp.left] + cmp.comparators)
+                              if s is not None]
+            elif isinstance(stmt, ast.Call) \
+                    and isinstance(stmt.func, ast.Attribute):
+                attr = stmt.func.attr
+                if attr in ("assertEqual", "assertEquals"):
+                    exact += [s for s in map(_status_const, stmt.args)
+                              if s is not None]
+                elif attr == "assertIn" and len(stmt.args) >= 2:
+                    member += _statuses_in(stmt.args[1])
+            return exact, member
+
+        def _is_assertion(stmt) -> bool:
+            return isinstance(stmt, ast.Assert) or (
+                isinstance(stmt, ast.Call)
+                and isinstance(stmt.func, ast.Attribute)
+                and stmt.func.attr.startswith("assert"))
+
         findings: list = []
-        for fn_node in [n for n in tree.body
-                        if isinstance(n, (ast.FunctionDef,
-                                          ast.AsyncFunctionDef))]:
+        # module-level test functions plus unittest.TestCase methods
+        fns = [n for n in tree.body
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        fns += [m for c in tree.body if isinstance(c, ast.ClassDef)
+                for m in c.body
+                if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        for fn_node in fns:
             last_route = None               # (METHOD, path) of the last call
             # SOURCE order, not ast.walk (breadth-first would visit an assert
             # before the call nested inside the preceding assignment)
@@ -3755,7 +3808,49 @@ class Engine:
                  if isinstance(n, (ast.Call, ast.Assert))),
                 key=lambda n: (n.lineno, n.col_offset))
             for stmt in ordered:
-                if isinstance(stmt, ast.Call):
+                if _is_assertion(stmt):
+                    if last_route is None:
+                        continue
+                    exact, member = _asserted_statuses(stmt)
+                    if not exact and not member:
+                        continue
+                    want = owned.get(last_route)
+                    if want is None:
+                        # S10.6: a route this leaf does NOT own (foreign or
+                        # undeclared) — asserting SUCCESS on it double-guesses
+                        # another leaf's contract; negative checks stay legal
+                        pinned = exact + member
+                        if pinned and all(200 <= s < 300 for s in pinned):
+                            findings.append(
+                                "%s asserts success %s after `%s %s` — a "
+                                "route this leaf does NOT own; a leaf test "
+                                "may only assert success on its OWN routes "
+                                "(negative checks like 404/405 are fine)"
+                                % (test_rel,
+                                   "/".join(str(s) for s in sorted(set(pinned))),
+                                   last_route[0], last_route[1]))
+                            last_route = None
+                    elif member:
+                        # S10.6: a smeared success set on an OWNED route
+                        # hedges two guesses instead of reading the card
+                        if sorted(set(member)) != [want]:
+                            findings.append(
+                                "%s asserts membership over %s after `%s %s` "
+                                "— assert exactly the contracted status %d"
+                                % (test_rel, sorted(set(member)),
+                                   last_route[0], last_route[1], want))
+                            last_route = None   # one finding per call site
+                    else:
+                        got = next((s for s in exact if 200 <= s < 300), None)
+                        if got is not None and got != want:
+                            findings.append(
+                                "%s asserts status %d after `%s %s` but the "
+                                "card contracts SUCCESS STATUS %d — fix the "
+                                "assertion to %d"
+                                % (test_rel, got, last_route[0], last_route[1],
+                                   want, want))
+                            last_route = None   # one finding per call site
+                elif isinstance(stmt, ast.Call):
                     consts = [a.value for a in stmt.args
                               if isinstance(a, ast.Constant)
                               and isinstance(a.value, str)]
@@ -3765,21 +3860,6 @@ class Engine:
                     paths = [c for c in consts if c.startswith("/")]
                     if meths and paths:
                         last_route = (meths[0], paths[0])
-                elif isinstance(stmt, ast.Assert) and last_route in owned:
-                    cmp = stmt.test
-                    if isinstance(cmp, ast.Compare):
-                        got = next((s for s in map(_status_of,
-                                                   [cmp.left] + cmp.comparators)
-                                    if s is not None), None)
-                        want = owned[last_route]
-                        if got is not None and got != want:
-                            findings.append(
-                                "%s asserts status %d after `%s %s` but the "
-                                "card contracts SUCCESS STATUS %d — fix the "
-                                "assertion to %d"
-                                % (test_rel, got, last_route[0], last_route[1],
-                                   want, want))
-                            last_route = None   # one finding per call site
         if not findings:
             return True
         self.loops.append({"type": "test-status-mismatch", "task": nid,
