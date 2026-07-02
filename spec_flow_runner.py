@@ -2286,6 +2286,13 @@ class Engine:
         spec-author rework round, so the spec is narrowed before the LLM review."""
         if not node.get("_late_req"):
             return []
+        # An amend node (code_target set) edits an existing owner IN PLACE; it
+        # re-states that owner's surface BY DESIGN. The anti-fork scope-lint —
+        # which exists to stop a NEW leaf forking a PARALLEL surface — must NOT
+        # fire on an amend, or it rejects the legitimate edit as a duplicate and
+        # the node dies as empty_delta (v145 красивый_вид).
+        if node.get("code_target"):
+            return []
         if os.environ.get("SPEC_FLOW_LATE_REQ_SCOPE", "") in (
                 "0", "false", "False", "no"):
             return []
@@ -3214,6 +3221,14 @@ class Engine:
         (Phase 1), the leaf handler gate (Phase 2) and the plan-ownership report
         (Phase 6) — derived ONCE, deterministically, never guessed. Returns a
         list of ``(method, path)``; empty for a non-HTTP leaf."""
+        # An amend node (code_target set) EDITS an existing owner module; it owns
+        # no route of its own. Its spec MENTIONS the owner's route (e.g. "/ui") to
+        # describe the edit, but mentioning a route is not owning it — attributing
+        # ownership here made the handler gate demand the amend node define the
+        # owner's handler, and the anti-fork lint reject it as a duplicate (v145
+        # красивый_вид: routed to amend web_ui, then RED for "restating" /ui).
+        if node.get("code_target"):
+            return []
         try:
             routes = self._declared_route_set(self._product_contract() or {})
         except Exception:        # noqa: BLE001
@@ -3239,6 +3254,11 @@ class Engine:
         decomposer declared. Medium-agnostic: a non-HTTP capability leaf carries
         its symbols in the declared `exposes`. Empty for a pure-edit/amend leaf
         that owns no route and declares nothing (the gate then stays inert)."""
+        # An amend node edits an existing owner (code_target); it exposes no new
+        # public symbol of its own — the owner already does. Keep it empty so the
+        # card-completeness and handler gates stay inert for an in-place edit.
+        if node.get("code_target"):
+            return []
         syms: list = []
         seen: set = set()
         for s in (node.get("exposes") or []):
