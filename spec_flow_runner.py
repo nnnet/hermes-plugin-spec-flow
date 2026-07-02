@@ -975,6 +975,119 @@ def _canonical_handler_symbol(method: str, path: str) -> str:
     return "%s_%s" % ((method or "GET").strip().lower() or "get", base)
 
 
+def _route_success_status(method: str) -> int:
+    """The ONE contracted success status for a route, by HTTP method — the
+    single source BOTH the coder (via the route binding text) and the leaf
+    test-status gate read. v149: the card pinned no success status, so the
+    coder returned 201 while the tester asserted 200 — two independent guesses
+    that only collided at assembly. Deterministic REST convention: creation
+    (POST) answers 201, everything else 200."""
+    return 201 if (method or "GET").strip().upper() == "POST" else 200
+
+
+def _repair_workspace_imports(root: str) -> list:
+    """Assembly-time deterministic import repair over src/ AND tests/:
+    re-point ``from X import Y`` to the src module that REALLY defines Y when
+    X does not provide it and exactly ONE src module does. The engine-owned
+    twin of the leaf-level repair in the worker harness (which is gated behind
+    the PRE_GATE flag and never covered tests/): v149 — the tester invented
+    ``from db import connect, list_notes, store_note`` while core.py uniquely
+    owned all three, and the run went red on a module that does not exist.
+    A symbol owned by no module or by several stays untouched — an honest RED
+    the doctor still owns. A rewrite is kept only if the file still compiles.
+    Returns human-readable notes of the repairs applied."""
+    sdir = Path(root) / "src"
+    if not sdir.exists():
+        return []
+    reg: dict = {}                     # src stem -> public top-level names
+    for p in sorted(sdir.glob("*.py")):
+        try:
+            tree = ast.parse(p.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, SyntaxError, ValueError):
+            continue
+        names: set = set()
+        for n in tree.body:
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef,
+                              ast.ClassDef)) and not n.name.startswith("_"):
+                names.add(n.name)
+            elif isinstance(n, ast.Assign):
+                names |= {t.id for t in n.targets
+                          if isinstance(t, ast.Name)
+                          and not t.id.startswith("_")}
+        reg[p.stem] = names
+    if not reg:
+        return []
+    counts: dict = {}
+    owner: dict = {}
+    for stem, syms in reg.items():
+        for s in syms:
+            counts[s] = counts.get(s, 0) + 1
+            owner[s] = stem
+    tdir = Path(root) / "tests"
+    files = sorted(sdir.glob("*.py")) + (
+        sorted(tdir.glob("*.py")) if tdir.exists() else [])
+    fixed: list = []
+    for p in files:
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+            tree = ast.parse(text)
+        except (OSError, SyntaxError, ValueError):
+            continue
+        lines = text.splitlines(keepends=True)
+        repl: list = []
+        for n in tree.body:
+            if not isinstance(n, ast.ImportFrom) or n.level:
+                continue
+            mod = n.module or ""
+            groups: dict = {}
+            residual: list = []
+            need_fix = False
+            for a in n.names:
+                if mod in reg and a.name in reg[mod]:
+                    groups.setdefault(mod, []).append((a.name, a.asname))
+                    continue
+                tgt = owner.get(a.name) if counts.get(a.name) == 1 else None
+                if tgt and tgt != p.stem:
+                    groups.setdefault(tgt, []).append((a.name, a.asname))
+                    need_fix = True
+                else:
+                    residual.append((a.name, a.asname))
+            if not need_fix:
+                continue
+            start = n.lineno - 1
+            indent = lines[start][:len(lines[start])
+                                  - len(lines[start].lstrip())]
+
+            def _spec(items):
+                return ", ".join(nm + (" as " + asn if asn else "")
+                                 for nm, asn in items)
+            new_lines = ["from %s import %s" % (tgt, _spec(items))
+                         for tgt, items in groups.items()]
+            if residual:
+                new_lines.append("from %s import %s" % (mod, _spec(residual)))
+            block = "".join(indent + nl + "\n" for nl in new_lines)
+            repl.append((start, n.end_lineno or n.lineno, block,
+                         "%s: `from %s` -> %s" % (
+                             p.name, mod,
+                             ", ".join(t for t in groups if t != mod))))
+        if not repl:
+            continue
+        new = lines[:]
+        for start, end, block, _note in sorted(repl, key=lambda r: -r[0]):
+            new[start:end] = [block]
+        candidate = "".join(new)
+        try:
+            ast.parse(candidate)
+        except SyntaxError:
+            continue
+        try:
+            p.write_text(candidate, encoding="utf-8")
+        except OSError:
+            continue
+        fixed.extend(note for *_x, note in repl)
+    return fixed
+
+
 def _amend_symbols(body: str) -> set:
     """Names a module DEFINES (functions/classes) — lowercased + split into
     sub-tokens so `render_notes_page` contributes {render, notes, page}."""
@@ -3343,8 +3456,11 @@ class Engine:
             }.get((method or "GET").upper(), "serve the route per its requirement")
 
         lines = "\n".join(
-            "- `%s %s` -> `def %s(payload, query)` — %s"
-            % (m, p, _canonical_handler_symbol(m, p), _behaviour(m))
+            "- `%s %s` -> `def %s(payload, query)` — %s; SUCCESS STATUS %d "
+            "(return `%d, body` — the leaf TEST must assert exactly %d)"
+            % (m, p, _canonical_handler_symbol(m, p), _behaviour(m),
+               _route_success_status(m), _route_success_status(m),
+               _route_success_status(m))
             for m, p in owned)
         return ("## Route -> handler contract (engine-declared)\n"
                 "Name each handler EXACTLY as listed, expose it at module level, "
@@ -3353,7 +3469,8 @@ class Engine:
                 "as stated fails the run:\n" + lines
                 + "\n`payload` is the parsed JSON body (POST/PUT/PATCH); `query` is "
                 "the parsed query string (e.g. a `q` filter on GET).\n"
-                "Status semantics: unknown path -> 404; known path with an "
+                "Status semantics: success statuses are CONTRACTED per route above "
+                "(never guess them); unknown path -> 404; known path with an "
                 "unsupported method -> 405; malformed JSON body -> 400.")
 
     def _leaf_handler_gate(self, node: dict, nid: str, depth: int,
@@ -3421,6 +3538,95 @@ class Engine:
                                 "%s does not define %s — contracted handler "
                                 "missing" % (code_rel, w)
                                 for w, _m, _p in missing]})
+        return False
+
+    def _leaf_test_status_gate(self, node: dict, nid: str, depth: int,
+                               test_rel: "Optional[str]") -> bool:
+        """Deterministic, model-independent: the leaf's TEST must assert the
+        CONTRACTED success status of every route this leaf owns (the same
+        `_route_success_status` the binding printed for the coder). v149: the
+        tester asserted "200 OK" for POST /notes while the handler (reading
+        the same spec) returned 201 — two guesses, red only at assembly, then
+        a doctor loop that could not converge because the disagreement lives
+        in the CARD, not in either artifact.
+
+        AST scan, linear per test function: track the LAST route call whose
+        args carry the ("METHOD", "/path") string constants, and bind any
+        following status assertion (a "NNN ..." string or bare 2xx int
+        comparison) to that call. A mismatch on a route THIS leaf owns records
+        FAIL + loop + doctor cause so the recovery reworks the TEST with the
+        exact expected value — no LLM opinion involved. Lenient by design:
+        no owned routes, no test file, or no recognisable assertions = no-op."""
+        if not (test_rel and getattr(self.workspace, "root", None)):
+            return True
+        owned = {(m.upper(), p): _route_success_status(m)
+                 for m, p in self._leaf_owned_routes(node)}
+        if not owned:
+            return True
+        try:
+            text = (Path(self.workspace.root) / test_rel).read_text(
+                encoding="utf-8", errors="replace")
+            tree = ast.parse(text)
+        except (OSError, SyntaxError, ValueError):
+            return True                     # unparseable test = other gates' job
+
+        def _status_of(cmp_node) -> "Optional[int]":
+            # "201 Created" / "200 OK" strings, or a bare 2xx int literal
+            if isinstance(cmp_node, ast.Constant):
+                v = cmp_node.value
+                if isinstance(v, str) and re.match(r"^2\d\d\b", v.strip()):
+                    return int(v.strip()[:3])
+                if isinstance(v, int) and 200 <= v < 300:
+                    return v
+            return None
+
+        findings: list = []
+        for fn_node in [n for n in tree.body
+                        if isinstance(n, (ast.FunctionDef,
+                                          ast.AsyncFunctionDef))]:
+            last_route = None               # (METHOD, path) of the last call
+            # SOURCE order, not ast.walk (breadth-first would visit an assert
+            # before the call nested inside the preceding assignment)
+            ordered = sorted(
+                (n for n in ast.walk(fn_node)
+                 if isinstance(n, (ast.Call, ast.Assert))),
+                key=lambda n: (n.lineno, n.col_offset))
+            for stmt in ordered:
+                if isinstance(stmt, ast.Call):
+                    consts = [a.value for a in stmt.args
+                              if isinstance(a, ast.Constant)
+                              and isinstance(a.value, str)]
+                    meths = [c.upper() for c in consts
+                             if c.upper() in ("GET", "POST", "PUT", "PATCH",
+                                              "DELETE")]
+                    paths = [c for c in consts if c.startswith("/")]
+                    if meths and paths:
+                        last_route = (meths[0], paths[0])
+                elif isinstance(stmt, ast.Assert) and last_route in owned:
+                    cmp = stmt.test
+                    if isinstance(cmp, ast.Compare):
+                        got = next((s for s in map(_status_of,
+                                                   [cmp.left] + cmp.comparators)
+                                    if s is not None), None)
+                        want = owned[last_route]
+                        if got is not None and got != want:
+                            findings.append(
+                                "%s asserts status %d after `%s %s` but the "
+                                "card contracts SUCCESS STATUS %d — fix the "
+                                "assertion to %d"
+                                % (test_rel, got, last_route[0], last_route[1],
+                                   want, want))
+                            last_route = None   # one finding per call site
+        if not findings:
+            return True
+        self.loops.append({"type": "test-status-mismatch", "task": nid,
+                           "detail": "; ".join(findings)[:400]})
+        self.emit("review", "engine", "", nid,
+                  "test-status gate: leaf test contradicts the contracted "
+                  "success status", "; ".join(findings)[:300],
+                  "test_status_gate", "FAIL", level=L_MILESTONE)
+        self._doctor_advise(node, nid, depth, "test_status_gate", "FAIL",
+                            {"scope_findings": findings})
         return False
 
     def _plan_ownership_report(self) -> list:
@@ -6494,6 +6700,10 @@ def %(callable)s(environ, start_response):
                 # the leaf, not only at assembly. Deterministic AST gate; a miss
                 # records FAIL + loop so the recovery reworks the leaf.
                 self._leaf_handler_gate(node, nid, depth, code_rel)
+                # the leaf TEST must assert the CONTRACTED success status of
+                # the routes it owns — the same _route_success_status the
+                # binding printed for the coder (v149: 200-vs-201 collision)
+                self._leaf_test_status_gate(node, nid, depth, test_rel)
                 self._judge_leaf(nid, title, fn, code_rel, test_rel)
                 # Single-authority invariant (root cause of the v078 NOT READY):
                 # record the real code file THIS leaf delivered so the root
@@ -6780,6 +6990,65 @@ def %(callable)s(environ, start_response):
             return self._remedy_reconcile_check(entry, escalate=(remedy == "escalate_tier"))
         return False
 
+    def _prepare_hermetic_suite(self) -> None:
+        """Assembly-time, deterministic, before ANY pytest over the workspace:
+
+        1. HERMETIC ORACLE — write the engine-owned `conftest.py` that prunes
+           sys.path down to workspace + stdlib + site/dist-packages. Host
+           pollution otherwise satisfies a mistaken import with FOREIGN code:
+           v149 — `from db import ...` resolved into an unrelated repo through
+           an editable-install .pth in the user site, turning an honest
+           ModuleNotFoundError into a misleading cross-project ImportError.
+           A product-owned conftest.py (no engine marker) is never clobbered.
+
+        2. IMPORT REPAIR over src/ AND tests/ — re-point `from X import Y` to
+           the module that really defines Y when exactly ONE src module does
+           (the same unique-owner rule as the leaf-level repair; v149: the
+           tester invented `db`, core.py owned all three symbols). A symbol
+           owned by no module or by several stays untouched — an honest RED.
+        """
+        ws = self.workspace
+        root = getattr(ws, "root", None)
+        if not (getattr(ws, "enabled", False) and root):
+            return
+        marker = "Engine-owned oracle isolation"
+        conftest = Path(root) / "conftest.py"
+        body = (
+            '"""%s — generated by spec-flow; do not hand-edit.\n'
+            '\n'
+            'The verification suite must resolve imports ONLY from this\n'
+            'workspace, the stdlib and installed site-packages. A host .pth\n'
+            '(e.g. an editable install of an unrelated project) otherwise\n'
+            'satisfies a mistaken import with foreign code and turns an honest\n'
+            'ModuleNotFoundError into a misleading cross-project failure.\n'
+            '"""\n'
+            'import sys\n'
+            'from pathlib import Path\n'
+            '\n'
+            '_WS = str(Path(__file__).resolve().parent)\n'
+            '\n'
+            '\n'
+            'def _ok(p):\n'
+            '    if not p or p.startswith(_WS):\n'
+            '        return True          # "" = cwd = the workspace root\n'
+            '    if "site-packages" in p or "dist-packages" in p:\n'
+            '        return True          # pytest + its plugins live here\n'
+            '    return p.startswith(sys.base_prefix)   # stdlib/zip/dynload\n'
+            '\n'
+            '\n'
+            'sys.path[:] = [p for p in sys.path if _ok(p)]\n' % marker)
+        try:
+            current = (conftest.read_text(encoding="utf-8", errors="replace")
+                       if conftest.exists() else None)
+            if current is None or (marker in current and current != body):
+                conftest.write_text(body, encoding="utf-8")
+        except OSError:
+            pass
+        for note in _repair_workspace_imports(root):
+            self.emit("integrate", "engine", "", "L0:integrate",
+                      "import repair (assembly): re-pointed to the real owner",
+                      note, level=L_DETAIL)
+
     def _assembled_suite_failures(self) -> "Optional[list]":
         """Phase 7 (honest conjunction): run the assembled product's FULL test
         suite as the final authority and return the failing test ids ([] when
@@ -6793,6 +7062,7 @@ def %(callable)s(environ, start_response):
         tests_dir = Path(ws.root) / "tests"
         if not tests_dir.exists():
             return None
+        self._prepare_hermetic_suite()
         argv = ["python3", "-m", "pytest", "-q", "--no-header",
                 f"--confcutdir={ws.root}", "-p", "no:cacheprovider",
                 "--import-mode=importlib", "tests"]
@@ -6835,6 +7105,7 @@ def %(callable)s(environ, start_response):
         # confcutdir isolates the run from any host-project conftest.py;
         # --import-mode=importlib tolerates same-basename test files across
         # tests/ and tests/smoke/ (legacy prepend mode false-reds on a dup name).
+        self._prepare_hermetic_suite()
         _argv = ["python3", "-m", "pytest", "-v", "--no-header",
                  f"--confcutdir={ws.root}", "-p", "no:cacheprovider",
                  "--import-mode=importlib", "tests"]

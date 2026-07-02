@@ -92,6 +92,25 @@ and a static depth gate starved online growth).
 - S9.5 (open) same liveness proof owed to: --resume, doctor remedies,
   worktree isolation, memory tiers — one representative dynamic test each.
 
+## STAGE 10 — Assembly-seam honesty (`test_assembly_seam_honesty.py`)
+Every value TWO independent artifacts must agree on (status codes, symbol
+names, module owners) must exist as ONE engine-declared datum both sides
+read — and the suite that judges the product must see ONLY the product.
+v149: the card pinned no success status (coder 201 vs tester 200 — guesses
+colliding only at assembly), and a host editable-install .pth satisfied a
+tester-invented `db` module with an unrelated repo's code.
+- S10.1 the success status of a route is a single engine function
+  (`_route_success_status`) — the binding prints it for the coder and the
+  leaf test-status gate enforces it on the tester.
+- S10.2 assembly-time import repair covers tests/ (not only src/), re-points
+  a phantom `from X import Y` to the unique real owner, and leaves unowned
+  symbols untouched (an honest red, never a guess).
+- S10.3 the verification suite is HERMETIC: the engine plants an
+  oracle-isolation conftest; a decoy visible through PYTHONPATH/.pth must
+  stay invisible (dynamic subprocess proof).
+- S10.4 a leaf test contradicting the contracted status reds AT THE LEAF
+  (test-status gate) with the exact expected value — never first at assembly.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.

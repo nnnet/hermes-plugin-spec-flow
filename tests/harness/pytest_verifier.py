@@ -633,7 +633,14 @@ def repair_local_imports(root: str) -> list:
             owner[s] = stem            # unique only when counts[s] == 1
     fixed: list = []
     sdir = Path(root) / "src"
-    for p in sorted(sdir.glob("*.py")):
+    tdir = Path(root) / "tests"
+    # tests/ too: the tester invents phantom modules exactly like the coder
+    # (v149: tests/test_core.py `from db import connect` while core.py owned
+    # every symbol) — and a polluted host can satisfy the phantom with foreign
+    # code instead of an honest ModuleNotFoundError
+    files = sorted(sdir.glob("*.py")) + (
+        sorted(tdir.glob("*.py")) if tdir.exists() else [])
+    for p in files:
         stem = p.stem
         try:
             text = p.read_text(encoding="utf-8")
