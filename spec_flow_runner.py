@@ -1001,6 +1001,22 @@ def _route_success_status(method: str) -> int:
     return 201 if (method or "GET").strip().upper() == "POST" else 200
 
 
+def _route_fixed_body(method: str, path: str) -> "Optional[dict]":
+    """The ONE contracted response body for a route that carries a FIXED body
+    — currently only the liveness route: GET /health(z) answers exactly
+    ``{"status": "ok"}``. v150 defined /health's body three incompatible ways
+    (handler, test, smoke contract) because the datum lived nowhere; it now
+    lives HERE and every consumer (the machine interface contract, the leaf
+    route binding, the synthesized entry) reads this single source. Every
+    other route's body is requirement-owned — returns None."""
+    if (method or "GET").strip().upper() != "GET":
+        return None
+    last = ((path or "").rstrip("/").rsplit("/", 1)[-1] or "").lower()
+    if last in ("health", "healthz"):
+        return {"status": "ok"}
+    return None
+
+
 _BOUNDARY_PATH_RE = re.compile(
     r"""["'](/(?:mnt|home|opt|srv|media|root|Users)/[^"']*)["']""")
 
@@ -3557,6 +3573,14 @@ class Engine:
             # stay engine-owned (a POST must persist + round-trip, the v120
             # break); CONTENT semantics come only from this leaf's text.
             m = (method or "GET").upper()
+            fixed = _route_fixed_body(m, path)
+            if fixed is not None:
+                # a fixed-body route prints its ONE contracted body verbatim —
+                # the same datum contracts/interface.json carries (v150:
+                # /health's body was re-invented three incompatible ways)
+                return ("return EXACTLY the JSON body %s — the machine "
+                        "contract (contracts/interface.json) is the single "
+                        "source of this datum" % json.dumps(fixed))
             base = {
                 "POST": "accept a JSON body, PERSIST it to storage, and return the "
                         "created record (at least its id); a later GET on this path "
@@ -4099,7 +4123,7 @@ def %(callable)s(environ, start_response):
         return _send(start_response, 400, {"error": "empty request body"})
     try:
         if abi == "health":
-            status, body = 200, {"status": "ok"}
+            status, body = 200, %(health_body)s
         elif abi == "pq":
             status, body = fn(payload, query)
         elif abi == "p":
@@ -4116,7 +4140,12 @@ def %(callable)s(environ, start_response):
 %(aliases)s
 '''
         return tmpl % {"imports": imports_block, "routes": routes_block,
-                       "callable": callable_name, "aliases": aliases_block}
+                       "callable": callable_name, "aliases": aliases_block,
+                       # the inline liveness body reads the SAME single-source
+                       # datum the interface contract and the binding print
+                       "health_body": repr(
+                           _route_fixed_body("GET", ok_route or "/health")
+                           or {"status": "ok"})}
 
     def _strip_self_imports(self, rel: str) -> bool:
         """Deterministically drop any ``from <own-stem> import …`` line from an
@@ -7385,16 +7414,24 @@ def %(callable)s(environ, start_response):
             return
         if not routes:
             return
+        route_rows = []
+        for m, p in sorted(routes):
+            row = {"method": (m or "GET").upper(), "path": p,
+                   "handler": _canonical_handler_symbol(m, p),
+                   "success_status": _route_success_status(m),
+                   "errors": {"unknown_path": 404, "bad_method": 405,
+                              "malformed_body": 400}}
+            fixed = _route_fixed_body(m, p)
+            if fixed is not None:
+                # the ONE contracted body for a fixed-body route (GET /health
+                # -> {"status": "ok"}); v149-class collisions happen exactly
+                # when such a datum lives nowhere machine-readable
+                row["body"] = fixed
+            route_rows.append(row)
         data = {
             "format": "spec-flow interface contract v1",
             "medium": "http",
-            "routes": [
-                {"method": (m or "GET").upper(), "path": p,
-                 "handler": _canonical_handler_symbol(m, p),
-                 "success_status": _route_success_status(m),
-                 "errors": {"unknown_path": 404, "bad_method": 405,
-                            "malformed_body": 400}}
-                for m, p in sorted(routes)],
+            "routes": route_rows,
         }
         try:
             cdir = Path(root) / "contracts"
