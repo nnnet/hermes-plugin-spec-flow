@@ -16,6 +16,21 @@ TS="$(date +%Y%m%d-%H%M%S)"
 LOG="${SPEC_FLOW_DETACH_LOG:-${HERE}/runs-out/_detached_${TS}.log}"
 mkdir -p "$(dirname "${LOG}")"
 
+# AUDIT GATE (ratchet step 3): a live run costs an hour; the offline self-audit
+# costs seconds and reds on a design hole (missing branch, stub, class without a
+# path). Never spend a run while the audit is red — fix the hole first. Set
+# SPEC_FLOW_SKIP_AUDIT=1 only for a deliberate diagnostic run on a known-red audit.
+if [ "${SPEC_FLOW_SKIP_AUDIT:-0}" != "1" ]; then
+    echo "[run-detached] audit gate: pytest tests/audit …"
+    if ! python3 -m pytest "${HERE}/audit" -q >/dev/null 2>&1; then
+        echo "[run-detached] AUDIT RED — refusing to launch. Fix the design hole"\
+             "(python3 -m pytest tests/audit) then re-run, or set"\
+             "SPEC_FLOW_SKIP_AUDIT=1 for a deliberate diagnostic run." >&2
+        exit 3
+    fi
+    echo "[run-detached] audit green — launching run."
+fi
+
 # A run that dies early under setsid+redirect used to leave a 0-byte log: with a
 # file (not a tty) on stdout Python BLOCK-buffers, so a SIGKILL (e.g. a transient
 # OOM, or session churn on /compact) discards the unflushed banner AND any
