@@ -1,0 +1,21 @@
+tests/lib/live_dashboard.py
+  s_a7f45290e91181::t_d2ba4161cc908d 315-319,321,329,442-449,2515-2517,2521
+spec_flow_tools.py
+  s_a7f45290e91181::t_d2ba4161cc908d 1933,1935,1937,1944-1956
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.6",
+  "base_commit_sha": "58ec12b6108d209670c7470815dd852e347eec89",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "nvidia/nemotron-3-super-120b-a12b-20230311:free"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
