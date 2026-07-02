@@ -1,0 +1,32 @@
+tests/audit/TAXONOMY.md
+  s_a7f45290e91181::t_49823b5da2e0b1 113-123
+spec_flow_runner.py
+  s_a7f45290e91181::t_5667a930a697f5 3474-3475
+  s_a7f45290e91181::t_62156d2f6e34c3 7062-7063,7065,7073-7079,7084-7091,7101-7121,7145-7146,7158-7207
+  s_a7f45290e91181::t_36e3ea6fd78321 5349-5350
+  s_a7f45290e91181::t_54e961ab430c1b 7097-7098
+  s_a7f45290e91181::t_516e4f080893f9 5359-5363
+  s_a7f45290e91181::t_bad4b4fd7fc17e 988-1020
+  s_a7f45290e91181::t_16824f54515ac5 4594
+  s_a7f45290e91181::t_40fa4046bae1ed 3463-3473,3476-3493
+tests/audit/test_assembly_seam_honesty.py
+  s_a7f45290e91181::t_abec8646d108a7 181-187,190
+  s_a7f45290e91181::t_abdebb0dd41985 188-189
+  s_a7f45290e91181::t_cfb7f8002c6e52 154-180,191-202
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.6",
+  "base_commit_sha": "a9ffdf189e70086999890750cc817e9b4f9cfa30",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-fable-5"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
