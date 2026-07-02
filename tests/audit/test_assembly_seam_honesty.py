@@ -248,3 +248,115 @@ def test_status_lying_test_is_red_at_the_leaf(plugin, tmp_path):
         "a leaf test asserting 200 for a route the card contracts at 201 must"
         " red AT THE LEAF with the exact expected value (v149: the collision"
         " surfaced only at assembly, where the doctor cannot fix the card)")
+
+
+# ── S10.7 the small-product collapse REWRITES the inherited spec ─────────────
+# v150 root cause: the decomposer proposed db_persistence + wsgi_handler, the
+# floor collapsed them into ONE core leaf — but the core INHERITED the
+# spec_markdown authored for the REJECTED plan, so `src/db.py` stayed in the
+# prose and steered the coder/tester at the phantom module. The collapse must
+# rewrite the spec deterministically for one module and come out clean through
+# the same "NO node owns" ownership gate.
+
+def _rejected_plan_decomposer(ctx):
+    if ctx["depth"] == 0:
+        return {"atomic": False, "metrics": dict(_BIG),
+                "spec_markdown": ("## Scope\nIn:\n"
+                                  "- src/db.py: connect/add_note/list_notes"
+                                  " (sqlite storage)\n"
+                                  "- src/app.py: wsgi_app dispatching the"
+                                  " routes\n"),
+                "children": [{"id": "db_persistence",
+                              "title": "sqlite storage layer"},
+                             {"id": "wsgi_handler",
+                              "title": "WSGI route handlers"}]}
+    # the card-fill rework round for the engine-made core leaf
+    return {"metrics": dict(_SMALL),
+            "acceptance": ["Given a note, When POSTed to /notes, Then GET"
+                           " /notes returns it"]}
+
+
+def test_collapse_rewrites_spec_and_is_gate_clean(plugin, tmp_path):
+    from harness import auto_implementer
+    # WEB_PROJECT declares <= 5 routes -> the floor collapses the rejected
+    # 2-child plan into one engine-made core leaf
+    res = eng.run_project(dict(WEB_PROJECT),
+                          workspace=str(tmp_path / "wk"), depth="product",
+                          tools=plugin.tools, contracts_dir=str(eng.CONTRACTS),
+                          agents={"decomposer": _rejected_plan_decomposer,
+                                  "implementer": auto_implementer.implement})
+    assert res is not None
+    dump = "\n".join(repr(ev) for ev in res.events)
+    assert "small product" in dump, "the floor must collapse this run"
+    spec = tmp_path / "wk" / "specs" / "core.md"
+    assert spec.is_file(), "the collapsed core leaf must write its spec"
+    text = spec.read_text(encoding="utf-8")
+    assert "src/db.py" not in text, (
+        "the collapse must NOT inherit the spec authored for the rejected"
+        " plan (v150: src/db.py survived in core.md and the coder/tester"
+        " chased a module no node owns)")
+    assert "NO node owns" not in dump, (
+        "a clean collapse rewrite must produce ZERO ownership findings —"
+        " a finding means the engine-rewritten spec still plans foreign"
+        " src files")
+
+
+# ── S10.8 engine rules are ONE source: ctx -> decomposer prompt ──────────────
+# Everything the code later checks/applies to the plan (small-product floor,
+# leaf thresholds, fan-out cap, route/module ownership, success statuses) is
+# handed to the decomposer UP FRONT via ctx["engine_rules"], and the harness
+# prompt renders those exact values — no number is re-hardcoded in prompt text
+# or in this test (every expected value comes from the engine constants).
+
+def test_engine_rules_reach_ctx_and_prompt(plugin, tmp_path, monkeypatch,
+                                           fake_openai):
+    import json
+    from harness import auto_implementer
+    from harness import llm_backend as lb
+    from harness import llm_decomposer as dc
+    from harness_fakeapi import ok
+
+    seen = {}
+
+    def _capturing_decomposer(ctx):
+        seen.setdefault("ctx", ctx)
+        return {"atomic": True, "metrics": dict(_SMALL),
+                "acceptance": ["Given a note, When POSTed to /notes, Then GET"
+                               " /notes returns it"]}
+
+    res = eng.run_project(dict(WEB_PROJECT),
+                          workspace=str(tmp_path / "wk"), depth="product",
+                          tools=plugin.tools, contracts_dir=str(eng.CONTRACTS),
+                          agents={"decomposer": _capturing_decomposer,
+                                  "implementer": auto_implementer.implement})
+    assert res is not None
+    ctx = seen["ctx"]
+    er = ctx["engine_rules"]
+    assert er["small_product_routes_le"] == eng.SMALL_PRODUCT_ROUTES_DEFAULT
+    assert er["leaf_max_modules"] == eng._gates.MAX_MODULES
+    assert er["leaf_max_tasks"] == eng._gates.MAX_TASKS
+    assert er["leaf_max_interfaces"] == eng._gates.MAX_INTERFACES
+    assert er["leaf_max_loc"] == eng._gates.MAX_LOC
+    assert er["route_ownership"] == eng.RULE_ROUTE_OWNERSHIP
+    assert er["atomic_leaf_module"] == eng.RULE_ATOMIC_LEAF_MODULE
+    assert er["route_success_status"] == {
+        "POST": eng._route_success_status("POST"),
+        "other": eng._route_success_status("GET")}
+
+    # the harness renders the SAME ctx values into the prompt it actually
+    # sends (captured through a real local server, no mocks on the LLM path)
+    monkeypatch.delenv("SPEC_FLOW_DECOMPOSER_TEAM", raising=False)
+    monkeypatch.setattr(dc, "MODEL", "openrouter/x:free")
+    lb.configure_workers(None)
+    reply = json.dumps({"atomic": True, "metrics": dict(_SMALL)})
+    srv = fake_openai([(200, ok(reply))])
+    dc.decompose(ctx)
+    sent = " ".join(m.get("content", "")
+                    for m in srv.requests[0]["messages"])
+    assert ("<= %s route(s) is collapsed"
+            % er["small_product_routes_le"]) in sent
+    assert ("at most %s children" % er["max_children"]) in sent
+    assert ("modules <= %s" % er["leaf_max_modules"]) in sent
+    assert ("estimated_loc <= %s" % er["leaf_max_loc"]) in sent
+    assert ("POST -> %s" % er["route_success_status"]["POST"]) in sent
+    assert er["route_ownership"] in sent

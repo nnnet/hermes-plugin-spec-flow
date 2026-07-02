@@ -8,7 +8,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
-from spec_flow_runner import Engine   # noqa: E402
+from spec_flow_runner import SMALL_PRODUCT_ROUTES_DEFAULT, Engine   # noqa: E402
 
 
 def _engine(registry, cap):
@@ -16,6 +16,8 @@ def _engine(registry, cap):
     e._goal, e._target, e._constitution = "g", "t", []
     e._node_registry = dict(registry)
     e._project_meta = {"workers": {"decomposer_zone_cap": cap}}
+    # engine_rules block reads the same param the collapse gate reads
+    e._small_product_routes = SMALL_PRODUCT_ROUTES_DEFAULT
     return e
 
 

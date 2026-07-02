@@ -42,9 +42,9 @@ sub-steps.)
 Step 2 — metrics (the GUARDRAIL the engine checks your claim against):
 - metrics keys (exact): modules, tasks, interfaces, estimated_loc,
   open_decisions, single_concern (bool), testable_criteria (bool)
-- atomic nodes satisfy: modules <= 1, tasks <= 5, interfaces <= 2,
-  estimated_loc <= 100, open_decisions == 0, single_concern, testable_criteria
-- if atomic=false, give honest big metrics AND 2-4 children
+- atomic nodes satisfy: modules <= {leaf_max_modules}, tasks <= {leaf_max_tasks}, interfaces <= {leaf_max_interfaces},
+  estimated_loc <= {leaf_max_loc}, open_decisions == 0, single_concern, testable_criteria
+- if atomic=false, give honest big metrics AND 2-{max_children} children
   (id: snake_case slug, title: short English); children get NO metrics
 - child ids name the WORK ITSELF (catalog_schema, seller_onboarding); do
   NOT encode phase/type into the id — no req-/spec-/task-/research-
@@ -54,7 +54,7 @@ Step 2 — metrics (the GUARDRAIL the engine checks your claim against):
 Rules:
 - keep "atomic" and the metrics CONSISTENT: atomic=true ⇒ metrics within the
   leaf thresholds and NO children; atomic=false ⇒ at least one threshold
-  exceeded and 2-4 children
+  exceeded and 2-{max_children} children
 - NEVER propose a child that repeats work already covered by a node in the
   "already created" list above (ANY branch — not just your ancestors). If
   this node needs that result, reference it instead:
@@ -90,8 +90,25 @@ work exists once, at the top."""
 
 LEAF_RULE = """
 HARD CONSTRAINT for this node: depth {depth} >= {leaf_depth}, so it MUST be
-atomic. Scope it down to ONE concern doable in <= 100 LOC and <= 5 tasks.
+atomic. Scope it down to ONE concern doable in <= {leaf_max_loc} LOC and <= {leaf_max_tasks} tasks.
 Return metrics WITHIN the leaf thresholds and NO children."""
+
+# ENGINE RULES — rendered from ctx["engine_rules"] (spec_flow_runner builds it
+# from the SAME variables its deterministic gates read). No number is ever
+# hardcoded in this template: the model knows up front everything the code
+# will later check/apply to the plan, while the guarantee stays in the code
+# (v150: the model could not know the small-product floor, split a 2-route
+# service, and the engine collapsed it against a stale spec).
+ENGINE_RULES = """
+
+ENGINE RULES (the code enforces these DETERMINISTICALLY after you answer —
+plan within them; the guarantee is the code, not this text):
+- small-product floor: a depth-0 product whose contract declares <= {small_product_routes_le} route(s) is collapsed to ONE core module owning every base route + its storage
+- fan-out cap: at most {max_children} children per node (extras are dropped)
+- leaf thresholds (leaf_check): modules <= {leaf_max_modules}, tasks <= {leaf_max_tasks}, interfaces <= {leaf_max_interfaces}, estimated_loc <= {leaf_max_loc}
+- route ownership: {route_ownership}
+- module ownership: {atomic_leaf_module}
+- contracted success status per route: POST -> {post_status}, any other method -> {other_status}"""
 
 
 # cheap & fast model for tree decomposition test runs; override via env
@@ -111,6 +128,32 @@ def _leaf_depth() -> int:
 def _max_children() -> int:
     return int(llm_backend.WORKERS_CFG.get("max_children")
                or config.env("LLM_MAX_CHILDREN", int))
+
+
+def _engine_rules(ctx: dict) -> dict:
+    """The parameters/rules the ENGINE deterministically enforces on the plan,
+    straight from ctx (single source: spec_flow_runner._decomposer_ctx). A
+    hand-built unit-test ctx without the block falls back to the engine's own
+    gate constants — never to literals re-hardcoded here."""
+    er = dict(ctx.get("engine_rules") or {})
+    if not er:
+        from . import run_engine as eng    # lazy: unit-test ctx only
+        er = {
+            "small_product_routes_le": eng.SMALL_PRODUCT_ROUTES_DEFAULT,
+            "leaf_max_modules": eng._gates.MAX_MODULES,
+            "leaf_max_tasks": eng._gates.MAX_TASKS,
+            "leaf_max_interfaces": eng._gates.MAX_INTERFACES,
+            "leaf_max_loc": eng._gates.MAX_LOC,
+            "route_ownership": eng.RULE_ROUTE_OWNERSHIP,
+            "atomic_leaf_module": eng.RULE_ATOMIC_LEAF_MODULE,
+            "route_success_status": {
+                "POST": eng._route_success_status("POST"),
+                "other": eng._route_success_status("GET"),
+            },
+        }
+    # fan-out cap is harness-owned when the engine did not resolve it
+    er.setdefault("max_children", _max_children())
+    return er
 
 
 def _ask(prompt: str, meta: dict | None = None, *, model: str = "",
@@ -296,17 +339,38 @@ def decompose(ctx: dict) -> dict:
     _other = int(ctx.get("other_nodes_count") or 0)
     if _other:
         existing_lines += f"; (+{_other} more nodes in other zones — out of scope)"
+    # every checkable number below comes from engine_rules (ctx), never from a
+    # literal in the template — the engine's gates are the single source.
+    er = _engine_rules(ctx)
+    rss = er.get("route_success_status") or {}
     prompt = PROMPT.format(
         goal=p.get("goal", ""), target=p.get("target", ""),
         constitution="; ".join(p.get("constitution", [])),
         title=ctx["node"]["title"], id=ctx["node"]["id"],
         depth=ctx["depth"], parent=ctx.get("parent") or "—",
         ancestors=" → ".join(ancestors) or "—",
-        existing=existing_lines)
+        existing=existing_lines,
+        leaf_max_modules=er["leaf_max_modules"],
+        leaf_max_tasks=er["leaf_max_tasks"],
+        leaf_max_interfaces=er["leaf_max_interfaces"],
+        leaf_max_loc=er["leaf_max_loc"],
+        max_children=er["max_children"])
+    prompt += ENGINE_RULES.format(
+        small_product_routes_le=er.get("small_product_routes_le", 0),
+        max_children=er["max_children"],
+        leaf_max_modules=er["leaf_max_modules"],
+        leaf_max_tasks=er["leaf_max_tasks"],
+        leaf_max_interfaces=er["leaf_max_interfaces"],
+        leaf_max_loc=er["leaf_max_loc"],
+        route_ownership=er.get("route_ownership", ""),
+        atomic_leaf_module=er.get("atomic_leaf_module", ""),
+        post_status=rss.get("POST", ""), other_status=rss.get("other", ""))
     if ctx["depth"] == 0:
         prompt += ROOT_RULE
     if ctx["depth"] >= _leaf_depth():
-        prompt += LEAF_RULE.format(depth=ctx["depth"], leaf_depth=_leaf_depth())
+        prompt += LEAF_RULE.format(depth=ctx["depth"], leaf_depth=_leaf_depth(),
+                                   leaf_max_loc=er["leaf_max_loc"],
+                                   leaf_max_tasks=er["leaf_max_tasks"])
     nid = ctx["node"]["id"]
     # D2: a configured decomposer team runs the drafter→critic→reconciler
     # orchestra; with NO team (the default) it is the single agent, unchanged.

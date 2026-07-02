@@ -367,6 +367,22 @@ DEFAULT_VERBOSITY = int(os.environ.get("SPEC_FLOW_RUN_VERBOSITY", str(L_STEP)))
 DEPTHS = {"spec": 1, "scaffold": 2, "verify": 3, "execute": 4, "product": 5}
 DEPTH_SPEC, DEPTH_SCAFFOLD, DEPTH_VERIFY, DEPTH_EXECUTE, DEPTH_PRODUCT = 1, 2, 3, 4, 5
 
+# #122 small-product floor default: a root product whose contract declares at
+# most this many routes is collapsed to ONE core leaf. Single named source for
+# the engine gate, the project-meta default and the decomposer's engine_rules
+# context (v150: the model could not know the threshold and split a 2-route
+# service the engine then collapsed).
+SMALL_PRODUCT_ROUTES_DEFAULT = 5
+
+# Rule statements the engine enforces DETERMINISTICALLY and the decomposer
+# prompt renders verbatim (single source with the gates — never re-worded in
+# harness prompt text).
+RULE_ROUTE_OWNERSHIP = "every declared route is owned by exactly ONE leaf"
+RULE_ATOMIC_LEAF_MODULE = (
+    "an atomic leaf builds exactly ONE module: src/<snake(node_id)>.py; a "
+    "concern needing several modules must become graph CHILDREN, never prose "
+    "in one leaf's spec")
+
 # Docstring prefix stamped on a module whose rival WSGI callable the engine has
 # replaced with a delegating wrapper. Both the route-redeclare gate and the
 # neutraliser key off it so a neutralised module is never re-flagged as a rival.
@@ -2134,7 +2150,7 @@ class Engine:
         # #122: small-product floor — a product whose contract declares <= this
         # many routes is built as ONE atomic leaf (single module owns all routes
         # + storage); 0 = off. Set in run() from the project.
-        self._small_product_routes = 5
+        self._small_product_routes = SMALL_PRODUCT_ROUTES_DEFAULT
         # #10: specialty routing — project meta, the implementer's declared
         # specialties, and the auto-infer switch; set in run()
         self._project_meta: dict = {}
@@ -4699,7 +4715,9 @@ def %(callable)s(environ, start_response):
         # declares <= N routes builds the root as ONE atomic leaf so a micro
         # service is never shattered into rival whole-app modules whose imports
         # fail to compose (v125: 8 leaves, 3 rival entries, e2e RED, 343 calls).
-        self._small_product_routes = int(project.get("small_product_routes", 5) or 0)
+        self._small_product_routes = int(
+            project.get("small_product_routes",
+                        SMALL_PRODUCT_ROUTES_DEFAULT) or 0)
         # #10: specialty routing — the project dict (carries default_specialty)
         # + the auto-infer switch. The set of declared specialties stays empty
         # here (allow any): chain_for() falls back to the role chain for a
@@ -5115,6 +5133,38 @@ def %(callable)s(environ, start_response):
                 for i, t in list(self._node_registry.items())[:150]
             ],
         }
+        # ENGINE RULES — every parameter/rule the engine later enforces
+        # DETERMINISTICALLY on the plan, handed to the worker UP FRONT from the
+        # SAME variables the gates read (v150: the model could not know the
+        # small-product floor, split a 2-route service into db/wsgi children
+        # and the engine collapsed them). Single source: never re-hardcoded in
+        # prompt text; the guarantee still comes from the code, not the prompt.
+        rules: dict = {
+            # #122 floor: root product with <= N declared routes -> ONE core leaf
+            "small_product_routes_le": self._small_product_routes,
+            # leaf_check thresholds (the exact constants the gate reads)
+            "leaf_max_modules": _gates.MAX_MODULES,
+            "leaf_max_tasks": _gates.MAX_TASKS,
+            "leaf_max_interfaces": _gates.MAX_INTERFACES,
+            "leaf_max_loc": _gates.MAX_LOC,
+            "route_ownership": RULE_ROUTE_OWNERSHIP,
+            "atomic_leaf_module": RULE_ATOMIC_LEAF_MODULE,
+            # contracted success status per route (_route_success_status)
+            "route_success_status": {
+                "POST": _route_success_status("POST"),
+                "other": _route_success_status("GET"),
+            },
+        }
+        # fan-out cap: harness-owned when unset here; mirror the same sources
+        # (case workers block / env) so the prompt and the truncation agree.
+        _mc = ((self._project_meta.get("workers") or {}).get("max_children")
+               or os.environ.get("SPEC_FLOW_LLM_MAX_CHILDREN", "").strip())
+        try:
+            if _mc:
+                rules["max_children"] = int(_mc)
+        except (TypeError, ValueError):
+            pass
+        ctx["engine_rules"] = rules
         # 433: trim the decomposer's view to the node's ZONE — its ancestors and
         # the subtree under its parent — and reference the REST by count, not by
         # name. A flat list spanning unrelated zones invites a child to restate a
@@ -5977,6 +6027,56 @@ def %(callable)s(environ, start_response):
         nr = len(self._declared_route_set(self._product_contract() or {}))
         return nr if 0 < nr <= self._small_product_routes else 0
 
+    def _collapsed_core_spec(self, node: dict, own: str = "core") -> str:
+        """v150: the spec the collapsed core leaf carries — REWRITTEN by the
+        engine, never inherited verbatim. The decomposer authored the parent's
+        ``spec_markdown`` for the plan the floor just REJECTED (v150: prose
+        still planned ``src/db.py`` + ``src/app.py``), so inheriting it
+        re-orders the phantom modules the collapse removed and the coder /
+        tester chase them. Deterministic rewrite: goal, every declared route,
+        all handlers + storage in the ONE core module, entry = the
+        contract-declared entry. Decomposer lines survive only retargeted: a
+        line naming a src file no node owns is rewritten at the core module
+        (an entry-file mention stays — the entry is declared, not foreign)."""
+        c = self._product_contract() or {}
+        entry = str(c.get("entry") or "")
+        routes = self._declared_route_set(c)
+        goal = (node.get("requirement") or self._goal
+                or node.get("title") or "Build the product")
+        lines = [
+            "## Scope (engine-rewritten at the small-product collapse)",
+            f"Goal: {goal}",
+            "",
+            "In:",
+            f"- `src/{own}.py`: EVERY declared route handler AND the storage "
+            "— one module owns the whole base product.",
+        ]
+        if routes:
+            lines += ["", f"Declared routes (all owned by `src/{own}.py`):"]
+            lines += [f"- {m} {p}" for m, p in routes]
+        if entry:
+            lines += ["", f"Entry point: `{entry}` (the contract-declared "
+                          f"entry; it wires `src/{own}.py` — plan NO other "
+                          "src file)."]
+        # salvage the decomposer's notes: the same "known owner" set the card
+        # gate reads (_card_completeness_findings), so a clean rewrite is
+        # gate-clean by construction.
+        known = {_snake(i) for i in (self._node_registry or {})} | {own}
+        if entry:
+            known.add(_snake(Path(entry).stem))
+
+        def _retarget(m: "re.Match") -> str:
+            return (m.group(0) if _snake(m.group(1)) in known
+                    else f"src/{own}.py")
+
+        old = str(node.get("spec_markdown") or "").strip()
+        if old:
+            kept = [re.sub(r"src/([A-Za-z0-9_]+)\.py", _retarget, ln)
+                    for ln in old.splitlines()]
+            lines += ["", "## Carried decomposer notes (src files no node "
+                          "owns retargeted at the core module)"] + kept
+        return "\n".join(lines)
+
     def _visit(self, node: dict, depth: int, contract_ctx: Optional[dict], phase: str,
                parent: Optional[str] = None, ancestors: tuple = ()):
         if "metrics" not in node:
@@ -6088,7 +6188,11 @@ def %(callable)s(environ, start_response):
                             "interfaces": _nr, "estimated_loc": 100,
                             "open_decisions": 0, "single_concern": True,
                             "testable_criteria": True},
-                "spec_markdown": node.get("spec_markdown", ""),
+                # v150: NEVER inherit the decomposer's spec verbatim — it was
+                # authored for the multi-child plan this collapse just rejected
+                # (src/db.py + src/app.py stayed in the prose and re-ordered
+                # the phantom modules). The engine REWRITES it for one module.
+                "spec_markdown": self._collapsed_core_spec(node),
             }
             node["children"] = [core]
             node.pop("atomic", None)            # the ROOT stays a branch
@@ -6104,6 +6208,18 @@ def %(callable)s(environ, start_response):
                       "base collapsed to one module; late requirements still "
                       "attach as further root children",
                       "small_product", "branch", level=L_MILESTONE)
+            # VERIFY the rewrite through the SAME deterministic ownership gate
+            # the card check runs (_card_completeness_findings, "NO node owns"):
+            # a clean collapse plans no src file outside its own module/entry.
+            # A finding here is a RED gate exactly as before — never swallowed.
+            _own_gaps = [g for g in self._card_completeness_findings(core)
+                         if "NO node owns" in g]
+            if _own_gaps:
+                self.emit("review", "engine", "", core["id"],
+                          "card gate: collapsed core spec still plans src "
+                          "file(s) no node owns",
+                          "; ".join(_own_gaps)[:300], "spec_lint", "FAIL",
+                          level=L_MILESTONE)
         else:
             # the gate: leaf vs branch. Atomicity is the PRIMARY judgment — an
             # explicit ``atomic`` field, else inferred from whether the decomposer
