@@ -1,0 +1,27 @@
+tests/audit/test_simulation_convergence.py
+  s_a7f45290e91181::t_4eaf8afe8796b2 1-144
+spec_flow_runner.py
+  s_a7f45290e91181::t_dcc901a75d08a5 234-242,653-657,2015-2020,4310-4322,4324-4326,4471-4480
+tests/audit/test_termination_invariants.py
+  s_a7f45290e91181::t_c3ac9ce0068b6e 1-103
+tests/audit/TAXONOMY.md
+  s_a7f45290e91181::t_e418343d04d8d0 1-68
+.claude/HANDOFF.md
+  s_a7f45290e91181::t_fb3db75e5c70ee 1,3-4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.6",
+  "base_commit_sha": "d7f39ddd45cd671108285ccf2386a1d12edc7fdf",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-fable-5"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
