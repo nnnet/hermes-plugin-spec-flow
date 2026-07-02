@@ -312,9 +312,13 @@ def _node_files(ws: pathlib.Path, nid: str) -> dict:
     # paths are returned relative to the RUN dir (ws is <run>/workspace), so the
     # /api/file endpoint (which resolves against the run dir) can read them
     sn = _snake(nid)
-    spec = ws / "specs" / f"{nid}.md"
+    # the runner writes specs as specs/<snake(id)>.md (e.g. root "L0" -> l0.md),
+    # so fall back to the snake stem when the raw id file is absent — otherwise
+    # the root spec never shows up while lowercase leaf ids match by accident
+    spec_stem = nid if ((ws / "specs" / f"{nid}.md").exists() or not sn) else sn
+    spec = ws / "specs" / f"{spec_stem}.md"
     versions = sorted("workspace/" + str(p.relative_to(ws))
-                      for p in (ws / "specs").glob(f"{nid}.v*.md")) \
+                      for p in (ws / "specs").glob(f"{spec_stem}.v*.md")) \
         if (ws / "specs").exists() else []
     code = ws / "src" / f"{sn}.py"
     test = ws / "tests" / f"test_{sn}.py"
@@ -322,7 +326,7 @@ def _node_files(ws: pathlib.Path, nid: str) -> dict:
                        for p in (ws / "contracts").glob(f"{nid}*")) \
         if (ws / "contracts").exists() else []
     return {
-        "spec": f"workspace/specs/{nid}.md" if spec.exists() else None,
+        "spec": f"workspace/specs/{spec_stem}.md" if spec.exists() else None,
         "versions": versions,
         "code": f"workspace/src/{sn}.py" if code.exists() else None,
         "test": f"workspace/tests/test_{sn}.py" if test.exists() else None,
@@ -435,7 +439,14 @@ def _table_html(rows: list[str]) -> str:
     for r in rest:
         out.append("<tr>" + "".join(f"<td>{_inline(c)}</td>" for c in cells(r)) + "</tr>")
     out.append("</tbody></table>")
-    return "".join(out)
+    tbl = "".join(out)
+    # Long markdown tables (e.g. the Footprint table on the report+audit tab)
+    # get the shared .cmpscroll wrapper: the header row stays pinned while the
+    # body scrolls in its own viewport instead of stretching the page. Short
+    # tables (kv blocks etc.) stay inline and unchanged.
+    if len(rest) > 15:
+        return f'<div class="cmpscroll" style="margin:8px 0">{tbl}</div>'
+    return tbl
 
 
 def _inline(s: str) -> str:
@@ -2501,11 +2512,13 @@ function timelineHTML(){
  const ts=t.map(e=>e.t).filter(x=>x!=null);const t0=ts.length?Math.min(...ts):0;
  const rows=t.slice().reverse().map(e=>{
   const rel=e.t!=null?('+'+fmtDur(e.t-t0)):'—';
-  return `<tr><td>${rel}</td><td>${e.tick??''}</td><td><span class=ph>${esc(e.phase)}</span></td><td>${esc(e.text)}</td><td>${e.verdict?('<b>'+esc(e.verdict)+'</b>'):''}</td></tr>`;
+  // node/task id column — which tree node the event belongs to
+  const node=e.node?`<code>${esc(e.node)}</code>`:'—';
+  return `<tr><td>${rel}</td><td>${node}</td><td>${e.tick??''}</td><td><span class=ph>${esc(e.phase)}</span></td><td>${esc(e.text)}</td><td>${e.verdict?('<b>'+esc(e.verdict)+'</b>'):''}</td></tr>`;
  }).join('');
  return '<p class=muted>сверху — последние по времени; «время» = от старта прогона; '+
   '«соб.№» — номер события в полном журнале (тут только вехи, поэтому номера с пропусками)</p>'+
-  '<div class=cmpscroll style="max-height:calc(100vh - 180px)"><table><thead><tr><th>время</th><th title="номер события в полном журнале прогона">соб.№</th><th>фаза</th><th>действие</th><th>вердикт</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+  '<div class=cmpscroll style="max-height:calc(100vh - 180px)"><table><thead><tr><th>время</th><th title="нода/задача из трассы (поле task)">нода</th><th title="номер события в полном журнале прогона">соб.№</th><th>фаза</th><th>действие</th><th>вердикт</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
 }
 
 // run comparison (П5): lazy-load /api/compare once, filter+sort client-side

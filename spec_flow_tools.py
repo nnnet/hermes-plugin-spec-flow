@@ -1930,20 +1930,30 @@ def render_footprints(events: list[dict], level: int = 2) -> str:
     says in the plainest terms what was produced; 'Артефакты' points to the exact
     workspace file a reviewer can open to see it."""
     rows = [
-        "| # | Кто | Что делал (технически) | 👶 Простыми словами: что вышло "
+        "| # | Нода | Кто | Что делал (технически) | 👶 Простыми словами: что вышло "
         "| 📦 Артефакты (что получили / над чем работали) | Тип |",
-        "|--:|---|---|---|---|---|",
+        "|--:|---|---|---|---|---|---|",
     ]
+    body: list[tuple[int, str]] = []
     for e in events:
         if int(_ev(e, "level") or 2) > level:
             continue
         icon = _PROFILE_ICON.get(_ev(e, "profile"), "·")
         who = f"{icon} {_ev(e, 'profile')}"
         kind, plain = _plain_outcome(e)
-        rows.append(
-            f"| {int(_ev(e,'tick') or 0)} | {who} | {_md(_ev(e,'action'))} "
-            f"| {plain} | {_artifact(e)} | {kind} |"
-        )
+        # node/task id from the trace event, shown as its own column so every
+        # row is attributable to a tree node at a glance
+        task = _md(_ev(e, "task")) or "—"
+        node_cell = f"`{task}`" if task != "—" else "—"
+        tick = int(_ev(e, "tick") or 0)
+        body.append((
+            tick,
+            f"| {tick} | {node_cell} | {who} | {_md(_ev(e,'action'))} "
+            f"| {plain} | {_artifact(e)} | {kind} |",
+        ))
+    # newest first: sort rows by event number descending (stable within a tick)
+    body.sort(key=lambda r: r[0], reverse=True)
+    rows.extend(r[1] for r in body)
     return "\n".join(rows)
 
 
