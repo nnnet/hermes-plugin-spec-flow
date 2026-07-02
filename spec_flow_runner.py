@@ -6529,11 +6529,39 @@ def %(callable)s(environ, start_response):
         if hitl:
             kind = hitl.get("kind", "node") if isinstance(hitl, dict) else "node"
             why = hitl.get("reason", "") if isinstance(hitl, dict) else str(hitl)
-            if not self._hitl(kind, nid, why or f"human approval required for {title}"):
+            ask = why or f"human approval required for {title}"
+            approved = self._hitl(kind, nid, ask)
+            # A rejection sends the node into REWORK and re-asks the human —
+            # it must never fall through to DONE (v150: the rejection branch
+            # emitted the rework event, then the node was counted completed).
+            rounds, budget = 0, int(getattr(self, "_hitl_max_rework", 1))
+            while not approved and rounds < budget:
+                rounds += 1
                 self.tasks[nid].version += 1
                 self.tasks[nid].runs += 1
                 self.emit("hitl", "implementer", "spec-implement", nid,
                           "rework after HITL rejection", why, level=L_MILESTONE)
+                if verdict == "leaf":
+                    # the same repair channel the doctor uses: re-run the
+                    # implementer on this leaf's module with the rejection as
+                    # the repair directive (no-op in a simulated run)
+                    self._remedy_rework_module(self._module_for(nid),
+                                               "HITL rejection: " + ask)
+                approved = self._hitl(kind, nid, ask)
+            if not approved:
+                # terminal rejection is an honest failure, never DONE: the
+                # node stays out of the completed count and the run journal
+                # (a resume must re-do it), and the ledger says why.
+                self.tasks[nid].status = "rejected"
+                self.emit("hitl", "implementer", "spec-implement", nid,
+                          "node REJECTED after the HITL rework budget", ask,
+                          "hitl", "rejected", level=L_MILESTONE)
+                self.loops.append({"type": "hitl-reject", "kind": kind,
+                                   "task": nid,
+                                   "detail": "node stays rejected after "
+                                             f"{rounds} rework round(s)"})
+                self._research_tick(node, depth)
+                return
 
         self.tasks[nid].status = "done"
         self._completed += 1
