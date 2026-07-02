@@ -1,0 +1,19 @@
+.claude/HANDOFF.md
+  s_a7f45290e91181::t_a4c2a66332bc1b 3-6,8-18,20-35,39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.6",
+  "base_commit_sha": "83d91f3bc94d91f93ada5d2ca32c5eeda1e13312",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
