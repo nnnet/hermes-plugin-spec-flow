@@ -4642,7 +4642,7 @@ def %(callable)s(environ, start_response):
         # real code exists), build+run the product and assert readiness against
         # the acceptance spec.
         if self.depth >= DEPTH_PRODUCT:
-            self._product_check(project.get("acceptance"))
+            self._product_check(project.get("acceptance"), root_red=root_red)
 
         # C3: enforce the R1-R9 invariants at runtime (opt-in). A hard breach
         # raises InvariantViolation rather than passing silently to the report.
@@ -6740,7 +6740,8 @@ def %(callable)s(environ, start_response):
         detail = sout.split(marker, 1)[1].strip() if marker in sout else sout.strip()
         return False, "assembled product does not serve its contract: " + detail[:300]
 
-    def _product_check(self, acceptance: Optional[dict]) -> None:
+    def _product_check(self, acceptance: Optional[dict],
+                       root_red: bool = False) -> None:
         """Build+run the materialised product and assert it is READY against an
         acceptance spec, writing PRODUCT-RESULTS.md.
 
@@ -6869,6 +6870,20 @@ def %(callable)s(environ, start_response):
                       "interface edge check", _pf, "plan_gate", "",
                       level=L_MILESTONE)
 
+        # Honest AND (task #131): the product cannot be READY while the
+        # project's own root integrate gate is RED. The acceptance checks above
+        # probe only the base contract that yields a literal route to hit; a
+        # DECLARED leaf phrased as prose (a late "add an about page" that names
+        # no `GET /about`) produces a decomposer node with no address to probe,
+        # so it stays invisible to the boot-gate, and — being RED — never merges
+        # its tests into the corpus Phase 7 scans. The leaf's terminal state is
+        # authoritative: v144 shipped meta.status=READY over a root integrate
+        # recorded FAIL. READY now requires BOTH a passing acceptance AND a
+        # green project integrate.
+        if root_red:
+            record("integrate", "L0:integrate", False,
+                   "project integrate RED — a declared leaf is not green; the "
+                   "product is incomplete regardless of the base-contract smoke")
         ready = bool(lines) and not failed
         verdict = "READY" if ready else "NOT READY"
         head = [f"# Product readiness (depth={depth_name})", "",

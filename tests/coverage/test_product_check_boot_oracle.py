@@ -83,6 +83,29 @@ def test_product_status_recorded_not_ready_with_failed_checks():
     assert e._product_failed, "the failed acceptance checks must be captured"
 
 
+# ── task #131: honest AND — READY requires a GREEN project integrate ─────────
+# v144 shipped meta.status=READY while the root integrate gate recorded FAIL: a
+# late prose requirement ("add an about page", no literal route) became a RED
+# leaf the base-contract smoke never probed. A passing acceptance MUST NOT lift
+# a red project to READY.
+
+def test_root_red_forces_not_ready_even_when_acceptance_passes():
+    e = _eng((True, "all routes answered"))   # base contract boots & serves
+    e._product_check(_ACCEPT, root_red=True)  # but the project integrate is RED
+    md = e.workspace.written["PRODUCT-RESULTS.md"]
+    assert e._product_status == "NOT READY", (
+        "a passing base-contract smoke must not lift a RED project to READY")
+    assert "NOT READY" in md
+    assert "integrate RED" in md
+
+
+def test_root_green_keeps_ready():
+    # back-compat: a green project with a passing acceptance is still READY.
+    e = _eng((True, "all routes answered"))
+    e._product_check(_ACCEPT, root_red=False)
+    assert e._product_status == "READY"
+
+
 # ── boot-gate robustness: a malformed body must be 4xx, never a 5xx crash ───
 import pathlib                                              # noqa: E402
 
