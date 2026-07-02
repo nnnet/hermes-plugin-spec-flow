@@ -8045,11 +8045,32 @@ def dump_trace(res: RunResult) -> str:
     return "\n".join(json.dumps(asdict(e), ensure_ascii=False) for e in res.events) + "\n"
 
 
+def _run_outcome(res: RunResult) -> "tuple[bool, str]":
+    """The run's REAL terminal outcome for the report head. Green only when the
+    root integrate closed clean AND (if asserted) the product verdict is READY.
+    v150: the head printed an unconditional green checkmark over a NOT READY
+    run with a recorded root FAIL, and the summary parser classified the run
+    by that substring — the head is a verdict carrier, never decor."""
+    root_id = str((res.project.get("tree") or {}).get("id", "L0"))
+    root_red = any(l.get("type") == "integrate-fail"
+                   and str(l.get("task")) == root_id
+                   for l in res.loops)
+    integ = res.tasks.get(f"{root_id}:integrate")
+    if integ is not None and getattr(integ, "status", "") == "failed":
+        root_red = True
+    if res.product_status == "NOT READY":
+        return False, "product NOT READY"
+    if root_red:
+        return False, "root integrate FAIL"
+    return True, "L0 integrate done"
+
+
 def render_report(res: RunResult, level: int = None) -> str:
     proj = res.project
     level = level if level is not None else res.verbosity
     ok_sk = res.skills_used >= ALL_SKILLS
     ok_pr = res.profiles_used >= ALL_PROFILES
+    done_ok, done_why = _run_outcome(res)
     shown = sum(1 for e in res.events if e.level <= level)
     head = [
         "# spec-flow — отчёт полного прогона проекта",
@@ -8059,7 +8080,7 @@ def render_report(res: RunResult, level: int = None) -> str:
         "",
         f"> Все скиллы задействованы: {'✅' if ok_sk else '❌'} · "
         f"все профили задействованы: {'✅' if ok_pr else '❌'} · "
-        f"проект завершён: ✅ (L0 integrate done)",
+        f"проект завершён: {'✅' if done_ok else '❌'} ({done_why})",
         "",
         "Источник отчёта — событийный поток прогона (`RunResult.events`): "
         "определение проекта (YAML кейса) + возвраты **настоящих** тулзов "
