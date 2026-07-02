@@ -850,6 +850,45 @@ def _amend_routes(text: str) -> set:
     return {r for r in out if len(r) > 1}
 
 
+def _amend_route_pairs(text: str) -> set:
+    """(METHOD, path) operations a text declares via an explicit HTTP verb
+    (`DELETE /notes/{id}` -> ('DELETE', '/notes')). Bare quoted `/path` literals
+    carry no verb and are context, not operations, so they are excluded. The
+    METHOD dimension is what stops a NEW verb on an EXISTING path (a late
+    `DELETE /notes` over an existing POST/GET /notes) from reading as a duplicate
+    surface — the v143 false fold."""
+    out = set()
+    for m, p in re.findall(
+            r"\b(GET|POST|PUT|DELETE|PATCH)\s+(/[A-Za-z0-9_./-]+)", text, re.I):
+        path = p.rstrip("/.,;:)\"'")
+        if len(path) > 1:
+            out.add((m.upper(), path))
+    return out
+
+
+def _served_route_pairs(body: str) -> set:
+    """(METHOD, path) operations a module actually SERVES. Path ownership comes
+    from _served_routes (real dispatch evidence only); the METHOD is harvested
+    from the SAME dispatch line when present (`path == '/notes' and method ==
+    'POST'`, or a ('POST','/notes') table key). When a served path carries no
+    detectable method the pair is (None, path) — an ambiguous op that matches any
+    verb on that path (conservative: never manufactures a false NEW verb)."""
+    pairs: set = set()
+    for line in body.splitlines():
+        served = _served_routes(line)
+        if not served:
+            continue
+        methods = {m.upper() for m in re.findall(
+            r"\b(GET|POST|PUT|DELETE|PATCH)\b", line, re.I)}
+        for p in served:
+            if methods:
+                for m in methods:
+                    pairs.add((m, p))
+            else:
+                pairs.add((None, p))
+    return pairs
+
+
 def _verb_declared_routes(text: str) -> set:
     """Routes a text declares EXPLICITLY via an HTTP verb (`GET /x`, `DELETE
     /y`). Unlike _amend_routes this drops bare quoted-path literals: a `/notes`
@@ -1203,12 +1242,16 @@ def _dup_surface_findings(spec_text: str, modules: list) -> list:
     fuzzy token set the amend router uses — so a shared domain noun ('notes')
     can never raise a false duplicate.
     """
-    spec_routes = _amend_routes(spec_text)
+    # Route surface is keyed on (METHOD, path) PAIRS, not bare paths: a NEW verb
+    # on an EXISTING path (a late `DELETE /notes/{id}` over an existing POST/GET
+    # /notes) is genuine new surface, not a duplicate. Comparing paths alone
+    # folded that legitimate delta as an empty delta (v143). Symbols stay strings.
+    spec_pairs = _amend_route_pairs(spec_text)
     spec_syms = _amend_symbols(spec_text)
-    spec_struct = spec_routes | spec_syms
+    spec_struct = spec_pairs | spec_syms
     if not spec_struct:                       # no structural surface → not our call
         return []
-    all_routes: set = set()
+    all_pairs: set = set()
     all_syms: set = set()
     per_mod = []
     for rel, _stem, body in modules:
@@ -1216,21 +1259,32 @@ def _dup_surface_findings(spec_text: str, modules: list) -> list:
         # (dispatch evidence), not merely names it in prose/comment/error text —
         # otherwise a stray '/ui' literal makes it the false owner and blocks a
         # legitimate late requirement as an empty delta (live v101).
-        r, s = _served_routes(body), _amend_symbols(body)
+        r, s = _served_route_pairs(body), _amend_symbols(body)
         per_mod.append((rel, r, s, r | s))
-        all_routes |= r
+        all_pairs |= r
         all_syms |= s
-    all_struct = all_routes | all_syms
+    all_struct = all_pairs | all_syms
+
+    def _owned(pair: tuple) -> bool:
+        # exact (method, path) match, or the owner serves that path with an
+        # unreadable method (None) — conservative: never invent a false new verb.
+        m, p = pair
+        return (m, p) in all_pairs or (None, p) in all_pairs
+
+    def _fmt(pairs: set) -> list:
+        return sorted(f"{m or '*'} {p}" for m, p in pairs)
+
     findings: list = []
-    # 1) coarse — routes: the spec restates existing route(s) and adds none new
-    restated_r = spec_routes & all_routes
-    if spec_routes and restated_r and not (spec_routes - all_routes):
-        owners = sorted({rel for rel, r, _s, _u in per_mod if r & restated_r})
+    # 1) coarse — routes: the spec restates existing operation(s) and adds none new
+    restated_r = {pr for pr in spec_pairs if _owned(pr)}
+    if spec_pairs and restated_r and not (spec_pairs - restated_r):
+        owners = sorted({rel for rel, r, _s, _u in per_mod
+                         if any(pr in r or (None, pr[1]) in r for pr in restated_r)})
         findings.append(
-            f"route-redeclare: this spec restates HTTP route(s) "
-            f"{sorted(restated_r)} already served by {owners} and introduces no "
-            "new route — describe ONLY the new behaviour (the delta), or let it "
-            "be folded into the owning module; do not re-declare existing routes")
+            f"route-redeclare: this spec restates HTTP operation(s) "
+            f"{_fmt(restated_r)} already served by {owners} and introduces no "
+            "new operation — describe ONLY the new behaviour (the delta), or let "
+            "it be folded into the owning module; do not re-declare existing routes")
     # 2) symbols: the spec restates existing symbol(s) and defines none new
     restated_s = spec_syms & all_syms
     if spec_syms and restated_s and not (spec_syms - all_syms):
