@@ -114,6 +114,12 @@ def fake_openai():
         started.append(srv)
         lb.BASE_URL, lb.API_KEY = srv.base_url, "test-key"
         lb.RETRIES, lb.BACKOFF, lb.BACKEND = retries, backoff, "openai"
+        # fresh run-scoped provider health, so per-model breakers and the global
+        # free-pool cooldown never leak across tests (a 429 test would otherwise
+        # leave _free_down_until in the future and short-circuit the next test).
+        lb._MODEL_DOWN.clear(); lb._MODEL_5XX.clear(); lb._MODEL_429.clear()
+        lb._MODEL_OK.clear(); lb._provider_breaker.clear()
+        lb._free_down_until = 0.0
         return srv
 
     yield _make

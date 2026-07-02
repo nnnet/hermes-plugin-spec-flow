@@ -124,6 +124,7 @@ def configure_workers(cfg: dict | None) -> None:
         WORKERS_CFG.pop("stages", None)
     _calls_made = 0          # a fresh case starts with a fresh budget
     _MODEL_5XX.clear()       # fresh per-model health for the new run
+    _MODEL_429.clear()       # fresh per-model quota ledger for the new run
     _MODEL_DOWN.clear()
     _MODEL_OK.clear()        # fresh per-model success ledger for the new run
     # A case workers block overrides the transport floor (.test.env) ONLY for
@@ -171,6 +172,16 @@ _counters_lock = threading.Lock()
 # Reset per run in configure(). Threshold: workers.model_breaker_5xx (default 2).
 _MODEL_5XX: "dict[str, int]" = {}
 _MODEL_DOWN: "set[str]" = set()
+# Companion breaker for QUOTA (429). Unlike a 5xx, a 429 is normally transient
+# (the free pool refills), so the chain WAITS on it rather than retiring the
+# model. But a DAILY-exhausted free pool 429s continuously — waiting is then
+# futile and every call crawls through `quota_retries` dead rounds before the
+# claude/Meridian rotation is even tried. So count 429s cumulatively: once a
+# model crosses `model_breaker_429` (default 4) it is retired for the run like a
+# 5xx, and EVERY role (decomposer/coder/tester/…) falls straight through to the
+# healthy subscription fallback (claude via Meridian) with no further waiting.
+# This is provider-health routing, case-independent — not a per-case model swap.
+_MODEL_429: "dict[str, int]" = {}
 # models that produced at least one real answer THIS run. A model with a track
 # record is the workhorse — a single transient timeout under load must not
 # retire it for the rest of the run (live v096: claude/sonnet timed out once at
@@ -825,9 +836,17 @@ def ask(prompt: str, *, model: str, role: str, step: str,
         # survivor instead of a guaranteed timeout. Model-independent (no names).
         live = [m for m in chain if m not in _MODEL_DOWN]
         if not live:
-            _cand = list(dict.fromkeys(list(rotation) + list(chain)))
-            _cand.sort(key=lambda _m: _MODEL_5XX.get(_m, 0))
-            live = _cand[:1] or chain[-1:]
+            # every chain model is retired -> route to the least-failed KNOWN
+            # model, PREFERRING the rotation (claude via Meridian, which carries
+            # no free daily quota). Exclude retired models where possible and
+            # rank by TOTAL failures (5xx + 429) so an exhausted free pool never
+            # wins the tie back (a 429-retired model has 5xx=0 and would
+            # otherwise sort first). claude stays the guaranteed last resort.
+            _cand = [m for m in (list(rotation) + list(chain))
+                     if m not in _MODEL_DOWN]
+            _cand = list(dict.fromkeys(_cand))
+            _cand.sort(key=lambda _m: _MODEL_5XX.get(_m, 0) + _MODEL_429.get(_m, 0))
+            live = _cand[:1] or (list(rotation)[:1] or chain[-1:])
         _brk = int((cfg or {}).get("model_breaker_5xx", 2))
         for i, m in enumerate(live):
             _spend_call()
@@ -875,6 +894,19 @@ def ask(prompt: str, *, model: str, role: str, step: str,
                         _MODEL_DOWN.add(m)
                         _log_event({"event": "model_circuit_open", "model": m,
                                     "reason": _reason, "count": _MODEL_5XX[m]})
+                elif _reason == "429" or isinstance(exc, QuotaExhausted):
+                    # QUOTA breaker: a free pool that keeps 429ing is exhausted
+                    # for the day. Waiting on it is futile — count cumulatively
+                    # and retire it for the run once it crosses model_breaker_429,
+                    # so every role (decomposer/coder/tester/…) falls straight
+                    # through to the healthy subscription fallback (claude via
+                    # Meridian) instead of crawling through dead quota rounds.
+                    _MODEL_429[m] = _MODEL_429.get(m, 0) + 1
+                    _q_at = int((cfg or {}).get("model_breaker_429", 4))
+                    if _MODEL_429[m] >= _q_at and m not in _MODEL_DOWN:
+                        _MODEL_DOWN.add(m)
+                        _log_event({"event": "model_circuit_open", "model": m,
+                                    "reason": "429", "count": _MODEL_429[m]})
                 # record the fallback hop so the dashboard shows which model
                 # failed (and why) and what was tried next
                 _nxt = live[i + 1] if i + 1 < len(live) else (

@@ -106,6 +106,57 @@ def test_per_model_breaker_retires_a_5xx_model(fake_openai):
     assert bad_calls == 2, f"retired model must not be retried; got {bad_calls}"
 
 
+def test_per_model_breaker_retires_a_429_exhausted_free_pool(fake_openai):
+    """A free pool that keeps 429ing is exhausted for the DAY — waiting on it is
+    futile and every call crawls through dead quota rounds. After N cumulative
+    429s the model must be retired for the run so every role falls straight
+    through to the healthy subscription fallback (claude via Meridian), not the
+    corpse. Systemic provider-health routing, independent of any case config."""
+    # the exhausted free pool 429s; the healthy fallback is claude via Meridian —
+    # here modelled as claude routed through a gateway pointed at the fake server
+    # (the same claude-http path a real run uses), so it answers deterministically
+    # AND bypasses the global free-pool cooldown (a free stand-in could not — the
+    # cooldown blocks EVERY free model once one 429s).
+    def router(payload):
+        m = payload.get("model", "")
+        return (429, "rate limited") if "xiaomimimo" in m else (200, ok("fine"))
+    srv = fake_openai(router, retries=1, backoff=0)   # one attempt, no backoff
+    lb.configure_workers({"model_breaker_429": 2, "quota_wait_s": 0,
+                          "claude_gateway": {"base_url": srv.base_url,
+                                             "model_map": {"sonnet": "healthy"}}})
+    lb.BASE_URL = srv.base_url
+    exhausted, good = "xiaomimimo/mimo:free", "claude/sonnet"
+    outs = [lb.ask("hi", model=exhausted, role="tester", step="s",
+                   fallbacks=(good,)) for _ in range(3)]
+    assert all(o == "fine" for o in outs), outs
+    assert exhausted in lb._MODEL_DOWN, "429-exhausted pool must be circuit-broken"
+    assert lb.last_call.get("backend") == "claude-http", lb.last_call
+
+
+def test_429_retired_single_chain_rolls_to_claude(fake_openai, monkeypatch):
+    """The exact live crawl (v142): the tester was pinned to the free pool with no
+    per-call fallback; once the free daily quota was spent every call kept 429ing.
+    After retirement the single-model chain must roll to the rotation (claude via
+    Meridian) — the emergency picker must NOT re-pick the 429-retired corpse (it
+    has 5xx=0 and would otherwise win the failure-count tie)."""
+    monkeypatch.setenv("SPEC_FLOW_LLM_BACKOFF", "0")
+    def router(payload):
+        m = payload.get("model", "")
+        return (429, "rate limited") if "xiaomimimo" in m else (200, ok("fine"))
+    srv = fake_openai(router, retries=1, backoff=0)
+    exhausted = "xiaomimimo/mimo:free"
+    lb.configure_workers({"model_breaker_429": 1, "quota_retries": 0,
+                          "quota_wait_s": 0, "fallback_models": ["claude/sonnet"],
+                          "claude_gateway": {"base_url": srv.base_url,
+                                             "model_map": {"sonnet": "healthy"}}})
+    lb.BASE_URL = srv.base_url
+    outs = [lb.ask("hi", model=exhausted, role="tester", step="s")
+            for _ in range(4)]
+    assert all(o == "fine" for o in outs), outs
+    assert exhausted in lb._MODEL_DOWN
+    assert lb.last_call.get("backend") == "claude-http", lb.last_call
+
+
 def test_retired_single_model_chain_rolls_to_healthy_fallback(fake_openai):
     """v133 cost sink (#83): a one-model weak tier whose only model retired kept
     paying its 75s timeout EVERY call — `or chain[-1:]` forced the dead model
