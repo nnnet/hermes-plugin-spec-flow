@@ -6477,8 +6477,16 @@ def %(callable)s(environ, start_response):
                             if tgts:
                                 vctx["test_targets"] = tgts
                         vout = verifier(vctx) or {}
-                        st = "FAIL" if str(vout.get("status", "PASS")).upper() == "FAIL" else "PASS"
-                        return st, str(vout.get("detail", ""))[:300]
+                        # PASS/FAIL are taken verbatim; ANY other status
+                        # (ERROR, SKIP, garbage) is surfaced as ERROR — an
+                        # unclean determination must never count green (v150:
+                        # everything but the literal "FAIL" became a PASS).
+                        raw = str(vout.get("status", "PASS")).strip().upper()
+                        detail = str(vout.get("detail", ""))[:300]
+                        if raw not in ("PASS", "FAIL"):
+                            return "ERROR", ("verifier returned unrecognised "
+                                             "status %r: %s" % (raw, detail))[:300]
+                        return raw, detail
                     except Exception as exc:  # noqa: BLE001
                         return "ERROR", str(exc)[:200]
 
