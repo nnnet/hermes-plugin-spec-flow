@@ -1314,6 +1314,14 @@ def _synthesize_lib_entry(owner_by_symbol: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _hermetic_probe_env() -> dict:
+    """Environment for a hermetic probe subprocess: the inherited env minus
+    PYTHONPATH. Paired with ``python3 -I`` (which already ignores PYTHON*
+    vars and the user site) as belt-and-braces — the probe must resolve
+    imports ONLY from the workspace, the stdlib and system site-packages."""
+    return {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+
+
 def _capability_probe_src(entry_module: str, symbol: str) -> str:
     """#C4 — a BEHAVIOUR-acceptance probe for a non-web product: import the
     entry and assert the described capability is present and callable. This is
@@ -1323,7 +1331,12 @@ def _capability_probe_src(entry_module: str, symbol: str) -> str:
     a fresh, hermetic subprocess (src-only path). Pure/deterministic."""
     sym = symbol.split("(")[0].strip()
     return (
-        "import importlib, sys\n"
+        # the caller runs this under `python3 -I` (no PYTHONPATH, no user
+        # site, no implicit cwd) — the probe adds its cwd (the src dir)
+        # itself, so imports resolve ONLY from the workspace + stdlib +
+        # system site-packages, matching the hermetic-suite boundary
+        "import importlib, os, sys\n"
+        "sys.path.insert(0, os.getcwd())\n"
         "m = importlib.import_module(%r)\n"
         "assert hasattr(m, %r), 'entry %s does not expose %s'\n"
         "assert callable(getattr(m, %r)) or getattr(m, %r) is not None, "
@@ -7516,9 +7529,15 @@ def %(callable)s(environ, start_response):
         for sym in (c.get("exposes") or c.get("callable") or []):
             probe = _capability_probe_src(entry_stem, sym)
             try:
+                # -I (isolated) + a scrubbed env: host PYTHONPATH / user-site
+                # .pth files must never satisfy a workspace import (v149 —
+                # a phantom import resolved into an unrelated host repo and
+                # turned an honest RED into a false green). The probe inserts
+                # its cwd (the src dir) itself.
                 proc = subprocess.run(
-                    ["python3", "-c", probe], capture_output=True, text=True,
-                    timeout=60, cwd=str(src))
+                    ["python3", "-I", "-c", probe], capture_output=True,
+                    text=True, timeout=60, cwd=str(src),
+                    env=_hermetic_probe_env())
                 sout = (proc.stdout or "") + (proc.stderr or "")
             except Exception as exc:  # noqa: BLE001
                 return False, "capability probe could not run: %s" % exc
@@ -7554,9 +7573,14 @@ def %(callable)s(environ, start_response):
             "json_roundtrip": boot.get("json_roundtrip", ""),
             "extra_routes": c.get("routes", [])})
         try:
+            # -I (isolated) + a scrubbed env — same sterile-oracle boundary as
+            # the capability probe and the hermetic suite: the probe prepends
+            # ws/src itself, nothing else from the host may satisfy an import.
             proc = subprocess.run(
-                ["python3", "-c", _ROOT_BOOT_PROBE, str(ws.root), probe_cfg],
-                capture_output=True, text=True, timeout=60)
+                ["python3", "-I", "-c", _ROOT_BOOT_PROBE, str(ws.root),
+                 probe_cfg],
+                capture_output=True, text=True, timeout=60,
+                env=_hermetic_probe_env())
             sout = (proc.stdout or "") + (proc.stderr or "")
         except Exception as exc:  # noqa: BLE001
             return False, f"boot-gate could not run the product: {exc}"
