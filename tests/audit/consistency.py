@@ -465,6 +465,96 @@ def check_route_contract_distinct(run_dir: Path) -> list[Finding]:
     return findings
 
 
+# the deterministic entry synthesized by the engine carries this docstring
+_ENTRY_MARKER = "generated deterministically by the spec-flow engine"
+
+
+def _route_table_of(path: Path) -> set[tuple[str, str]]:
+    """(METHOD, path) keys of every module-level dict keyed by 2-string
+    tuples — the dispatch-table shape both leaf modules and the synthesized
+    entry use. AST-only, no import."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, SyntaxError, ValueError):
+        return set()
+    routes: set[tuple[str, str]] = set()
+    for node in tree.body:
+        if not (isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict)):
+            continue
+        for key in node.value.keys:
+            if (
+                isinstance(key, ast.Tuple)
+                and len(key.elts) == 2
+                and all(
+                    isinstance(e, ast.Constant) and isinstance(e.value, str)
+                    for e in key.elts
+                )
+            ):
+                method = key.elts[0].value.strip().upper()
+                p = key.elts[1].value.strip()
+                if method in HTTP_METHODS and p.startswith("/"):
+                    routes.add((method, p.rstrip("/") or "/"))
+    return routes
+
+
+def check_module_routes_reach_entry(run_dir: Path, tree: dict) -> list[Finding]:
+    """Late-requirement assembly loss (v150): a route present in a feature
+    module's OWN dispatch table must be served by the assembled entry too.
+
+    v150: красивый_вид's in-place edit put ('GET', '/') into the notes
+    owner's table; the neutralizer replaced the owner's WSGI callable with a
+    delegator to the declared entry, which never wired GET / — the feature
+    was silently dropped while every leaf stayed green (4 suite tests red
+    forever). A dropped table route means the late requirement never reached
+    its contribution to the assembly AND no node went honestly red for it.
+
+    Silent when the entry is undetectable or carries no dispatch table (a
+    promote-path entry delegates to the rival wholesale, serving its routes).
+    """
+    src = run_dir / "workspace" / "src"
+    if not src.is_dir():
+        return []
+    entry: Path | None = None
+    for py in sorted(src.glob("*.py")):
+        try:
+            head = py.read_text(encoding="utf-8", errors="replace")[:400]
+        except OSError:
+            continue
+        if _ENTRY_MARKER in head:
+            entry = py
+            break
+    if entry is None:
+        for node in walk_nodes(tree):
+            target = node.get("code_target")
+            if node.get("id") == "product_entry" and target:
+                cand = run_dir / "workspace" / str(target)
+                if cand.is_file():
+                    entry = cand
+                break
+    if entry is None:
+        return []
+    entry_routes = _route_table_of(entry)
+    if not entry_routes:
+        return []  # delegating entry: the rival's own router serves its table
+    findings: list[Finding] = []
+    for py in sorted(src.glob("*.py")):
+        if py == entry or py.name == "__init__.py":
+            continue
+        for method, p in sorted(_route_table_of(py) - entry_routes):
+            findings.append(
+                Finding(
+                    file=f"src/{py.name}",
+                    kind="module_route_not_wired_in_entry",
+                    message=(
+                        f"{method} {p} is served by {py.name}'s own dispatch "
+                        "table but the assembled entry never wires it — the "
+                        "late requirement's contribution was dropped at assembly"
+                    ),
+                )
+            )
+    return findings
+
+
 def check_src_orphans(run_dir: Path, tree: dict) -> list[Finding]:
     """Every workspace/src/*.py must be owned by a node or the declared entry."""
     owned = owned_modules(tree)
@@ -506,6 +596,7 @@ def audit(run_dir: Path) -> list[Finding]:
     findings.extend(check_meta_vs_results(run_dir))
     findings.extend(check_src_orphans(run_dir, tree))
     findings.extend(check_route_contract_distinct(run_dir))
+    findings.extend(check_module_routes_reach_entry(run_dir, tree))
     return findings
 
 

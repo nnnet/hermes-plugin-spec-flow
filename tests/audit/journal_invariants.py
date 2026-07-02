@@ -13,7 +13,10 @@ detail, gate, verdict, level. Rules (each violation becomes a Finding):
    earlier pass the card gate (a "card gate"/"card completeness" event) or
    an explicit review-tiering skip.
 4. late requirement ownership — every "late requirement materialized/routed"
-   event must be followed by further events for that node (someone owns it).
+   event must be followed by events for that node (someone owns it) AND the
+   node must close: reach ``to_done`` or an honest FAIL/rejected verdict.
+   (The artifact half — the contribution actually being WIRED into the
+   assembled entry — is consistency.check_module_routes_reach_entry.)
 5. failure closure — every milestone-level FAIL (level == 1) must later be
    answered by a remedy/rework/reconcile/repair event for the same node OR
    the run must terminate NOT READY. A FAIL must never hang silently on a
@@ -169,13 +172,34 @@ def check_done_after_card_gate(events: list[dict], journal: str) -> list[Finding
 
 
 def check_late_requirement_ownership(events: list[dict], journal: str) -> list[Finding]:
-    """Every late requirement must be followed by events for its node (an owner)."""
+    """Every late requirement must reach a CLOSED state, not merely be touched.
+
+    Two-level rule: (a) some later event must pick the node up at all
+    (an owner exists); (b) the node must then either complete (``to_done``)
+    or go honestly red (a FAIL/rejected verdict on the node). A late request
+    that is touched but never closes either way silently evaporates — the
+    journal-level half of «every late request reaches its contribution to
+    the assembly or yields an honest red node» (the artifact-level half —
+    the contribution actually being WIRED — lives in
+    consistency.check_module_routes_reach_entry).
+    """
     findings: list[Finding] = []
     for index, event in enumerate(events):
         if not _LATE_REQ_MARKER.search(str(event.get("action", ""))):
             continue
         node = _base_task(event)
-        owned = any(_base_task(later) == node for later in events[index + 1:])
+        owned = closed = False
+        for later in events[index + 1:]:
+            if _base_task(later) != node:
+                continue
+            owned = True
+            if later.get("action") == "to_done":
+                closed = True
+                break
+            if str(later.get("verdict", "")).strip().upper() in (
+                    "FAIL", "REJECTED"):
+                closed = True  # an honest red node also closes the request
+                break
         if not owned:
             findings.append(
                 Finding(
@@ -184,6 +208,18 @@ def check_late_requirement_ownership(events: list[dict], journal: str) -> list[F
                     message=(
                         f"event #{index}: late requirement materialized for node {node!r} "
                         "but no later event ever picks it up"
+                    ),
+                )
+            )
+        elif not closed:
+            findings.append(
+                Finding(
+                    file=journal,
+                    kind="late_requirement_unclosed",
+                    message=(
+                        f"event #{index}: late requirement for node {node!r} was "
+                        "picked up but never reached to_done nor an honest "
+                        "FAIL/rejected verdict"
                     ),
                 )
             )

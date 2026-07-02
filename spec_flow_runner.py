@@ -3828,6 +3828,73 @@ class Engine:
         "conn", "connection", "db", "database", "session", "cursor", "engine",
         "txn", "tx", "pool", "client", "store", "repo", "repository", "dao"})
 
+    def _adopted_route_tables(self) -> dict:
+        """Assembly-time route ADOPTION (v150). A built module may carry its
+        own dispatch table — a module-level dict keyed by ``("METHOD",
+        "/path")`` tuples mapping to its handler functions. That table is the
+        ONLY carrier of a route a late requirement added by editing the owner
+        module in place (v150: красивый_вид put ``('GET', '/')`` into the
+        notes owner's table; the neutralizer then replaced the owner's WSGI
+        callable with a delegator to the declared entry, which never wired
+        ``GET /`` — the feature was silently dropped and four suite tests
+        stayed red forever while every leaf was green).
+
+        Pure AST over non-entry ``src/*.py``: returns ``{(method, path):
+        (module_stem, func_name)}`` for CONCRETE routes whose handler is a
+        module-level dispatchable def (not raw WSGI, not a storage function).
+        Consumers MERGE these into the declared set — adoption extends the
+        served contract, it never overrides a declared route."""
+        ws = self.workspace
+        out: dict = {}
+        if not (getattr(ws, "enabled", False) and getattr(ws, "root", None)):
+            return out
+        try:
+            entry_name = Path((self._product_contract() or {})
+                              .get("entry") or "").name
+        except Exception:        # noqa: BLE001 — no contract = nothing to skip
+            entry_name = ""
+        src = Path(ws.root) / "src"
+        if not src.is_dir():
+            return out
+        for py in sorted(src.glob("*.py")):
+            if py.name in (entry_name, "__init__.py") \
+                    or py.name.startswith("_"):
+                continue
+            try:
+                tree = ast.parse(py.read_text(encoding="utf-8",
+                                              errors="replace"))
+            except (OSError, SyntaxError):
+                continue
+            defs = {n.name: [a.arg for a in n.args.args]
+                    for n in tree.body
+                    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+            for n in tree.body:
+                if not (isinstance(n, ast.Assign)
+                        and isinstance(n.value, ast.Dict)):
+                    continue
+                for k, v in zip(n.value.keys, n.value.values):
+                    if not (isinstance(k, ast.Tuple) and len(k.elts) == 2
+                            and all(isinstance(e, ast.Constant)
+                                    and isinstance(e.value, str)
+                                    for e in k.elts)
+                            and isinstance(v, ast.Name)):
+                        continue
+                    method = k.elts[0].value.strip().upper()
+                    path = k.elts[1].value.strip()
+                    if method not in ("GET", "POST", "PUT", "PATCH", "DELETE") \
+                            or not path.startswith("/") or "{" in path:
+                        continue
+                    params = defs.get(v.id)
+                    # only a dispatchable business handler: defined HERE, not
+                    # raw WSGI, first param is a request datum not a storage
+                    # dependency (same rule as the resolver)
+                    if (not params
+                            or params[:2] == ["environ", "start_response"]
+                            or params[0].lower() in self._DEP_FIRST_PARAMS):
+                        continue
+                    out.setdefault((method, path), (py.stem, v.id))
+        return out
+
     def _resolve_route_handlers(self, contract: dict) -> tuple:
         """Pure-AST resolver: map each declared (method, path) to the leaf
         handler already built under src/. A handler is a module-level function
@@ -3919,7 +3986,13 @@ class Engine:
                                   is_html, body_paths))
         mapping: dict = {}
         unresolved: list = []
-        for method, path in self._declared_route_set(contract):
+        # v150 route adoption: routes served only by a module's OWN dispatch
+        # table (a late in-place edit) join the set the entry must wire —
+        # after the declared routes, never overriding them.
+        adopted = self._adopted_route_tables()
+        route_set = list(self._declared_route_set(contract))
+        route_set += [mp for mp in sorted(adopted) if mp not in route_set]
+        for method, path in route_set:
             # EXPLICIT BINDING FIRST: the engine declares one canonical handler
             # symbol per route and the decomposition spec orders that exact name.
             # If a leaf defines it, wire it directly — the binding is read, not
@@ -3952,6 +4025,16 @@ class Engine:
             if pm:
                 mapping[(method, path)] = pm[0]
                 continue
+            # ADOPTED route: its own module's dispatch table names the exact
+            # handler — wire that symbol, never a name-resembling guess
+            adopt = adopted.get((method, path))
+            if adopt:
+                hit = next(((stem, name, abi)
+                            for stem, name, abi, _low, _ish, _bp in cands
+                            if (stem, name) == adopt), None)
+                if hit:
+                    mapping[(method, path)] = hit
+                    continue
             if (method == "GET" and html_route
                     and path.rstrip("/") == html_route):
                 # The declared HTML/UI route has no name-matching handler: the
@@ -4107,7 +4190,11 @@ def %(callable)s(environ, start_response):
     abi, fn = handler
     if abi == "ws":                             # raw WSGI handler reads input itself
         return fn(environ, start_response)
-    query = parse_qs(environ.get("QUERY_STRING") or "")
+    # leaf handlers are contracted against SCALAR query values (the binding
+    # and every leaf test read query.get("q") as a string); raw parse_qs
+    # lists silently broke every filter (v150 note_search q-filter)
+    query = {k: v[0] if len(v) == 1 else v
+             for k, v in parse_qs(environ.get("QUERY_STRING") or "").items()}
     try:
         length = int(environ.get("CONTENT_LENGTH") or 0)
     except (TypeError, ValueError):
@@ -7414,10 +7501,20 @@ def %(callable)s(environ, start_response):
             return
         if not routes:
             return
+        # v150 route adoption: a route served only by a module's own dispatch
+        # table (a late in-place edit) belongs to the product interface too;
+        # a DECLARED route keeps its canonical handler (adoption never
+        # overrides the contract)
+        adopted = self._adopted_route_tables()
+        declared = set(routes)
+        routes = list(routes) + [mp for mp in sorted(adopted)
+                                 if mp not in declared]
         route_rows = []
         for m, p in sorted(routes):
+            fn_adopted = None if (m, p) in declared else adopted.get((m, p))
             row = {"method": (m or "GET").upper(), "path": p,
-                   "handler": _canonical_handler_symbol(m, p),
+                   "handler": (fn_adopted[1] if fn_adopted
+                               else _canonical_handler_symbol(m, p)),
                    "success_status": _route_success_status(m),
                    "errors": {"unknown_path": 404, "bad_method": 405,
                               "malformed_body": 400}}
@@ -7636,13 +7733,21 @@ def %(callable)s(environ, start_response):
         if c.get("kind") in ("lib", "cli"):
             return self._nonweb_capability_boots(c)
         boot = c["boot"]
+        # v150 route adoption: probe adopted routes too — a module-table route
+        # the entry dropped must be an honest 404 RED here, never silent
+        covered = {str(p).rstrip("/") or "/" for p in boot.values() if p}
+        extra = [list(r) for r in (c.get("routes") or [])]
+        for m, p in sorted(self._adopted_route_tables()):
+            if (p.rstrip("/") or "/") not in covered \
+                    and [m, p] not in extra:
+                extra.append([m, p])
         probe_cfg = json.dumps({
             "callable": c["callable"],
             "entry_stem": Path(c["entry"]).stem,
             "ok_route": boot.get("ok_route", ""),
             "html_route": boot.get("html_route", ""),
             "json_roundtrip": boot.get("json_roundtrip", ""),
-            "extra_routes": c.get("routes", [])})
+            "extra_routes": extra})
         try:
             # -I (isolated) + a scrubbed env — same sterile-oracle boundary as
             # the capability probe and the hermetic suite: the probe prepends
