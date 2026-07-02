@@ -502,11 +502,18 @@ def chain_for_tier(tier: str) -> list[str]:
     return list(models) if models else chain_for("defaults")
 
 
-def _with_default_params(params: dict | None, cfg: dict | None = None) -> dict:
+def _with_default_params(params: dict | None, cfg: dict | None = None,
+                         role: str = "") -> dict:
     """Prevention: every worker call gets a LOW default temperature unless the
     caller set one explicitly (deterministic output, fewer flaky generations).
     Default from workers.temperature or SPEC_FLOW_WORKER_TEMPERATURE (floor 0.1).
-    Explicit caller params always win."""
+
+    Layering (weakest first): default temperature < STAGE-level params
+    (``workers.stages.<stage>.params`` — flattened onto the role key by
+    configure_workers, so a case can e.g. turn reasoning off for review/verify)
+    < explicit caller params (a team specialist's own config always wins).
+    Test: configure {reviewer: {params: {reasoning: "off"}}} and assert an
+    ask(role='reviewer') call carries reasoning="off" in its params."""
     cfg = cfg if cfg is not None else (WORKERS_CFG or {})
     try:
         default_t = float(cfg.get("temperature",
@@ -515,6 +522,11 @@ def _with_default_params(params: dict | None, cfg: dict | None = None) -> dict:
     except (ValueError, TypeError):
         default_t = 0.1
     merged = {"temperature": default_t}
+    if role:
+        role_cfg = cfg.get(role)
+        stage_params = role_cfg.get("params") if isinstance(role_cfg, dict) else None
+        if isinstance(stage_params, dict):
+            merged.update(stage_params)
     merged.update(params or {})
     return merged
 
@@ -691,7 +703,9 @@ def ask(prompt: str, *, model: str, role: str, step: str,
             "implementer/reviewer/verifier). Every LLM call must be attributable "
             "to a stage — a missing/empty role hides token and idle accounting.")
     cfg = WORKERS_CFG or {}
-    params = _with_default_params(params, cfg)   # low default temp for all workers
+    # low default temp for all workers + stage-level params (workers.stages.
+    # <stage>.params) under the caller's explicit params
+    params = _with_default_params(params, cfg, role=role)
     _call_ctx.role = role          # #6: tag token usage with the calling role
     _call_ctx.step = step          # specialist (orchestra step) for per-member split
     _call_ctx.last_usage = None    # cleared each call; _ask_openai stashes real usage here
@@ -1137,6 +1151,89 @@ def _openai_params(params: dict | None) -> dict:
             if k in _OPENAI_PARAM_KEYS and v is not None}
 
 
+# ── reasoning control (abstract `params.reasoning`) ─────────────────────────
+# The abstract per-call knob is `params: {reasoning: "off"|"low"|"medium"|
+# "high"}` — generative stages keep thinking ON, service stages (review
+# verdicts, strict-JSON checks) turn it down/off. OpenAI-compatible reasoning
+# models DIFFER in the wire form they honour, so ONE table below translates the
+# abstract level into each provider's real request-body field at the single
+# body-assembly point (_ask_openai). The raw `reasoning` key itself is NEVER
+# forwarded (it is not in _OPENAI_PARAM_KEYS), only its translation.
+#
+# EXPERIMENT (2026-07-02, live Bifrost gateway, model xiaomimimo/mimo-v2.5,
+# prompt "Reply with the single word: ok" + one arithmetic prompt, small
+# max_tokens; reasoning arrives in the SEPARATE message.reasoning field, the
+# content stays clean — no inline <think> over this path):
+#   * reasoning_effort ("low")   -> SUPPORTED. Upstream pydantic accepts ONLY
+#     'low'|'medium'|'high' (400 literal_error on 'none'); measured on one
+#     fixed prompt: low=536 vs high=719 reasoning tokens. NO true "off" value.
+#   * enable_thinking: false     -> accepted silently, reasoning stayed (79 t).
+#   * reasoning: {effort: low} / {enabled: false} (OpenRouter form) -> accepted
+#     silently, reasoning stayed (35/42 t).
+#   * thinking: {type: disabled} -> accepted silently, reasoning stayed (111 t).
+# => xiaomimimo: map levels to reasoning_effort; "off" degrades to the lowest
+#    supported effort AND the universal off-path (system nudge + think strip).
+_REASONING_LEVELS = ("off", "low", "medium", "high")
+# provider -> (request-body key, {abstract level -> wire value}). A level
+# missing from the map sends nothing for that provider; a provider missing
+# from the table sends nothing at all — "off" still gets the universal
+# nudge+strip fallback below, so the knob degrades honestly everywhere.
+_REASONING_WIRE: dict = {
+    # Xiaomi MiMo (via Bifrost): OpenAI-style reasoning_effort, no off literal —
+    # see the experiment note above; "off" maps to the cheapest legal effort.
+    "xiaomimimo": ("reasoning_effort", {"off": "low", "low": "low",
+                                        "medium": "medium", "high": "high"}),
+    # OpenAI-style providers: reasoning_effort with the plain level string.
+    "openai": ("reasoning_effort", {"low": "low", "medium": "medium",
+                                    "high": "high"}),
+    # OpenRouter: nested `reasoning` object; supports a true disable.
+    "openrouter": ("reasoning", {"off": {"enabled": False},
+                                 "low": {"effort": "low"},
+                                 "medium": {"effort": "medium"},
+                                 "high": {"effort": "high"}}),
+}
+# Universal "off" fallback for providers that cannot (or may not) truly
+# disable thinking: instruct the model up front...
+_NO_REASONING_NUDGE = ("Answer immediately with the final answer only, "
+                       "no reasoning preamble.")
+# ...and cut any inline think block out of the reply on parse.
+_THINK_RE = re.compile(r"(?is)<think>.*?</think>\s*")
+
+
+def _reasoning_level(params: dict | None) -> str:
+    """Normalise `params.reasoning` to one of _REASONING_LEVELS or ''.
+    Why: the knob arrives from YAML where a bare `off` parses as boolean False
+    (YAML 1.1 footgun) — treat it as the string "off"; anything unrecognised is
+    ignored so a typo can never 400 a live call.
+    Test: {'reasoning': False} -> 'off'; {'reasoning': 'HIGH'} -> 'high';
+    {'reasoning': 'bogus'} and absent key -> ''."""
+    v = (params or {}).get("reasoning")
+    if v is None:
+        return ""
+    if v is False:
+        return "off"
+    s = str(v).strip().lower()
+    return s if s in _REASONING_LEVELS else ""
+
+
+def _strip_think(text: str) -> str:
+    """Cut inline <think>…</think> reasoning blocks out of a reply.
+    Why: with reasoning "off" a model that cannot truly disable thinking may
+    still wrap deliberation in think tags inside `content`; strict-JSON
+    consumers (review verdicts) must never see it.
+    What: removes every closed think block; a dangling unclosed <think> tail
+    (truncated generation) is cut only when real text precedes it. If stripping
+    would empty the reply, the original text is returned — the answer may live
+    INSIDE the block and an empty reply would fail the call for nothing.
+    Test: '<think>x</think>ok' -> 'ok'; 'ok' -> 'ok'; '<think>only' unchanged."""
+    out = _THINK_RE.sub("", text)
+    m = re.search(r"(?i)<think>", out)
+    if m and out[:m.start()].strip():
+        out = out[:m.start()]
+    out = out.strip()
+    return out if out else text
+
+
 def _provider_of(model: str) -> str:
     """The provider key a model routes through — the prefix before '/'
     (openrouter / xiaomimimo / claude), else the default openai backend. Used to
@@ -1197,10 +1294,23 @@ def _ask_openai(prompt: str, model: str, system: str | None = None,
     url = (base_url or BASE_URL).rstrip("/") + "/chat/completions"
     _key = api_key if api_key is not None else API_KEY
     headers = {"Authorization": f"Bearer {_key}"} if _key else {}
+    provider = _provider_of(model)
+    body_params = _openai_params(params)
+    # reasoning control: translate the abstract level into THIS provider's wire
+    # form (see _REASONING_WIRE + the experiment note above it). On "off" the
+    # universal fallback also applies: a no-reasoning system nudge here and a
+    # think-block strip at parse time — harmless where the wire param already
+    # disables thinking, essential where it cannot (xiaomimimo).
+    r_lvl = _reasoning_level(params)
+    if r_lvl:
+        wire = _REASONING_WIRE.get(provider)
+        if wire and r_lvl in wire[1]:
+            body_params[wire[0]] = wire[1][r_lvl]
+        if r_lvl == "off":
+            system = ((system + "\n\n") if system else "") + _NO_REASONING_NUDGE
     messages = ([{"role": "system", "content": system}] if system else []) \
         + [{"role": "user", "content": prompt}]
-    payload = {"model": model, "messages": messages, **_openai_params(params)}
-    provider = _provider_of(model)
+    payload = {"model": model, "messages": messages, **body_params}
     call_timeout = _provider_timeout(model)
     last = ""
     throttled = 0
@@ -1216,6 +1326,10 @@ def _ask_openai(prompt: str, model: str, system: str | None = None,
                 # weak reasoning models (qwen3-next, …) sometimes return the
                 # answer in `reasoning` with an empty `content` — accept it.
                 text = msg.get("content") or msg.get("reasoning") or ""
+                if r_lvl == "off":
+                    # off-fallback tail: a model that ignored the wire param /
+                    # nudge may still emit an inline think block — cut it.
+                    text = _strip_think(text)
                 if text and text.strip():
                     # stash the REAL usage so ask()'s single exit point logs it
                     # (or falls back to tiktoken). Token accounting is universal

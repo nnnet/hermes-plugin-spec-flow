@@ -318,8 +318,15 @@ workers:
              api: "http://127.0.0.1:3000", model: "xiaomimimo/mimo-v2.5-pro"}  # repair → strongest mimo
     review:                             # CHECK → mimo leads (sharp judge); sonnet fallback
       models: ["xiaomimimo/mimo-v2.5", "claude/sonnet"]
+      # Service stage: the output is a strict-JSON verdict — model thinking
+      # buys nothing here and burns time/quota (mimo is a reasoning model).
+      # "off" is quoted: bare YAML `off` parses as boolean False. Translated
+      # per provider at the single request-body seam (llm_backend).
+      params: {reasoning: "off"}
     verify:                             # CHECK / final gate → STRONGEST mimo-v2.5-pro leads; sonnet fallback
       models: ["xiaomimimo/mimo-v2.5-pro", "claude/sonnet"]
+      # Same rationale as review: a strict check verdict, not generation.
+      params: {reasoning: "off"}
   #
   #  review: # CHECK → strong (mimo-v2.5) leads; haiku fallback
   #    models: [ "xiaomimimo/mimo-v2.5", "claude/haiku", "openrouter/qwen/qwen3-next-80b-a3b-instruct:free" ]
