@@ -1,0 +1,39 @@
+tests/audit/CHARTER.md
+  s_a7f45290e91181::t_8b7a8ff8b92ca6 1-214
+tests/audit/investigator.py
+  s_a7f45290e91181::t_8b7a8ff8b92ca6 1-727
+tests/audit/test_property_scenarios.py
+  s_a7f45290e91181::t_8b7a8ff8b92ca6 1-214
+tests/audit/journal_invariants.py
+  s_a7f45290e91181::t_8b7a8ff8b92ca6 1-262
+tests/nodes/test_reasoning_param.py
+  s_a7f45290e91181::t_e10218f419e3e8 1-162
+tests/scenarios/p6_micro_notes.yaml
+  s_a7f45290e91181::t_e10218f419e3e8 321-325,328-329
+tests/audit/revision-report.md
+  s_a7f45290e91181::t_8b7a8ff8b92ca6 1-76
+tests/audit/test_gate_layer1.py
+  s_a7f45290e91181::t_8b7a8ff8b92ca6 1-261
+tests/audit/consistency.py
+  s_a7f45290e91181::t_8b7a8ff8b92ca6 1-476
+tests/audit/revision.py
+  s_a7f45290e91181::t_8b7a8ff8b92ca6 1-286
+tests/harness/llm_backend.py
+  s_a7f45290e91181::t_e10218f419e3e8 505-506,510-516,525-529,706-708,1154-1236,1297-1310,1313,1329-1332
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.6",
+  "base_commit_sha": "fd27f2017128f46b862a97912e8965f811cf5745",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-fable-5"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
