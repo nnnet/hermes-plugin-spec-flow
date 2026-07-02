@@ -1,0 +1,22 @@
+tests/lib/run_cases.py
+  s_a7f45290e91181::t_d2ba4161cc908d 498-499,519-534
+  s_a7f45290e91181::t_91c948ffdfa943 535-536
+tests/audit/test_termination_invariants.py
+  s_a7f45290e91181::t_31a8e94679434c 70-86
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.6",
+  "base_commit_sha": "6d144b46a55376df17535a448fab5cf94fd01678",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "nvidia/nemotron-3-super-120b-a12b-20230311:free"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
