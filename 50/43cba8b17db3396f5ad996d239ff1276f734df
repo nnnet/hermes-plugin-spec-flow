@@ -1,0 +1,19 @@
+.claude/HANDOFF.md
+  s_a7f45290e91181::t_06d6362b1c3f31 3-18,20-28,30-38,40,42-43
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.6",
+  "base_commit_sha": "5043cba8b17db3396f5ad996d239ff1276f734df",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "nvidia/nemotron-3-super-120b-a12b-20230311:free"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
