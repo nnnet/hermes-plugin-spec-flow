@@ -231,6 +231,15 @@ class RunStopped(RuntimeError):
     partial result — a later --resume picks up where it left off."""
 
 
+class RunExhausted(RunStopped):
+    """The GLOBAL run budget (total agent calls) was exhausted. Per-node
+    caps bound each node, but their SUM (nodes x rework x doctor x amend) is
+    otherwise unbounded, so a churning run burns hours with no terminal
+    (v146: 46 min, no verdict). This run-level backstop halts and finalises
+    with an honest NOT READY, never spins forever. Subclasses RunStopped so
+    it winds down through the same cooperative-halt path."""
+
+
 _STOP_REL = ".spec-flow/STOP"
 
 
@@ -640,6 +649,11 @@ DEFAULT_REVIEW_POLICY = {"on_reject": "rework", "max_rework": 2,
 
 # Hard ceiling on decomposer-agent calls per run (runaway-recursion guard).
 MAX_DECOMPOSE_CALLS = 40
+
+# Global ceiling on TOTAL agent calls per run (all roles). Per-node caps do
+# not bound their sum; this run-level backstop guarantees termination.
+# Configurable via project["run_call_budget"]. Generous for a healthy p6.
+RUN_CALL_BUDGET = 220
 
 PROFILE_ICON = {
     "spec-decomposer": "🧩",
@@ -1998,6 +2012,12 @@ class Engine:
         # plugin must not import the harness — in a real run tests/ is off
         # sys.path. Pulled out of agents so it is never treated as a role.
         self._realness_check = self.agents.pop("_realness_check", None)
+        # Global run-call budget backstop (v146): count EVERY agent call and
+        # halt the whole run when the ceiling is crossed.
+        self._agent_calls = 0
+        self._run_call_budget = RUN_CALL_BUDGET
+        self.agents = {_r: self._budgeted_agent(_r, _fn)
+                       for _r, _fn in self.agents.items()}
         self.contracts_dir = Path(contracts_dir) if contracts_dir else None
         self.events: list[Event] = []
         self.tasks: dict[str, Task] = {}
@@ -4287,7 +4307,23 @@ def %(callable)s(environ, start_response):
                            prune=self._prune_noops)
 
     # -- run ---------------------------------------------------------------
+    def _budgeted_agent(self, role, fn):
+        """Wrap a role worker so EVERY call counts against the global run
+        budget; once crossed, raise RunExhausted so the run finalises with an
+        honest NOT READY instead of churning forever (v146)."""
+        def _proxy(*a, **k):
+            self._agent_calls += 1
+            if self._agent_calls > self._run_call_budget:
+                raise RunExhausted(
+                    f"run-call budget exhausted: {self._agent_calls} > "
+                    f"{self._run_call_budget} (role {role})")
+            return fn(*a, **k)
+        return _proxy
+
     def run(self, project: dict) -> RunResult:
+        self._agent_calls = 0
+        self._run_call_budget = int(
+            project.get("run_call_budget") or RUN_CALL_BUDGET)
         # integrate-fail policy (plan P11): 'record' keeps today's behaviour
         # (loop entry, run continues), 'rework' re-invokes the verifier with
         # a fresh repair budget up to integrate_max_rework times, 'halt'
@@ -4432,6 +4468,16 @@ def %(callable)s(environ, start_response):
             self._journal_open()
             try:
                 return self._run(project)
+            except RunExhausted as ex:
+                self.emit("integrate", "engine", "", "L0:integrate",
+                          "run-call budget exhausted — halting run",
+                          str(ex)[:200], "run_budget", "FAIL",
+                          level=L_MILESTONE)
+                self._product_status = "NOT READY"
+                self._product_failed = list(
+                    getattr(self, "_product_failed", []) or []) + [
+                    "run-call budget exhausted before a terminal verdict"]
+                return self._result(project)
             except RunStopped as stop:
                 # a cooperative stop leaves a REPLAYABLE checkpoint of where the
                 # run got to (consistent — we are at a node boundary here)

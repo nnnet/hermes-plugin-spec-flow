@@ -1,0 +1,68 @@
+# Preventive audit — taxonomy of stages & factors
+
+The audit is ACTIVE and PREVENTIVE: it exercises the engine across every
+analysis dimension BEFORE a live run, so a design hole reds in seconds — never
+waits for an hour-long run to surface it. Every stage below is a standing
+obligation; when a new failure mode is conceived, add its check here, do not
+wait for a run to teach it to us.
+
+## STAGE 1 — Static code hygiene (`test_static_hygiene.py`)
+- S1.1 the package compiles (no syntax error) — every .py under the plugin.
+- S1.2 engine-synthesized code carries no stub marker (NotImplementedError/TODO/
+  FIXME/`pass  # stub`).
+- S1.3 no absolute path literals in engine/runner code (project rule; paths from
+  REPO_ROOT / workspace only).
+
+## STAGE 2 — Router / assembly completeness (`test_honesty_invariants.py`)
+- S2.1 synthesized router branches on 400 / 404 / 405 (not one catch-all).
+- S2.2 every declared (method,path) resolves to a handler (no unrouted).
+- S2.3 the router has a terminal fallback (unknown path never crashes).
+
+## STAGE 3 — Honest readiness sign (`test_honesty_invariants.py`)
+- S3.1 READY = logical AND: root integrate RED ⇒ product NOT READY.
+- S3.2 a base-contract smoke cannot lift a project with a red/abandoned leaf.
+- S3.3 every DECLARED address (incl. late) must be served for READY.
+
+## STAGE 4 — Requirement-class routing matrix (`test_requirement_class_paths.py`)
+- S4.1 every class has a non-rejecting path: new-route, amend-in-place,
+  delete-behaviour, duplicate(reject), non-web capability, cross-cutting.
+- S4.2 AMEND↔FORK EXCLUSIVITY: a node with `code_target` (amend) is exempt from
+  ALL fork gates — owned-routes, exposed-symbols, scope-lint, handler-gate,
+  card-gate — it owns nothing of its own (v145).
+- S4.3 an amend node does not re-enter as a fresh decomposable leaf that loops
+  through decompose→spec→implement repeatedly (v146 non-convergence).
+
+## STAGE 5 — State-machine & doctor completeness (`test_state_machine_completeness.py`)
+- S5.1 every doctor CAUSE maps to at least one REMEDY (no cause without treatment).
+- S5.2 every remedy string the doctor can emit is dispatchable (reachable branch).
+- S5.3 every lifecycle state has an outgoing transition (no dead-end / limbo).
+
+## STAGE 6 — Termination / convergence caps (`test_termination_invariants.py`)
+- S6.1 per-node review rework is bounded, finite, > 0 (max_rework).
+- S6.2 decompose calls are globally bounded (MAX_DECOMPOSE_CALLS finite).
+- S6.3 integrate rework is bounded and finite.
+- S6.4 a leaf has a wall-clock / step deadline.
+- S6.5 amend is a bounded targeted edit, not a full unbounded leaf lifecycle.
+- S6.6 a standing (late) requirement is materialised at most once per identity —
+  re-poll is de-duplicated, never re-processed unboundedly (v146).
+
+## STAGE 7 — Gate liveness / adversarial (`test_gate_liveness.py`)
+- S7.1 each named gate reds on a crafted negative input (no dead gate that never
+  fires).
+- S7.2 each gate is reachable from the run pipeline (called, not orphaned code).
+
+## STAGE 8 — Dynamic simulation / dry-run (`test_simulation_convergence.py`)
+Exercise the WHOLE control flow offline with deterministic fake agents — the only
+place loop/convergence bugs live.
+- S8.1 a full product-depth run on a web project reaches a terminal verdict in a
+  BOUNDED number of agent calls (well-behaved agents).
+- S8.2 with an ADVERSARIAL agent (returns junk every time) the run still
+  TERMINATES within a hard call ceiling and reports NOT READY honestly — never
+  loops forever (the v146 catcher).
+- S8.3 a late AMEND injection in simulation edits the owner and terminates
+  bounded — never re-decomposes in a loop.
+
+## Convention
+- A check is HONEST: it reds on a real hole, is never softened to pass.
+- Fixes are real engine capabilities, never per-case crutches.
+- run-detached.sh will not launch while `pytest tests/audit` is red.
