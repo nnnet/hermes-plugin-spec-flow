@@ -1,0 +1,38 @@
+tests/scenarios/p6_micro_notes.yaml
+  s_a7f45290e91181::t_b58e841d18286f 274-280,282-284
+  s_a7f45290e91181::t_8c10915f322807 293-299,301,303-310,313-314,318
+spec_flow_runner.py
+  s_a7f45290e91181::t_bd4695c52696dc 5982,5984,5988-5990
+  s_a7f45290e91181::t_3b74c99deece87 5921,5938-5939
+  s_a7f45290e91181::t_e0c7ebac279584 6026-6051
+  s_a7f45290e91181::t_3145b994e65a64 4388-4397,5455-5484,5925-5930,5932,5936-5937
+tests/harness/llm_backend.py
+  s_a7f45290e91181::t_95df974c3a1535 967-972
+tests/run-detached.sh
+  s_a7f45290e91181::t_0d8a85bc02c49c 53-71
+tests/audit/test_parallel_liveness.py
+  s_a7f45290e91181::t_2dc139a70080c4 176
+  s_a7f45290e91181::t_bf575df5b7a9f0 1-82,92-94,96-175,177-196
+  s_a7f45290e91181::t_e1b8e78d69c7fe 83-91,95
+tests/audit/test_termination_invariants.py
+  s_a7f45290e91181::t_48dfbe79ea1d2e 55-69
+tests/audit/TAXONOMY.md
+  s_a7f45290e91181::t_b26c248bad40e3 48-53
+  s_a7f45290e91181::t_0f4e25b5e71681 71-94
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.6",
+  "base_commit_sha": "6d346953af6c5445f867282822e33eba0c762f1f",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-fable-5"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
