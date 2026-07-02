@@ -414,6 +414,57 @@ def check_meta_vs_results(run_dir: Path) -> list[Finding]:
 # check 5: every src file has an owner
 # --------------------------------------------------------------------------
 
+# engine-declared route -> handler binding line inside a spec, e.g.
+# - `GET /ping` -> `def get_ping(payload, query)` — <behaviour>; SUCCESS STATUS 200
+_BINDING_LINE = re.compile(
+    r"^-\s+`(?P<method>GET|POST|PUT|PATCH|DELETE)\s+(?P<path>/[^`]*)`\s+->\s+"
+    r"`def\s+\w+\([^)]*\)`\s+—\s+(?P<behaviour>.+?);\s+SUCCESS STATUS"
+)
+
+
+def check_route_contract_distinct(run_dir: Path) -> list[Finding]:
+    """Template contamination: identical behaviour text stamped on DIFFERENT
+    routes across DIFFERENT specs (v150: GET /ping, /health and /ui all
+    carried the notes-collection wording — "a list, newest-first, honour a
+    `q` filter" — verbatim from a neighbour's contract). A route's contract
+    must derive from ITS OWN requirement, so two routes born of different
+    requirements can never share the exact behaviour sentence."""
+    seen: dict[str, set[tuple[str, str, str]]] = {}
+    for spec in _spec_files(run_dir):
+        try:
+            text = spec.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            match = _BINDING_LINE.match(line.strip())
+            if not match:
+                continue
+            behaviour = match.group("behaviour").strip()
+            seen.setdefault(behaviour, set()).add(
+                (spec.name, match.group("method"),
+                 match.group("path").strip().rstrip("/") or "/"))
+    findings: list[Finding] = []
+    for behaviour, sites in sorted(seen.items()):
+        routes = {(method, path) for _f, method, path in sites}
+        files = {name for name, _m, _p in sites}
+        # the same spec repeating one behaviour for its own routes shares ONE
+        # requirement — only a cross-spec duplicate proves a foreign template
+        if len(routes) > 1 and len(files) > 1:
+            findings.append(
+                Finding(
+                    file=", ".join(sorted(files)),
+                    kind="route_contract_templated",
+                    message=(
+                        "identical behaviour contract stamped on different "
+                        "routes (%s): %r"
+                        % (", ".join(sorted(f"{m} {p}" for m, p in routes)),
+                           behaviour[:120])
+                    ),
+                )
+            )
+    return findings
+
+
 def check_src_orphans(run_dir: Path, tree: dict) -> list[Finding]:
     """Every workspace/src/*.py must be owned by a node or the declared entry."""
     owned = owned_modules(tree)
@@ -454,6 +505,7 @@ def audit(run_dir: Path) -> list[Finding]:
     findings.extend(check_test_status_asserts(run_dir, tree))
     findings.extend(check_meta_vs_results(run_dir))
     findings.extend(check_src_orphans(run_dir, tree))
+    findings.extend(check_route_contract_distinct(run_dir))
     return findings
 
 

@@ -3533,25 +3533,59 @@ class Engine:
         owned = self._leaf_owned_routes(node)
         if not owned:
             return ""
-        def _behaviour(method: str) -> str:
-            # Phase 0: the per-route behavioural contract, derived deterministically
-            # from the HTTP method — no model needed. Targets the v120 break where
-            # POST /notes did not persist, so the round-trip silently failed.
-            return {
+        req_text = re.sub(r"\s+", " ", " ".join(
+            str(node.get(k) or "") for k in ("requirement", "title"))).strip()
+
+        def _req_excerpt(path: str) -> str:
+            # the sentence of THIS leaf's requirement that names the route,
+            # else the requirement's opening — the contract must be traceable
+            # to ITS OWN requirement, never to a neighbour's
+            stem = (path or "").rstrip("/") or "/"
+            parts = [s.strip() for s in re.split(r"(?<=[.!?;])\s+", req_text)
+                     if s.strip()]
+            hit = next((s for s in parts if re.search(
+                r"(?<![\w/])" + re.escape(stem) + r"(?![\w])", s)), "")
+            return (hit or (parts[0] if parts else ""))[:140]
+
+        def _behaviour(method: str, path: str) -> str:
+            # Phase 0 (reworked after v150): the behavioural contract is
+            # derived from the ROUTE'S OWN requirement. The old method-keyed
+            # template stamped the notes-collection wording ("a list,
+            # newest-first, honour a `q` filter") on EVERY GET route — /ping,
+            # /health and /ui inherited a neighbour's behaviour verbatim
+            # (v150 template contamination). Method-level PROTOCOL semantics
+            # stay engine-owned (a POST must persist + round-trip, the v120
+            # break); CONTENT semantics come only from this leaf's text.
+            m = (method or "GET").upper()
+            base = {
                 "POST": "accept a JSON body, PERSIST it to storage, and return the "
                         "created record (at least its id); a later GET on this path "
                         "MUST return it — the round-trip must work",
                 "PUT": "accept a JSON body, store/replace the record, return it",
                 "PATCH": "apply the JSON body to the existing record, return it",
                 "DELETE": "remove the addressed record, return a success status",
-                "GET": "return the persisted data as JSON (a list, newest-first, "
-                       "when it is a collection; honour a `q` filter on `query`)",
-            }.get((method or "GET").upper(), "serve the route per its requirement")
+            }.get(m)
+            excerpt = _req_excerpt(path)
+            if base is None:            # GET & co: content is requirement-owned
+                ctx = (excerpt or req_text).lower()
+                traits = []
+                if re.search(r"\b(list|lists|all|collection|history|entries|"
+                             r"items|newest)\b", ctx):
+                    traits.append("return the persisted data as JSON (a list, "
+                                  "newest-first, when it is a collection)")
+                if re.search(r"\b(search|filter|filtered|narrow|query|q)\b",
+                             ctx):
+                    traits.append("honour a `q` filter on `query`")
+                if re.search(r"\b(html|page|browser|form|render|rendered|ui)"
+                             r"\b", ctx):
+                    traits.append("return the rendered HTML page")
+                base = "; ".join(traits) or "serve the route per its requirement"
+            return base + (' — requirement: "%s"' % excerpt if excerpt else "")
 
         lines = "\n".join(
             "- `%s %s` -> `def %s(payload, query)` — %s; SUCCESS STATUS %d "
             "(return `%d, body` — the leaf TEST must assert exactly %d)"
-            % (m, p, _canonical_handler_symbol(m, p), _behaviour(m),
+            % (m, p, _canonical_handler_symbol(m, p), _behaviour(m, p),
                _route_success_status(m), _route_success_status(m),
                _route_success_status(m))
             for m, p in owned)
