@@ -27,6 +27,7 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import re
@@ -82,6 +83,8 @@ SPEC_HEAD_LINES = 60
 DECOMP_LINE_CHARS = 1500
 DECOMP_TOTAL_CHARS = 4000
 FINDING_EVIDENCE_CHARS = 600
+TESTS_MAX_LINES = 120
+TESTS_LINE_CHARS = 220
 
 FAIL_VERDICTS = {"FAIL", "REJECT", "AMEND", "NOT READY", "REJECTED"}
 
@@ -249,6 +252,123 @@ def _inputs_digest(run_dir: Path) -> str:
     return json.dumps(keep, ensure_ascii=False, indent=1)
 
 
+def _test_assert_digest(run_dir: Path) -> str:
+    """Route calls + the LITERAL assertions next to them, per test function.
+
+    Why: the «double guessing» class (a test pinning one literal while the
+    handler pins another) must be visible to the lenses for SUCCESS codes and
+    bodies too — v150's assertIn(code, (200, 201)) and the thrice-defined
+    /health body were invisible because the dossier carried no test-side
+    checked values.
+    What: for every workspace/tests/*.py, AST-scan module-level test functions
+    and TestCase methods; emit one line per function listing the ("METHOD",
+    "/path") calls in source order and the literal checks after each — status
+    equalities, status membership sets, short body/string literals.
+    Test: point it at a tmp run dir with a synthetic test file; assert the
+    line carries the route, the pinned status and the smear set verbatim.
+    """
+    tests_dir = run_dir / "workspace" / "tests"
+    files = sorted(tests_dir.glob("*.py")) if tests_dir.is_dir() else []
+    if not files:
+        return "(no workspace tests)"
+
+    def _status(c) -> "int | None":
+        if isinstance(c, ast.Constant):
+            v = c.value
+            if isinstance(v, str) and re.match(r"^[1-5]\d\d\b", v.strip()):
+                return int(v.strip()[:3])
+            if isinstance(v, int) and 100 <= v < 600:
+                return v
+        return None
+
+    def _literal(c) -> "str | None":
+        if isinstance(c, ast.Constant) and isinstance(c.value, (str, bytes)):
+            return repr(c.value)[:40]
+        return None
+
+    def _checks_of(stmt) -> list[str]:
+        out: list[str] = []
+
+        def _pair(left, comparators, op) -> None:
+            if isinstance(op, (ast.In, ast.NotIn)):
+                for comp in comparators:
+                    if isinstance(comp, (ast.Tuple, ast.List, ast.Set)):
+                        members = [s for s in map(_status, comp.elts)
+                                   if s is not None]
+                        if members:
+                            out.append("status in %s" % (tuple(members),))
+                            return
+                lit = _literal(left)
+                if lit:
+                    out.append("body contains %s" % lit)
+                return
+            sts = [s for s in map(_status, [left] + comparators)
+                   if s is not None]
+            if sts:
+                out.append("status == %d" % sts[0])
+                return
+            for c in [left] + comparators:
+                lit = _literal(c)
+                if lit:
+                    out.append("literal == %s" % lit)
+                    return
+
+        if isinstance(stmt, ast.Assert) and isinstance(stmt.test, ast.Compare):
+            cmp = stmt.test
+            _pair(cmp.left, cmp.comparators, cmp.ops[0] if cmp.ops else None)
+        elif isinstance(stmt, ast.Call) and isinstance(stmt.func,
+                                                       ast.Attribute):
+            attr = stmt.func.attr
+            if attr in ("assertEqual", "assertEquals") and len(stmt.args) >= 2:
+                _pair(stmt.args[0], list(stmt.args[1:]), None)
+            elif attr == "assertIn" and len(stmt.args) >= 2:
+                _pair(stmt.args[0], [stmt.args[1]], ast.In())
+        return out
+
+    lines: list[str] = []
+    for path in files:
+        try:
+            tree = ast.parse(_read(path))
+        except (SyntaxError, ValueError):
+            lines.append(f"tests/{path.name}: (unparseable)")
+            continue
+        fns = [n for n in tree.body
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        fns += [m for c in tree.body if isinstance(c, ast.ClassDef)
+                for m in c.body
+                if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        for fn in fns:
+            if not fn.name.startswith("test"):
+                continue
+            ordered = sorted(
+                (n for n in ast.walk(fn)
+                 if isinstance(n, (ast.Call, ast.Assert))),
+                key=lambda n: (n.lineno, n.col_offset))
+            parts: list[str] = []
+            for stmt in ordered:
+                checks = _checks_of(stmt)
+                if checks:
+                    parts += checks
+                    continue
+                if isinstance(stmt, ast.Call):
+                    consts = [a.value for a in stmt.args
+                              if isinstance(a, ast.Constant)
+                              and isinstance(a.value, str)]
+                    meths = [c.upper() for c in consts
+                             if c.upper() in ("GET", "POST", "PUT", "PATCH",
+                                              "DELETE")]
+                    paths = [c for c in consts if c.startswith("/")]
+                    if meths and paths:
+                        parts.append(f"{meths[0]} {paths[0]}")
+            if parts:
+                lines.append(f"tests/{path.name}::{fn.name}: "
+                             + " | ".join(parts)[:TESTS_LINE_CHARS])
+            if len(lines) >= TESTS_MAX_LINES:
+                lines.append("… (test-checks digest truncated at cap)")
+                return "\n".join(lines)
+    return "\n".join(lines) or "(no recognisable checks)"
+
+
 def build_dossier(run_dir: Path) -> str:
     """Assemble the compact run dossier every lens receives.
 
@@ -268,6 +388,8 @@ def build_dossier(run_dir: Path) -> str:
          _decomp_digest(run_dir)),
         ("SPEC HEADS (workspace/specs/*.md)", _spec_heads(run_dir)),
         ("ASSEMBLED FILE INVENTORY", _file_inventory(run_dir)),
+        ("LEAF TEST CHECKS (route calls + literal assertions)",
+         _test_assert_digest(run_dir)),
         ("PRODUCT-RESULTS.md (final product verdict)",
          _read(run_dir / "workspace" / "PRODUCT-RESULTS.md")
          or "(no PRODUCT-RESULTS.md)"),
