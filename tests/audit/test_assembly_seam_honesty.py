@@ -151,6 +151,55 @@ def test_verify_suite_is_hermetic_against_host_pth(plugin, tmp_path):
         f" invisible to the suite — output:\n{p.stdout}\n{p.stderr}")
 
 
+# ── S10.5 a spec planning OWNERLESS src files is red at the card gate ────────
+# v150 core.md: the LLM spec planned `src/db.py` + `src/app.py` inside ONE
+# atomic leaf (own metrics: modules=1) — files with no node, no card, no gate;
+# the coder/tester then chased them (the v149 phantom `from db import ...` was
+# ORDERED by that prose). The card gate must red this and send the spec back.
+
+def _multifile_spec_decomposer(ctx):
+    if ctx["depth"] == 0:
+        return {"metrics": dict(_BIG),
+                "children": [{"id": "notes_core",
+                              "title": "store and list notes via POST /notes"
+                                       " and GET /notes"}]}
+    if ctx.get("rework"):
+        # the honest rework: same concern, retargeted at the leaf's own module
+        return {"metrics": dict(_SMALL),
+                "acceptance": ["Given a note, When POSTed to /notes, Then GET"
+                               " /notes returns it"],
+                "spec_markdown": ("## Scope\nIn:\n- src/notes_core.py: sqlite"
+                                  " storage + route handlers\n")}
+    return {"metrics": dict(_SMALL),
+            "acceptance": ["Given a note, When POSTed, Then it is stored"],
+            "spec_markdown": ("## Scope\nIn:\n- src/db.py: sqlite storage\n"
+                              "- src/logic.py: note handling\n")}
+
+
+def test_ownerless_file_plan_is_red_at_the_card(plugin, tmp_path):
+    from harness import auto_implementer
+    # 6 declared routes > the small-product floor (5), so the base is NOT
+    # collapsed into an engine-made core leaf and the decomposer's own
+    # (poisoned) spec_markdown reaches the card gate
+    project = dict(WEB_PROJECT)
+    project["goal"] = (
+        "A notes service over WSGI: POST /notes stores {text}; GET /notes"
+        " lists items; GET /health answers 200; GET /stats counts notes;"
+        " DELETE /notes clears them; GET /ui renders an HTML list;"
+        " GET /export returns the notes as CSV. src/app.py exposes wsgi_app.")
+    res = eng.run_project(project,
+                          workspace=str(tmp_path / "wk"), depth="product",
+                          tools=plugin.tools, contracts_dir=str(eng.CONTRACTS),
+                          agents={"decomposer": _multifile_spec_decomposer,
+                                  "implementer": auto_implementer.implement})
+    assert res is not None
+    dump = "\n".join(repr(ev) for ev in res.events)
+    assert "NO node owns" in dump, (
+        "a leaf spec planning src files that no node owns must red at the"
+        " card gate (v150 core.md smuggled a 2-file mini-architecture past"
+        " the graph; the v149 phantom import was ordered by that prose)")
+
+
 # ── S10.4 a test contradicting the contracted status is red AT THE LEAF ──────
 
 def _status_lying_implementer(ctx):

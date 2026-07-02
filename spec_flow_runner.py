@@ -985,6 +985,39 @@ def _route_success_status(method: str) -> int:
     return 201 if (method or "GET").strip().upper() == "POST" else 200
 
 
+_BOUNDARY_PATH_RE = re.compile(
+    r"""["'](/(?:mnt|home|opt|srv|media|root|Users)/[^"']*)["']""")
+
+
+def _workspace_boundary_findings(root: str) -> list:
+    """Deterministic workspace-boundary gate: PRODUCT code must not reference
+    absolute paths outside its own workspace. Such a literal couples the
+    product to one specific host (breaks the 'assemble anywhere' contract)
+    and is the write-side twin of the v149 read-side leak (a foreign module
+    satisfied through a host .pth). Scans string literals in src/ and tests/;
+    a path INSIDE the workspace is fine (rare but legal in generated tests).
+    Returns human-readable findings."""
+    out: list = []
+    ws = str(Path(root).resolve())
+    for sub in ("src", "tests"):
+        d = Path(root) / sub
+        if not d.exists():
+            continue
+        for p in sorted(d.glob("*.py")):
+            try:
+                text = p.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for m in _BOUNDARY_PATH_RE.finditer(text):
+                lit = m.group(1)
+                if str(Path(lit)).startswith(ws):
+                    continue
+                out.append("%s/%s references an absolute host path %r — "
+                           "product code must stay inside its workspace"
+                           % (sub, p.name, lit))
+    return out
+
+
 def _repair_workspace_imports(root: str) -> list:
     """Assembly-time deterministic import repair over src/ AND tests/:
     re-point ``from X import Y`` to the src module that REALLY defines Y when
@@ -3427,6 +3460,37 @@ class Engine:
                 "atomic leaf exposes a public surface but carries NO acceptance "
                 "criteria — add `acceptance` (Given-When-Then) so the tester "
                 "asserts the card, never its own invented criteria")
+        # ATOMICITY vs prose (v150 core.md): the LLM-authored spec PLANNED
+        # `src/db.py` + `src/app.py` inside ONE atomic leaf whose own metrics
+        # said modules=1 — a mini-architecture smuggled past the graph. Files
+        # planned in prose have no node, hence no card, no gate, no owner; the
+        # coder and tester then chase them (`from db import ...` = the v149
+        # phantom import was ORDERED by the spec, not invented). Deterministic
+        # rule: a src file mentioned by a leaf's spec must be owned by SOME
+        # node (or be the declared product entry) — an ownerless file means
+        # the decomposer must either SPLIT this node into children that own
+        # those files, or retarget the spec at the leaf's own module.
+        own = _snake(node.get("id") or "")
+        known = {_snake(i) for i in (getattr(self, "_node_registry", None)
+                                     or {})} | {own}
+        try:
+            entry = str((self._product_contract() or {}).get("entry") or "")
+            if entry:
+                known.add(Path(entry).stem)
+        except Exception:        # noqa: BLE001 — no contract = no entry to allow
+            pass
+        text = " ".join(str(node.get(k) or "")
+                        for k in ("requirement", "spec_markdown", "title"))
+        foreign = sorted({m for m in re.findall(r"src/([A-Za-z0-9_]+)\.py",
+                                                text)
+                          if _snake(m) not in known})
+        if foreign:
+            out.append(
+                "spec plans src file(s) NO node owns: %s — an atomic leaf "
+                "builds exactly ONE module (src/%s.py); either SPLIT this "
+                "node into children that own those files, or retarget the "
+                "spec (Scope/Requirements) at the leaf's own module"
+                % (", ".join("src/%s.py" % f for f in foreign), own))
         return out
 
     def _leaf_route_binding(self, node: dict) -> str:
@@ -4527,6 +4591,7 @@ def %(callable)s(environ, start_response):
         return _proxy
 
     def run(self, project: dict) -> RunResult:
+        self._project = project          # read by oracle knobs (allow_network)
         self._agent_calls = 0
         self._run_call_budget = int(
             project.get("run_call_budget") or RUN_CALL_BUDGET)
@@ -5281,8 +5346,8 @@ def %(callable)s(environ, start_response):
             if not gaps:
                 break
             self.emit("review", "engine", "", nid,
-                      "card completeness: leaf exposes a surface but has no"
-                      " acceptance", "; ".join(gaps)[:300], "spec_lint", "FAIL",
+                      "card gate: incomplete or non-atomic leaf card",
+                      "; ".join(gaps)[:300], "spec_lint", "FAIL",
                       level=L_MILESTONE)
             if "decomposer" not in self.agents:
                 break
@@ -5291,8 +5356,11 @@ def %(callable)s(environ, start_response):
             cctx["review_feedback"] = (
                 "DETERMINISTIC CARD GAP (code-checked, not an opinion):\n- "
                 + "\n- ".join(gaps)
-                + "\nReturn this leaf WITH an `acceptance` list (Given-When-Then)"
-                " and 1-2 `examples`, scoped to this leaf's concern only.")
+                + "\nFix EVERY listed gap: carry an `acceptance` list"
+                " (Given-When-Then) with 1-2 `examples` scoped to this leaf's"
+                " concern only, and plan NO src file this leaf does not own —"
+                " an atomic leaf builds exactly ONE module; if the concern"
+                " genuinely needs several modules, return CHILDREN instead.")
             cctx["previous_spec"] = str(node.get("spec_markdown") or "")
             cctx["rework"] = True
             try:
@@ -6991,9 +7059,10 @@ def %(callable)s(environ, start_response):
         return False
 
     def _prepare_hermetic_suite(self) -> None:
-        """Assembly-time, deterministic, before ANY pytest over the workspace:
+        """Assembly-time, deterministic, before ANY pytest over the workspace —
+        the STERILE-ORACLE boundary in one place:
 
-        1. HERMETIC ORACLE — write the engine-owned `conftest.py` that prunes
+        1. HERMETIC IMPORTS — write the engine-owned `conftest.py` that prunes
            sys.path down to workspace + stdlib + site/dist-packages. Host
            pollution otherwise satisfies a mistaken import with FOREIGN code:
            v149 — `from db import ...` resolved into an unrelated repo through
@@ -7001,18 +7070,55 @@ def %(callable)s(environ, start_response):
            ModuleNotFoundError into a misleading cross-project ImportError.
            A product-owned conftest.py (no engine marker) is never clobbered.
 
-        2. IMPORT REPAIR over src/ AND tests/ — re-point `from X import Y` to
+        2. NETWORK FENCE — the same conftest installs a loopback-only socket
+           guard: the suite may talk to 127.0.0.1/::1 (the boot gate drives a
+           real local server) but any OUTBOUND connect raises immediately. A
+           product whose tests silently depend on the internet is not a
+           verified product. Opt-out: project["oracle"]["allow_network"].
+
+        3. IMPORT REPAIR over src/ AND tests/ — re-point `from X import Y` to
            the module that really defines Y when exactly ONE src module does
            (the same unique-owner rule as the leaf-level repair; v149: the
            tester invented `db`, core.py owned all three symbols). A symbol
            owned by no module or by several stays untouched — an honest RED.
+
+        4. WORKSPACE BOUNDARY — product code referencing an absolute host
+           path outside its workspace is recorded as a FAIL finding (the
+           write-side twin of the v149 read-side leak).
+
+        5. INTERFACE CONTRACT — materialise the engine-declared machine
+           contract (contracts/interface.json) so every consumer (coder
+           binding, tester, gates, entry synthesis) provably reads ONE datum.
         """
         ws = self.workspace
         root = getattr(ws, "root", None)
         if not (getattr(ws, "enabled", False) and root):
             return
+        allow_net = bool(((getattr(self, "_project", None) or {})
+                          .get("oracle") or {}).get("allow_network"))
         marker = "Engine-owned oracle isolation"
         conftest = Path(root) / "conftest.py"
+        net_guard = "" if allow_net else (
+            '\n'
+            '# network fence: the oracle may drive a LOCAL server (boot gate)\n'
+            '# but a test reaching the internet is not verifying THIS product\n'
+            'import socket as _socket\n'
+            '\n'
+            '_REAL_CONNECT = _socket.socket.connect\n'
+            '\n'
+            '\n'
+            'def _loopback_only(self, address, *a, **k):\n'
+            '    host = address[0] if isinstance(address, tuple) else ""\n'
+            '    if isinstance(host, str) and host not in (\n'
+            '            "127.0.0.1", "::1", "localhost", ""):\n'
+            '        raise RuntimeError(\n'
+            '            "oracle network fence: outbound connect to %r is\"\n'
+            '            \" blocked — the verification suite must not depend\"\n'
+            '            \" on the network" % (host,))\n'
+            '    return _REAL_CONNECT(self, address, *a, **k)\n'
+            '\n'
+            '\n'
+            '_socket.socket.connect = _loopback_only\n')
         body = (
             '"""%s — generated by spec-flow; do not hand-edit.\n'
             '\n'
@@ -7036,7 +7142,8 @@ def %(callable)s(environ, start_response):
             '    return p.startswith(sys.base_prefix)   # stdlib/zip/dynload\n'
             '\n'
             '\n'
-            'sys.path[:] = [p for p in sys.path if _ok(p)]\n' % marker)
+            'sys.path[:] = [p for p in sys.path if _ok(p)]\n'
+            '%s' % (marker, net_guard))
         try:
             current = (conftest.read_text(encoding="utf-8", errors="replace")
                        if conftest.exists() else None)
@@ -7048,6 +7155,56 @@ def %(callable)s(environ, start_response):
             self.emit("integrate", "engine", "", "L0:integrate",
                       "import repair (assembly): re-pointed to the real owner",
                       note, level=L_DETAIL)
+        boundary = _workspace_boundary_findings(root)
+        if boundary:
+            self.loops.append({"type": "workspace-boundary", "task": "L0",
+                               "detail": "; ".join(boundary)[:400]})
+            self.emit("integrate", "engine", "", "L0:integrate",
+                      "workspace-boundary gate: product references host paths"
+                      " outside its workspace", "; ".join(boundary)[:300],
+                      "workspace_boundary", "FAIL", level=L_MILESTONE)
+        self._write_interface_contract()
+
+    def _write_interface_contract(self) -> None:
+        """Materialise the engine-declared MACHINE contract of the product's
+        public interface (contracts/interface.json) — the one datum every
+        consumer reads instead of re-deriving (and mis-guessing) it:
+        the coder's route binding, the leaf test-status gate, the entry
+        synthesis and the boot gate all use the same three functions this
+        file is dumped from (route set, `_canonical_handler_symbol`,
+        `_route_success_status`). Machine-readable on purpose (a minimal
+        OpenAPI-shaped subset): a worker, a human or an external tool can
+        diff artifacts against it — v149's 200-vs-201 collision existed
+        precisely because the success status lived nowhere."""
+        ws = self.workspace
+        root = getattr(ws, "root", None)
+        if not (getattr(ws, "enabled", False) and root):
+            return
+        try:
+            routes = self._declared_route_set(self._product_contract() or {})
+        except Exception:        # noqa: BLE001 — no contract yet = nothing to pin
+            return
+        if not routes:
+            return
+        data = {
+            "format": "spec-flow interface contract v1",
+            "medium": "http",
+            "routes": [
+                {"method": (m or "GET").upper(), "path": p,
+                 "handler": _canonical_handler_symbol(m, p),
+                 "success_status": _route_success_status(m),
+                 "errors": {"unknown_path": 404, "bad_method": 405,
+                            "malformed_body": 400}}
+                for m, p in sorted(routes)],
+        }
+        try:
+            cdir = Path(root) / "contracts"
+            cdir.mkdir(exist_ok=True)
+            (cdir / "interface.json").write_text(
+                json.dumps(data, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8")
+        except OSError:
+            pass
 
     def _assembled_suite_failures(self) -> "Optional[list]":
         """Phase 7 (honest conjunction): run the assembled product's FULL test

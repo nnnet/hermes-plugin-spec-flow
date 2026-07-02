@@ -110,6 +110,17 @@ tester-invented `db` module with an unrelated repo's code.
   stay invisible (dynamic subprocess proof).
 - S10.4 a leaf test contradicting the contracted status reds AT THE LEAF
   (test-status gate) with the exact expected value — never first at assembly.
+- S10.5 a leaf spec PLANNING src files NO node owns reds at the card gate
+  (v150 core.md ordered `src/db.py` + `src/app.py` inside one atomic leaf —
+  a mini-architecture smuggled past the graph; the v149 phantom import was
+  ORDERED by that prose). Atomicity is enforced on the TEXT, not only on
+  metrics: one leaf = one module; several modules = children in the graph.
+- (engine, verified via S10.3 seams) the sterile-oracle boundary is ONE
+  place (`_prepare_hermetic_suite`): hermetic imports conftest, loopback-only
+  network fence (opt-out `project.oracle.allow_network`), assembly import
+  repair, workspace-boundary path gate, and the machine interface contract
+  (`contracts/interface.json`, minimal OpenAPI-shaped subset) dumped from the
+  same functions every consumer reads.
 
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
