@@ -57,6 +57,7 @@ except Exception:  # noqa: BLE001
 # the doctor is requested but could not be built.
 import logging as _logging
 _DOCTOR_LOG = _logging.getLogger("spec_flow.doctor")
+_WS_LOG = _logging.getLogger("spec_flow.workspace")
 _DOCTOR_IMPORT_ERR = ""
 try:
     import os as _os_d
@@ -1756,8 +1757,10 @@ class Workspace:
                 shutil.copyfile(src_path, path)
                 self.artifacts.append({"path": rel, "type": "contract",
                                        "bytes": path.stat().st_size})
-            except Exception:
-                pass
+            except Exception:  # noqa: BLE001 — a missing contract is tolerable
+                # ...but never invisible (P4): the copy failure is attributed
+                _WS_LOG.exception("contract copy failed: %s -> %s",
+                                  src_path, rel)
         return rel
 
     def code(self, leaf, title) -> str:
@@ -2810,8 +2813,17 @@ class Engine:
                                "remedy": "(closed)", "outcome": "resolved",
                                "detail": f"{gate} passed"})
             state["last_cause"] = None
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            # P4: a failure while CLOSING a cause leaves last_cause set —
+            # it may falsely block completion, so it must be attributable
+            _DOCTOR_LOG.exception("resolve FAILED node=%s gate=%s", nid, gate)
+            try:
+                self.loops.append({"type": "doctor", "task": nid,
+                                   "cause": "(resolve-error)",
+                                   "remedy": "(none)", "outcome": "error",
+                                   "detail": str(exc)[:160]})
+            except Exception:  # noqa: BLE001 — attribution must never raise
+                pass
 
     def _doctor_open_causes(self) -> list:
         """(nid, cause) for every node whose doctor cause is still OPEN — set by
@@ -4605,7 +4617,11 @@ def %(callable)s(environ, start_response):
                 harvested = True
                 mapping, unresolved = self._resolve_route_handlers(contract)
                 code = self._synthesize_entry_code(contract, mapping, unresolved)
-        except Exception:               # noqa: BLE001 — resolver is best-effort
+        except Exception as exc:        # noqa: BLE001 — resolver is best-effort
+            # P4: never a zero-evidence decline — the crash is attributed
+            self.emit("integrate", "engine", "", "L0:integrate",
+                      "entry synthesis skipped: resolver/synthesiser raised",
+                      str(exc)[:160], level=L_DETAIL)
             return False
         if not code:
             # the (payload,query) resolver could not own the entry (e.g. the
@@ -4615,7 +4631,11 @@ def %(callable)s(environ, start_response):
             # declared entry (boot-verified, never faked).
             try:
                 promoted = self._promote_rival_entry(contract)
-            except Exception:           # noqa: BLE001 — promote is best-effort
+            except Exception as exc:    # noqa: BLE001 — promote is best-effort
+                # P4 twin of the resolver guard above: attribute the crash
+                self.emit("integrate", "engine", "", "L0:integrate",
+                          "rival promote skipped: promoter raised",
+                          str(exc)[:160], level=L_DETAIL)
                 promoted = None
             if promoted:
                 return self._write_promoted_entry(contract, *promoted)
