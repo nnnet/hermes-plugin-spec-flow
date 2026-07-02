@@ -3175,6 +3175,30 @@ class Engine:
                 owned.append((m, p))
         return owned
 
+    def _leaf_exposed_symbols(self, node: dict) -> list:
+        """#113 Phase 0: the public symbol(s) THIS leaf exposes, as DATA — the
+        SINGLE pinned name both the coder and the tester read, so a test can
+        never import a symbol the coder did not write (v143: the test imported
+        `delete_notes` while the coder wrote `delete_note` -> ImportError the
+        repair could not fix). Derived DETERMINISTICALLY from the routes the leaf
+        owns (`_canonical_handler_symbol`), unioned with any `exposes` the
+        decomposer declared. Medium-agnostic: a non-HTTP capability leaf carries
+        its symbols in the declared `exposes`. Empty for a pure-edit/amend leaf
+        that owns no route and declares nothing (the gate then stays inert)."""
+        syms: list = []
+        seen: set = set()
+        for s in (node.get("exposes") or []):
+            bare = str(s).split("(")[0].replace("class ", "").strip()
+            if bare and bare not in seen:
+                seen.add(bare)
+                syms.append(str(s))
+        for m, p in self._leaf_owned_routes(node):
+            name = _canonical_handler_symbol(m, p)
+            if name and name not in seen:
+                seen.add(name)
+                syms.append("%s(payload, query)" % name)
+        return syms
+
     def _leaf_route_binding(self, node: dict) -> str:
         """Phase 1: the canonical route -> handler binding for the routes THIS
         leaf owns, emitted as engine-declared DATA (never inferred). A declared
@@ -6160,8 +6184,18 @@ def %(callable)s(environ, start_response):
                 # — what this node must expose + the exact symbols it imports
                 # from each dependency (agreed at decomposition, so producer and
                 # consumer never diverge, even for a not-yet-built sibling).
-                if node.get("exposes"):
-                    ictx["declared_exposes"] = list(node.get("exposes"))
+                # #113 Phase 0: the pinned public symbol(s) are DATA the engine
+                # DERIVES deterministically (owned routes -> canonical handler),
+                # unioned with any decomposer-declared exposes. Written back onto
+                # the card so BOTH the coder and the tester read the SAME name and
+                # a test can never import a symbol the coder did not write. The
+                # LLM decomposer does not populate `exposes` in practice (v143:
+                # every leaf had exposes=None), so deriving it here is what makes
+                # the single-source guarantee real.
+                _exposed = self._leaf_exposed_symbols(node)
+                if _exposed:
+                    node["exposes"] = _exposed
+                    ictx["declared_exposes"] = _exposed
                 if node.get("needs"):
                     ictx["declared_needs"] = node.get("needs")
                 try:

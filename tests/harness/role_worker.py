@@ -1089,6 +1089,27 @@ _ORCHESTRA_ROLE_PROMPTS = {
         " diff blocks against the current files)."),
 }
 
+def _tester_symbol_rule(ctx: dict) -> str:
+    """#113: the TESTER imports/tests EXACTLY the leaf's pinned public symbols
+    (``declared_exposes``), never an invented or pluralised name. Root of the
+    recurring red product (v143): the tester imported ``delete_notes`` while the
+    coder wrote ``delete_note`` -> ImportError the deterministic repair could not
+    fix (no such symbol to re-point to). The card is the single source of truth
+    for the symbol name — the coder reads it via _interfaces_block, the tester
+    reads it here, so the two can never diverge."""
+    base = ("\n\nTESTER PASS — strengthen the tests to cover every acceptance"
+            " criterion of the spec.")
+    exp = ctx.get("declared_exposes") or []
+    if not exp:
+        return base + (" Import ONLY symbols that already exist in the module"
+                       " under test; never invent, rename, or pluralise a name.")
+    names = ", ".join(str(s).split("(")[0].strip() for s in exp)
+    return base + (" This leaf's public symbols are EXACTLY: " + names + "."
+                   " Import and test them by these EXACT names — never invent,"
+                   " rename, or pluralise (e.g. do NOT turn a singular name into"
+                   " a plural). A name not in that list does not exist.")
+
+
 def _interfaces_block(ctx: dict) -> str:
     """#113: a MANDATORY-import instruction that lists the REAL public surface of
     every already-built sibling module (name + signatures), so a consumer leaf
@@ -1225,8 +1246,7 @@ def _orchestra_run(ctx: dict, ws_root: str, nid: str, fn: str, *,
                     prompt += ("\n\nARCHITECT PLAN (build to this interface):\n"
                                + handoff["architect_plan"])
                 if role == "tester":
-                    prompt += ("\n\nTESTER PASS — strengthen the tests to cover"
-                               " every acceptance criterion of the spec.")
+                    prompt += _tester_symbol_rule(ctx)
                 raw = _ensemble_generate(
                     prompt, node=nid, system=s_system, allowed=allowed,
                     disallowed=disallowed, cwd=ws_root, model=s_model,
