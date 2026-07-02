@@ -1,0 +1,32 @@
+tests/harness/llm_backend.py
+  s_a7f45290e91181::t_22afdd90872ea2 897
+  s_a7f45290e91181::t_775309a8aa3e02 839-849
+  s_a7f45290e91181::t_cecfb63f63fa92 175-184
+  s_a7f45290e91181::t_ccb201cc683dd5 127
+  s_a7f45290e91181::t_f6d740c46f8778 898-909
+tests/conftest.py
+  s_a7f45290e91181::t_8acbe33f07a6d1 117-122
+tests/llm/test_llm_backend.py
+  s_a7f45290e91181::t_e8ab1315ba50fc 145
+  s_a7f45290e91181::t_407786198f174c 147,149-151,157
+  s_a7f45290e91181::t_5b9b386958d579 115-119,124-126,128,133
+  s_a7f45290e91181::t_948911063c43bb 109-114,120-121,127,132,134-140,142-144,148,152-156,158-159
+  s_a7f45290e91181::t_9c95f5c7b4e1fd 122
+  s_a7f45290e91181::t_a8e7682c0c15cf 123,129-131,141,146
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.6",
+  "base_commit_sha": "ad356c4963ae86648e5cd2ae0b886bfe41cdd54f",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
