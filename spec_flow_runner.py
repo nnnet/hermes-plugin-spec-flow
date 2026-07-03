@@ -3864,6 +3864,90 @@ class Engine:
             pass
         return media
 
+    # accept-verbs that anchor a REQUEST-BODY brace list to its route mention
+    # ("POST /notes accepts {"text": ...}" / "takes {text}") — never a response
+    _REQUEST_SHAPE_RE = re.compile(
+        r"\b(POST|PUT|PATCH)\s+(/[\w\-./]*)\s+"
+        r"(?:accepts|takes|expects|receives|with)\b[^{}.;]*?\{([^{}]*)\}",
+        re.IGNORECASE)
+
+    def _route_request_fields(self) -> dict:
+        """(METHOD, path) -> contracted REQUEST BODY field list — ONE engine
+        datum for the request shape of a route (S12.1, the request-side twin
+        of `_route_success_status`/`_route_media_map`).
+
+        Why: v159 — the constitution's 'NOTES_DB env var' (CONFIG surface)
+        was re-read as request-body validation; coder and tester agreed on
+        the same wrong reading, leaf tests stayed green, and the assembled
+        product 400-ed every POST/GET /notes. The REQUEST shape lived
+        nowhere as data, so nothing could red the confusion at the leaf.
+        What: derives per-route body fields from the HUMAN texts (goal +
+        constitution + standing requirements): a body-method route mention
+        followed by an accept-verb and a brace field list ('POST /notes
+        accepts {"text": "..."}' -> ['text']). Declared bodyless-method
+        routes (GET/DELETE/HEAD) contract the EMPTY shape. A body route the
+        human never shaped is ABSENT — the gate stays lenient, never guesses.
+        Test: tests/audit/test_request_shape_gate.py."""
+        texts = [str(t) for t in (getattr(self, "_constitution", None) or [])]
+        if getattr(self, "_goal", ""):
+            texts.append(str(self._goal))
+        try:                     # human requirements added mid-run (injections)
+            fn = self._standing_requirements
+            items = fn() if callable(fn) else (fn or [])
+            for item in (items or []):
+                texts.append(str(item[1] if len(item) > 1 else item[0]))
+        except Exception:        # noqa: BLE001 — no injections yet
+            pass
+        out: dict = {}
+        for text in texts:
+            for m in self._REQUEST_SHAPE_RE.finditer(text):
+                body = m.group(3)
+                fields = (re.findall(r"[\"']([A-Za-z_]\w*)[\"']\s*:", body)
+                          or re.findall(r"[A-Za-z_]\w*", body))
+                if not fields:
+                    continue
+                key = (m.group(1).upper(), m.group(2))
+                merged = out.setdefault(key, [])
+                merged.extend(f for f in fields if f not in merged)
+        try:                     # bodyless methods: the shape is EMPTY by datum
+            for m, p in self._declared_route_set(self._product_contract()
+                                                 or {}):
+                if (m or "GET").upper() in ("GET", "DELETE", "HEAD"):
+                    out.setdefault(((m or "GET").upper(), p), [])
+        except Exception:        # noqa: BLE001 — no contract = no routes
+            pass
+        return out
+
+    # an ALL-CAPS token is an env var only when ADJACENT to env-var wording
+    # (plain ALL-CAPS prose words — ONLY, FROZEN, API — must never match)
+    _ENV_VAR_RE = re.compile(
+        r"\benv(?:ironment)?[\s-]*var(?:iable)?s?\s+([A-Z][A-Z0-9_]+)\b"
+        r"|\b([A-Z][A-Z0-9_]+)\s+env(?:ironment)?[\s-]*var(?:iable)?s?\b"
+        r"|os\.environ\[\s*[\"']([A-Z][A-Z0-9_]+)[\"']\s*\]")
+
+    def _constitution_env_vars(self) -> list:
+        """[(NAME, rule), ...] — ENVIRONMENT VARIABLES the constitution names
+        ('the NOTES_DB env var'): CONFIG surface, the S10.22 pinned-path
+        analogue for env vars.
+
+        Why: v159 — NOTES_DB is config the constitution states, yet nothing
+        distinguished it from a request field; the assembled product demanded
+        it in the request body. Naming it as data lets the binding order
+        'never a request field' and the request-shape gate attribute the
+        exact confusion.
+        What: deterministic extraction — an ALL_CAPS token adjacent to 'env
+        var'/'environment variable' wording, or an os.environ['X'] literal,
+        in a constitution rule. Pure text, no LLM.
+        Test: tests/audit/test_request_shape_gate.py."""
+        out, seen = [], set()
+        for rule in (getattr(self, "_constitution", None) or []):
+            for m in self._ENV_VAR_RE.finditer(str(rule)):
+                name = next(g for g in m.groups() if g)
+                if name not in seen:
+                    seen.add(name)
+                    out.append((name, str(rule)))
+        return out
+
     def _declared_route_set(self, contract: dict) -> list:
         """The concrete (method, path) routes the assembled entry must serve,
         derived from the model-independent contract: the boot triple plus every
@@ -4217,6 +4301,39 @@ class Engine:
                _route_success_status(m), _route_success_status(m),
                _route_success_status(m))
             for m, p in owned)
+        # S12.1 (v159): the REQUEST shape and the config surface are engine
+        # data too — printed here, enforced by _leaf_request_shape_gate, so
+        # coder and tester can never agree on the same wrong reading
+        # (NOTES_DB env var demanded as a request-body field)
+        try:
+            reqf = self._route_request_fields()
+        except Exception:        # noqa: BLE001 — datum stays best-effort
+            reqf = {}
+        shape_lines = []
+        for m, p in owned:
+            rf = reqf.get(((m or "GET").upper(), p))
+            if rf is None:
+                continue
+            if rf:
+                shape_lines.append(
+                    "- `%s %s` REQUEST BODY fields: exactly %r — a "
+                    "required-field check in the handler may name ONLY these"
+                    % (m, p, rf))
+            else:
+                shape_lines.append(
+                    "- `%s %s` carries NO request body — the handler must "
+                    "not require any `payload` field" % (m, p))
+        try:
+            env_vars = self._constitution_env_vars()
+        except Exception:        # noqa: BLE001
+            env_vars = []
+        shape_lines += [
+            "- `%s` is an ENVIRONMENT VARIABLE (constitution config surface) "
+            "— read it via os.environ where the constitution says, NEVER a "
+            "request/payload field" % name for name, _rule in env_vars]
+        shape_block = (
+            "\n\n## Request shape contract (engine-declared)\n"
+            + "\n".join(shape_lines)) if shape_lines else ""
         return ("## Route -> handler contract (engine-declared)\n"
                 "Name each handler EXACTLY as listed, expose it at module level, "
                 "and satisfy its stated behaviour. The assembled product is TESTED "
@@ -4226,7 +4343,8 @@ class Engine:
                 "the parsed query string (e.g. a `q` filter on GET).\n"
                 "Status semantics: success statuses are CONTRACTED per route above "
                 "(never guess them); unknown path -> 404; known path with an "
-                "unsupported method -> 405; malformed JSON body -> 400.")
+                "unsupported method -> 405; malformed JSON body -> 400."
+                + shape_block)
 
     def _derive_module_contract(self, node: dict, stem: str) -> list:
         """S11.1: the exporter's symbol contract, derived DETERMINISTICALLY
@@ -4689,6 +4807,173 @@ class Engine:
                   "success status or body shape", "; ".join(findings)[:300],
                   "test_status_gate", "FAIL", level=L_MILESTONE)
         self._doctor_advise(node, nid, depth, "test_status_gate", "FAIL",
+                            {"scope_findings": findings})
+        return False
+
+    def _leaf_request_shape_gate(self, node: dict, nid: str, depth: int,
+                                 code_rel: "Optional[str]",
+                                 test_rel: "Optional[str]") -> bool:
+        """S12.1 (v159), deterministic, model-independent: the REQUEST shape
+        of a route is engine data — a handler's required-field checks must be
+        a SUBSET of the contracted request fields, and a leaf test must not
+        SEND fields outside the contract.
+
+        Why: v159 — the constitution's NOTES_DB env var (CONFIG surface) was
+        turned into request-body validation by the coder AND asserted the
+        same way by the tester: two guesses agreeing on a wrong reading, green
+        at the leaf, 400 on every POST/GET /notes at product e2e. The engine
+        synthesizes the `payload` dicts, so what a handler may REQUIRE from
+        them is its to declare (`_route_request_fields`), the binding prints
+        it, and this gate enforces it on both artifacts.
+        What: AST over the handler source — `payload[<const>]` subscripts and
+        `<const> (not) in payload` membership tests are required-field checks;
+        a field outside the contracted shape reds, NAMING the config-vs-payload
+        confusion when the field is a constitution env var. AST over the leaf
+        test — a payload dict literal sent to an owned shaped route carrying a
+        field outside the contract reds. Lenient by design (v151): no owned
+        routes, no contracted shape for the route, optional `.get(...)`
+        access, or an unparseable file = no-op.
+        Test: tests/audit/test_request_shape_gate.py."""
+        owned = self._leaf_owned_routes(node)
+        if not owned or not getattr(self.workspace, "root", None):
+            return True
+        try:
+            reqf = self._route_request_fields()
+        except Exception:        # noqa: BLE001 — no datum = nothing to enforce
+            return True
+        shaped = {((m or "GET").upper(), p): reqf[((m or "GET").upper(), p)]
+                  for m, p in owned if ((m or "GET").upper(), p) in reqf}
+        if not shaped:
+            return True
+        try:
+            env_vars = {n for n, _r in self._constitution_env_vars()}
+        except Exception:        # noqa: BLE001
+            env_vars = set()
+
+        def _parse(rel):
+            try:
+                return ast.parse((Path(self.workspace.root) / rel).read_text(
+                    encoding="utf-8", errors="replace"))
+            except (OSError, SyntaxError, ValueError, TypeError):
+                return None
+
+        def _required_fields(fn_node) -> set:
+            # required == raises/branches on absence: payload[<const>]
+            # subscripts and `<const> (not) in payload` membership tests;
+            # payload.get(...) is optional access and never counts
+            if not fn_node.args.args:
+                return set()
+            pname = fn_node.args.args[0].arg
+            if pname.lower() in self._DEP_FIRST_PARAMS:
+                return set()
+            req: set = set()
+            for n in ast.walk(fn_node):
+                if isinstance(n, ast.Subscript) \
+                        and isinstance(n.value, ast.Name) \
+                        and n.value.id == pname \
+                        and isinstance(n.slice, ast.Constant) \
+                        and isinstance(n.slice.value, str):
+                    req.add(n.slice.value)
+                elif isinstance(n, ast.Compare) \
+                        and isinstance(n.left, ast.Constant) \
+                        and isinstance(n.left.value, str) \
+                        and any(isinstance(op, (ast.In, ast.NotIn))
+                                for op in n.ops) \
+                        and any(isinstance(c, ast.Name) and c.id == pname
+                                for c in n.comparators):
+                    req.add(n.left.value)
+            return req
+
+        findings: list = []
+        handler_route = {_canonical_handler_symbol(m, p): (m, p)
+                         for m, p in shaped}
+        # (a) HANDLER source: required-field checks must be a subset of the
+        # contracted shape (the seam that exists — the engine synthesizes
+        # the payload dicts the handlers validate)
+        tree = _parse(code_rel) if code_rel else None
+        if tree is not None:
+            for fn_node in tree.body:
+                if not isinstance(fn_node, (ast.FunctionDef,
+                                            ast.AsyncFunctionDef)):
+                    continue
+                route = handler_route.get(fn_node.name)
+                if route is None:
+                    continue
+                allowed = set(shaped[route])
+                for f in sorted(_required_fields(fn_node) - allowed):
+                    if f in env_vars:
+                        findings.append(
+                            "%s: handler %s (%s %s) requires payload field "
+                            "%r — but %s is an ENVIRONMENT VARIABLE (the "
+                            "constitution's CONFIG surface), never a request "
+                            "field; read it via os.environ; contracted "
+                            "request fields: %r"
+                            % (code_rel, fn_node.name, route[0], route[1],
+                               f, f, sorted(allowed)))
+                    else:
+                        findings.append(
+                            "%s: handler %s (%s %s) requires payload field "
+                            "%r absent from the contracted request shape %r"
+                            % (code_rel, fn_node.name, route[0], route[1],
+                               f, sorted(allowed)))
+        # (b) LEAF TEST: a payload sent to a shaped route must stay inside
+        # the contract — the tester following the same wrong reading is
+        # exactly how v159 stayed green until product e2e
+        ttree = _parse(test_rel) if test_rel else None
+        if ttree is not None:
+            for call in ast.walk(ttree):
+                if not isinstance(call, ast.Call):
+                    continue
+                fname = (call.func.id if isinstance(call.func, ast.Name)
+                         else call.func.attr
+                         if isinstance(call.func, ast.Attribute) else "")
+                route = handler_route.get(fname)
+                payload_arg = None
+                if route is not None:
+                    payload_arg = (call.args[0] if call.args else None)
+                else:
+                    consts = [a.value for a in call.args
+                              if isinstance(a, ast.Constant)
+                              and isinstance(a.value, str)]
+                    meths = [c.upper() for c in consts
+                             if c.upper() in ("GET", "POST", "PUT", "PATCH",
+                                              "DELETE")]
+                    paths = [c for c in consts if c.startswith("/")]
+                    if meths and paths and (meths[0], paths[0]) in shaped:
+                        route = (meths[0], paths[0])
+                        payload_arg = next(
+                            (a for a in call.args if isinstance(a, ast.Dict)),
+                            None)
+                if route is None:
+                    continue
+                if not isinstance(payload_arg, ast.Dict):
+                    payload_arg = next(
+                        (kw.value for kw in call.keywords
+                         if kw.arg in ("json", "data", "body", "payload")
+                         and isinstance(kw.value, ast.Dict)), None)
+                if not isinstance(payload_arg, ast.Dict):
+                    continue
+                keys = {k.value for k in payload_arg.keys
+                        if isinstance(k, ast.Constant)
+                        and isinstance(k.value, str)}
+                extra = sorted(keys - set(shaped[route]))
+                if extra:
+                    findings.append(
+                        "%s sends payload field(s) %s to `%s %s` outside the "
+                        "contracted request shape %r — the test must send "
+                        "ONLY contracted fields"
+                        % (test_rel, ", ".join(map(repr, extra)),
+                           route[0], route[1], sorted(shaped[route])))
+        if not findings:
+            return True
+        self.loops.append({"type": "request-shape-mismatch", "task": nid,
+                           "detail": "; ".join(findings)[:400]})
+        self.emit("review", "engine", "", nid,
+                  "request-shape gate: handler/test names request fields "
+                  "outside the contracted shape",
+                  "; ".join(findings)[:300], "request_shape_gate", "FAIL",
+                  level=L_MILESTONE)
+        self._doctor_advise(node, nid, depth, "request_shape_gate", "FAIL",
                             {"scope_findings": findings})
         return False
 
@@ -8466,6 +8751,11 @@ def %(callable)s(environ, start_response):
                 # the routes it owns — the same _route_success_status the
                 # binding printed for the coder (v149: 200-vs-201 collision)
                 self._leaf_test_status_gate(node, nid, depth, test_rel)
+                # S12.1: required request fields in the handler and the
+                # fields the leaf test sends must both stay inside the
+                # contracted request shape (config env vars never leak in)
+                self._leaf_request_shape_gate(node, nid, depth,
+                                              code_rel, test_rel)
                 self._judge_leaf(nid, title, fn, code_rel, test_rel)
                 # Single-authority invariant (root cause of the v078 NOT READY):
                 # record the real code file THIS leaf delivered so the root
@@ -8896,6 +9186,10 @@ def %(callable)s(environ, start_response):
         routes = list(routes) + [mp for mp in sorted(adopted)
                                  if mp not in declared]
         _media = self._route_media_map()
+        try:                     # S12.1: the request-shape datum, same source
+            _reqf = self._route_request_fields()
+        except Exception:        # noqa: BLE001 — datum stays best-effort
+            _reqf = {}
         route_rows = []
         for m, p in sorted(routes):
             fn_adopted = None if (m, p) in declared else adopted.get((m, p))
@@ -8918,6 +9212,12 @@ def %(callable)s(environ, start_response):
             if _md:
                 row["media"] = {"json": "application/json",
                                 "html": "text/html"}[_md]
+            # S12.1: the contracted REQUEST shape — machine-readable so a
+            # consumer can diff a handler demanding a config env var
+            # ('NOTES_DB') against the human-stated body fields (['text'])
+            _rf = _reqf.get(((m or "GET").upper(), p))
+            if _rf is not None:
+                row["request_fields"] = list(_rf)
             route_rows.append(row)
         data = {
             "format": "spec-flow interface contract v1",

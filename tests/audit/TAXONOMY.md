@@ -428,6 +428,27 @@ Python symbols:
   reworks, each a fresh guess) — and the write door enforces the same datum
   regardless.
 
+## STAGE 12 — Request/config surface as data (`test_request_shape_gate.py`,
+`test_rework_preserves_route_surface.py`, `test_unserved_route_fastfail.py`)
+The v159 class: what a route ACCEPTS (request body fields) and what the
+product reads from the ENVIRONMENT (config) are two different human-stated
+surfaces; when neither exists as engine data, two agents can agree on the
+same wrong reading and stay green until product e2e.
+- S12.1 the REQUEST shape of a route is engine data
+  (`_route_request_fields`: 'POST /notes accepts {"text": ...}' -> ['text'];
+  bodyless GET/DELETE routes contract the EMPTY shape) and constitution env
+  vars are CONFIG data (`_constitution_env_vars`, the S10.22 analogue). The
+  binding prints both ('NOTES_DB is an environment variable, never a request
+  field'); contracts/interface.json carries `request_fields` per route; the
+  leaf gate (`_leaf_request_shape_gate`) reds a HANDLER whose required-field
+  checks (payload[...] / `x in payload`) name a field outside the contract —
+  attributing the config-vs-payload confusion by name — and a leaf TEST that
+  SENDS fields outside the contract (v159: the assembled product answered
+  POST/GET /notes with 400 "missing required field: 'NOTES_DB'" — a config
+  KeyError surfaced as request validation and both leaf artifacts had agreed
+  on it). Lenient: unshaped body routes and optional `.get(...)` access are
+  never flagged.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.
