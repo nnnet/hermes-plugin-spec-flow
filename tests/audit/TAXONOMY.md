@@ -252,6 +252,63 @@ tester-invented `db` module with an unrelated repo's code.
   because the specs still SAID db.py — Phase 7 boot/suite cannot detect a
   module-layout violation, so the plan gate is the only authority). A
   constitution pinning nothing collapses exactly as before (green edge).
+- S10.23 the ENTRY leaf's tests are held to the CONTRACTED success status
+  of EVERY declared (and adopted) route — the code_target exemption of the
+  test-status gate is scoped to feature amends, never the assembly leaf
+  (v156: tests/test_app.py asserted 200 for POST /notes while the
+  single-source contract says 201; `_leaf_owned_routes` returns [] for any
+  code_target node, so S10.4/S10.6 were a no-op for product_entry, the
+  wrong TEST reached assembly, the doctor read 'assert 201 == 200',
+  diagnosed task_check_mismatch and REWORKED THE WRONG ARTIFACT — core,
+  three times, events 139-143 — regressing it on the way). Green edges: an
+  entry test asserting the contracted statuses passes; a feature amend
+  without an engine-bound route keeps the exemption.
+- S10.24 a late requirement routed to AMEND an owner module that implies a
+  genuinely NEW (method, path) BINDS that route as engine data
+  (`_late_req_bound_route` → `binds_route`): the PATH is never invented —
+  it must be a path the amend target ALREADY serves per `_route_owners`
+  minus fixed-body liveness paths; the METHOD comes from the requirement's
+  own verbs (`_METHOD_SYNONYMS`) and must be new on that path; any
+  ambiguity binds nothing. The bound route GROWS `_product_contract` /
+  `_declared_route_set` / contracts/interface.json (canonical handler +
+  `_route_success_status`), the amend leaf OWNS it (so the route binding,
+  handler gate and test-status gate enforce the canonical
+  `def delete_notes(payload, query)`), and the entry resolver wires it
+  (v156: 'ALLOW REMOVING A NOTE' amended core and went to_done, but NO
+  datum carried (DELETE, /notes) — prose named no literal route, S10.13
+  adoption matches only the CANONICAL name on a DECLARED path and the
+  coder, given no binding, named its handler `delete_note` (checkpoint
+  007) — interface.json shipped without DELETE, src/app.py answered 405
+  forever, and the integrate rework then silently dropped the handler).
+  Green edges: a new PATH named only in prose never enters the contract;
+  two new-method verbs at once bind nothing.
+- S10.25 a phantom dependency symbol is refused at the ONE write door
+  (`_phantom_dependency_symbols` inside `_delivery_lint`, both `_write`
+  doors pass the workspace root): ``import X`` + ``X.attr`` where
+  <root>/src/X.py exists and defines no module-level ``attr`` never lands
+  — in src/ OR tests/ (v156: the integrate rework shipped
+  ``db.list_notes()`` while src/db.py defines get_notes, and
+  tests/test_core.py calling ``db.connect()``; the assembled product
+  500'd GET /notes and the shared boot oracle failed EVERY smoke/e2e
+  check, including '[smoke] GET /health -> 200' whose note honestly
+  carried the real reason 'GET /notes -> 500' — /health itself answered
+  200). Green edges (no false red on build order / dynamic surfaces): a
+  defined attr, stdlib imports, a not-yet-built dependency, an
+  ``import *`` dependency, dunder attrs and a self-import are clean;
+  ``from X import Y`` stays S10.2's seam (assembly import repair).
+- S10.26 the late-req delta gate excludes routes the ownership DATUM
+  records to ANOTHER leaf — the sibling-served subtraction reads dispatch
+  EVIDENCE (`_served_routes`) and misses an owner whose canonical handler
+  carries no literal path (v156 events 79-80: web_ui's spec quoted
+  'GET /health', core's get_health has no '/health' string, the gate
+  FAILed web_ui with "no handler for ['/health']" and the doctor cause
+  web_ui:empty_delta stayed OPEN for the whole run — the final root report
+  listed remediated noise as an open hole). Green edge: the node's OWN new
+  route with no delivered handler (v062 about_page class) stays red.
+  v156 postscript — 'doctor causes still open: L0:integrate:
+  task_check_mismatch' was HONEST remediation residue (reconcile → rework
+  → escalate over the S10.23 wrong-test class, red run end keeps the cause
+  open); its root class is S10.23, no separate gate owed.
 
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
