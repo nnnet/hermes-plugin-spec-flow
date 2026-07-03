@@ -1367,6 +1367,74 @@ def _route_success_status(method: str) -> int:
     return 201 if (method or "GET").strip().upper() == "POST" else 200
 
 
+def _status_smear_autofixable(stmt) -> bool:
+    """S12.7 (v161): True when a smeared status assertion has one of the TWO
+    canonical shapes the mechanical rewriter handles — a plain
+    ``assert <expr> in (<consts>)`` with a single ``in`` comparator, or a
+    unittest ``assertIn(<expr>, (<consts>))``. Anything fancier falls back to
+    the classic red finding — the engine edits only what it can edit exactly,
+    it never guesses."""
+    if isinstance(stmt, ast.Assert) and isinstance(stmt.test, ast.Compare):
+        cmp = stmt.test
+        return (len(cmp.ops) == 1 and isinstance(cmp.ops[0], ast.In)
+                and len(cmp.comparators) == 1)
+    return (isinstance(stmt, ast.Call)
+            and isinstance(stmt.func, ast.Attribute)
+            and stmt.func.attr == "assertIn" and len(stmt.args) >= 2)
+
+
+def _rewrite_exact_status_asserts(text: str, test_rel: str,
+                                  fixes: list) -> "tuple":
+    """S12.7 (v161): mechanically rewrite smeared success-status assertions to
+    the exact contracted status — ``assert code in (200, 201)`` becomes
+    ``assert code == 201``, ``self.assertIn(code, (200, 201))`` becomes
+    ``self.assertEqual(code, 201)``.
+
+    Why: v160+v161 — the doctor sent the SAME exact rework feedback twice and
+    the worker model delivered the SAME smear back both runs; a defect with
+    zero ambiguity (the contracted value is engine data AND a member of the
+    smeared set) must be repaired by code, never round-tripped through model
+    quality. What: pure text surgery on the AST node spans (no re-formatting
+    of anything else). ``fixes`` is [(stmt, want, smeared_set), ...] where
+    stmt satisfies ``_status_smear_autofixable``. Returns (new_text, notes,
+    unfixed) — a node whose source span cannot be resolved lands in
+    ``unfixed`` so the caller reds it with the classic finding instead.
+    Test: tests/audit/test_smeared_status_autofix.py."""
+    starts = [0]
+    for ln in text.splitlines(keepends=True):
+        starts.append(starts[-1] + len(ln))
+
+    def _span(node) -> "tuple":
+        return (starts[node.lineno - 1] + node.col_offset,
+                starts[node.end_lineno - 1] + node.end_col_offset)
+
+    notes, unfixed, repl = [], [], []
+    for stmt, want, smear in fixes:
+        try:
+            if isinstance(stmt, ast.Assert):
+                target = stmt.test
+                left = ast.get_source_segment(text, target.left)
+                new = None if left is None else "%s == %d" % (left, want)
+            else:
+                target = stmt
+                obj = ast.get_source_segment(text, stmt.func.value)
+                arg0 = ast.get_source_segment(text, stmt.args[0])
+                new = (None if None in (obj, arg0)
+                       else "%s.assertEqual(%s, %d)" % (obj, arg0, want))
+            if new is None:
+                unfixed.append((stmt, want, smear))
+                continue
+            a, b = _span(target)
+            repl.append((a, b, new))
+            notes.append("%s:%d: asserts membership over %s — rewritten to "
+                         "exactly %d" % (test_rel, stmt.lineno, smear, want))
+        except Exception:  # noqa: BLE001 — an unfixable node stays a finding
+            unfixed.append((stmt, want, smear))
+    for a, b, new in sorted(repl, reverse=True):
+        text = text[:a] + new + text[b:]
+    return text, notes, unfixed
+
+
 def _route_fixed_body(method: str, path: str) -> "Optional[dict]":
     """The ONE contracted response body for a route that carries a FIXED body
     — currently only the liveness route: GET /health(z) answers exactly
@@ -4901,6 +4969,7 @@ class Engine:
             return None
 
         findings: list = []
+        autofixes: list = []    # S12.7: (stmt, contracted, smeared_set)
         # module-level test functions plus unittest.TestCase methods
         fns = [n for n in tree.body
                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
@@ -4961,11 +5030,25 @@ class Engine:
                         # S10.6: a smeared success set on an OWNED route
                         # hedges two guesses instead of reading the card
                         if sorted(set(member)) != [want]:
-                            findings.append(
-                                "%s asserts membership over %s after `%s %s` "
-                                "— assert exactly the contracted status %d"
-                                % (test_rel, sorted(set(member)),
-                                   last_route[0], last_route[1], want))
+                            # S12.7 (v161): the contracted value INSIDE the
+                            # smeared set makes the repair MECHANICAL — the
+                            # engine rewrites the assert itself instead of
+                            # round-tripping exact feedback through a model
+                            # that failed to apply it twice (v160+v161).
+                            # quiet (S12.5 recheck) stays side-effect-free;
+                            # a set WITHOUT the contracted value is wrong in
+                            # a way no edit can settle — honest red.
+                            if want in member and not quiet \
+                                    and _status_smear_autofixable(stmt):
+                                autofixes.append((stmt, want,
+                                                  sorted(set(member))))
+                            else:
+                                findings.append(
+                                    "%s asserts membership over %s after "
+                                    "`%s %s` — assert exactly the contracted "
+                                    "status %d"
+                                    % (test_rel, sorted(set(member)),
+                                       last_route[0], last_route[1], want))
                             last_route = None   # one finding per call site
                     else:
                         got = next((s for s in exact if 200 <= s < 300), None)
@@ -4987,6 +5070,27 @@ class Engine:
                     paths = [c for c in consts if c.startswith("/")]
                     if meths and paths:
                         last_route = (meths[0], paths[0])
+        if autofixes:
+            # S12.7 (v161): apply the mechanical repair and JOURNAL it — the
+            # run's trace must show the engine edited the artifact. A node
+            # the rewriter could not resolve falls back to the classic red
+            # finding (never silently dropped).
+            new_text, notes, unfixed = _rewrite_exact_status_asserts(
+                text, test_rel, autofixes)
+            if notes:
+                (Path(self.workspace.root) / test_rel).write_text(
+                    new_text, encoding="utf-8")
+                self.loops.append({"type": "test-status-autofix", "task": nid,
+                                   "detail": "; ".join(notes)[:400]})
+                self.emit("review", "engine", "", nid,
+                          "test-status autofix: smeared success assertion "
+                          "rewritten to the contracted status",
+                          "; ".join(notes)[:300], "test_status_autofix",
+                          "ENFORCED", level=L_MILESTONE)
+            for _stmt, _want, _smear in unfixed:
+                findings.append(
+                    "%s asserts membership over %s — assert exactly the "
+                    "contracted status %d" % (test_rel, _smear, _want))
         if not findings:
             return True
         if quiet:                    # S12.5 re-derivation: verdict only,

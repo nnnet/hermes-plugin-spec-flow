@@ -102,14 +102,19 @@ def test_dup_surface_text_keeps_empty_delta_on_any_gate():
 
 # --- S12.5: causes close attributably when the opening gate re-runs clean -----
 
-_SMEARED = """\
+# the cause-opening artifact: an EXACT-status mismatch (assert 200, contract
+# 201). NOTE (S12.7, v161): the previous fixture smeared `in (200, 201)` —
+# that class is now mechanically REPAIRED by the gate itself (autofix), so it
+# no longer opens a cause; the exact-mismatch class stays an honest red
+# (which of the two disagreeing guesses is right is not mechanical).
+_WRONG = """\
     def _call(method, path):
         return 201
 
 
     def test_post_created():
         code = _call("POST", "/notes")
-        assert code in (200, 201)
+        assert code == 200
 """
 
 _EXACT = """\
@@ -142,7 +147,7 @@ def _write_test(eng, body: str) -> None:
 def _open_cause_via_gate(eng) -> None:
     node = {"id": _NID, "title": "Notes API",
             "requirement": "own POST /notes and GET /notes"}
-    _write_test(eng, _SMEARED)
+    _write_test(eng, _WRONG)
     ok = eng._leaf_test_status_gate(node, _NID, 1, _TEST_REL)
     assert ok is False
     opened = eng._doctor_open_causes()

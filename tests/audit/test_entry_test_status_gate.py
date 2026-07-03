@@ -74,7 +74,11 @@ def test_entry_test_wrong_status_on_declared_route_is_red(tmp_path):
         "fixes the assertion, not guesses: %s" % loops[0]["detail"])
 
 
-def test_entry_test_smeared_success_is_red(tmp_path):
+def test_entry_test_smeared_success_never_survives(tmp_path):
+    # S12.7 (v161): this is the LITERAL v160/v161 artifact — tests/test_app.py
+    # smearing POST /notes over (200, 201) survived model rework twice. The
+    # contracted 201 is IN the set, so the engine repairs it mechanically;
+    # the gate is clean over the repaired file and the fix is journaled.
     ok, loops = _gate(tmp_path, dict(_ENTRY_NODE), """\
         def _call(method, path):
             return 201
@@ -84,9 +88,9 @@ def test_entry_test_smeared_success_is_red(tmp_path):
             code = _call("POST", "/notes")
             assert code in (200, 201)
     """)
-    assert not ok and loops, (
-        "a smeared success set on a declared route hedges two guesses — "
-        "the entry test must assert exactly the contracted status")
+    assert ok and not loops, (
+        "the fixable smear on the entry leaf is repaired in place — never "
+        "round-tripped through a model that failed the exact feedback twice")
 
 
 def test_entry_test_contracted_statuses_pass(tmp_path):
