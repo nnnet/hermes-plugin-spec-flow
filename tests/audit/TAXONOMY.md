@@ -92,7 +92,8 @@ and a static depth gate starved online growth).
 - S9.5 (open) same liveness proof owed to: --resume, doctor remedies,
   worktree isolation, memory tiers — one representative dynamic test each.
 
-## STAGE 10 — Assembly-seam honesty (`test_assembly_seam_honesty.py`)
+## STAGE 10 — Assembly-seam honesty (`test_assembly_seam_honesty.py`,
+S10.22 in `test_constitution_pinned_paths.py`)
 Every value TWO independent artifacts must agree on (status codes, symbol
 names, module owners) must exist as ONE engine-declared datum both sides
 read — and the suite that judges the product must see ONLY the product.
@@ -232,6 +233,25 @@ tester-invented `db` module with an unrelated repo's code.
   PASS shared the gate id — the run proceeded to order the rival handlers,
   redding only at integrate event ~139). A single-owner plan produces no
   such event.
+- S10.22 a module path a constitution rule names LITERALLY ("storage
+  through sqlite3 in src/db.py") is IMMOVABLE human data every engine
+  transformation must respect (`_constitution_pinned_paths`, entry
+  excluded — entry synthesis owns it): the small-product collapse keeps a
+  pinned non-entry module as its OWN child leaf (plan = pinned leaves +
+  core; core accesses the pinned responsibility ONLY through import), the
+  dropped-module purge / durable spec-write sanitizer never retarget a
+  pinned stem, and the plan-ownership gate reds — root integrate FAIL +
+  doctor cause — when a pinned path has NO owner node in the realized
+  plan, naming the path AND the rule (v155 events 14-24: the collapse
+  swallowed pinned src/db.py into src/core.py, the S10.20 purge retargeted
+  every db.py reference, the spec then openly contradicted the
+  constitution and the reviewer rightly rejected it forever — doctor
+  oscillated reconcile_check → goal_coverage → redecompose_parent, rework
+  exhausted, root RED; v152 shipped READY silently violating the SAME
+  rule — no src/db.py was ever built, the reviewer just could not see it
+  because the specs still SAID db.py — Phase 7 boot/suite cannot detect a
+  module-layout violation, so the plan gate is the only authority). A
+  constitution pinning nothing collapses exactly as before (green edge).
 
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
