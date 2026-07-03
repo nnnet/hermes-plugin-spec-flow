@@ -3173,6 +3173,38 @@ class Engine:
                 continue
         return None, None
 
+    def _constitution_pinned_paths(self) -> list:
+        """S10.22 (v155): a module path a constitution rule names LITERALLY
+        ("storage through sqlite3 in src/db.py") is HUMAN non-negotiable data
+        — the engine's transformations (small-product collapse, dropped-module
+        purge, spec-write sanitizer) must never move or retarget it, and the
+        realized plan must give it an owner node. Deterministic extraction:
+        collect literal ``src/<name>.py`` occurrences from the constitution
+        rules, excluding the declared product entry (entry synthesis already
+        owns the entry module — it is not a leaf-owned module). Returns
+        ``[(path, rule), ...]`` so every consumer can attribute the pin to the
+        exact constitution rule. Pure text, no LLM.
+
+        Why: v155 — the collapse swallowed pinned src/db.py into src/core.py
+        and the durable purge retargeted every db.py reference, so the spec
+        openly contradicted the constitution and the reviewer rejected it
+        forever; v152 shipped READY silently violating the same rule.
+        Test: tests/audit/test_constitution_pinned_paths.py."""
+        try:
+            entry = str((self._product_contract() or {}).get("entry") or "")
+        except Exception:        # noqa: BLE001 — no contract = nothing to exclude
+            entry = ""
+        out: list = []
+        seen: set = set()
+        for rule in (getattr(self, "_constitution", None) or []):
+            for m in re.finditer(r"src/[A-Za-z0-9_]+\.py", str(rule)):
+                path = m.group(0)
+                if path == entry or path in seen:
+                    continue
+                seen.add(path)
+                out.append((path, str(rule)))
+        return out
+
     def _product_contract(self) -> dict:
         """Derive the runnable-product contract from the project's OWN HUMAN
         description — NEVER from structured config. No `product:` key is read;
@@ -3735,6 +3767,15 @@ class Engine:
                 known.add(Path(entry).stem)
         except Exception:        # noqa: BLE001 — no contract = no entry to allow
             pass
+        # S10.22: a constitution-pinned path is a KNOWN owner-to-be — quoting
+        # the constitution is not smuggling a mini-architecture. Ownership of
+        # pinned paths is enforced by the plan gate (_plan_ownership_report),
+        # which reds when the realized plan gives a pinned path no owner node.
+        try:
+            for _pp, _r in self._constitution_pinned_paths():
+                known.add(_snake(Path(_pp).stem))
+        except Exception:        # noqa: BLE001 — no constitution = nothing pinned
+            pass
         text = " ".join(str(node.get(k) or "")
                         for k in ("requirement", "spec_markdown", "title"))
         foreign = sorted({m for m in re.findall(r"src/([A-Za-z0-9_]+)\.py",
@@ -4101,17 +4142,37 @@ class Engine:
         route); >=2 = duplicate (e.g. the v122 second get_notes). Returns a
         list of plain-string findings (JSON-safe).
 
-        DIAGNOSTIC ONLY — it never flips READY; actual serving is enforced by
-        the real boot/suite gate (Phase 7)."""
+        Route findings are DIAGNOSTIC ONLY — actual serving is enforced by
+        the real boot/suite gate (Phase 7). S10.22 (v155/v152): a
+        constitution-PINNED module path with NO owner node in the realized
+        plan is a red finding here — Phase 7 cannot see it (the product may
+        serve fine while violating the constitution's module layout, exactly
+        v152's silent violation), so this deterministic plan check is the
+        only gate that can."""
+        findings = []
+        # S10.22: every constitution-pinned path must have an owner node
+        # (node id -> src/<id>.py convention, entry excluded by the extractor)
+        try:
+            pins = self._constitution_pinned_paths()
+        except Exception:        # noqa: BLE001 — no constitution = nothing pinned
+            pins = []
+        if pins:
+            reg = {_snake(i) for i in (self._node_registry or {})}
+            for _pp, _rule in pins:
+                if _snake(Path(_pp).stem) not in reg:
+                    findings.append(
+                        "constitution-pinned module %s has NO owner node in "
+                        "the realized plan — the constitution rule pinning "
+                        "it: %r" % (_pp, _rule))
         try:
             routes = self._declared_route_set(self._product_contract() or {})
         except Exception:        # noqa: BLE001
-            return []
+            return findings
         owners_map = self.__dict__.get("_route_owners") or {}
         if not routes or not owners_map:
-            # no ownership data recorded (degenerate run) — nothing to attest
-            return []
-        findings = []
+            # no route-ownership data recorded (degenerate run) — nothing
+            # further to attest
+            return findings
         for m, path in routes:
             owners = sorted(owners_map.get((m, path), ()))
             if not owners:
@@ -5551,7 +5612,30 @@ def %(callable)s(environ, start_response):
         # informational — serving is Phase 7's boot/suite authority, and a
         # route may be honestly served by an adopted handler with no
         # text-owning leaf.
-        _dups = [f for f in self._plan_ownership_report() if "duplicate" in f]
+        _pof = self._plan_ownership_report()
+        # S10.22 (v152/v155): a constitution-PINNED module path with no owner
+        # node is a root integrate FAIL — Phase 7's boot/suite cannot see a
+        # module-layout violation (the product may serve fine while the
+        # constitution-mandated src file was never built: v152 shipped READY
+        # exactly so), so this deterministic plan finding is the authority.
+        _pin_gaps = [f for f in _pof if "constitution-pinned" in f]
+        if _pin_gaps:
+            _pdetail = "; ".join(_pin_gaps)
+            self.emit("integrate", "engine", "spec-integrate",
+                      "L0:integrate",
+                      "constitution-pinned module has no owner in the "
+                      "realized plan",
+                      _pdetail[:400], "integrate_verify", "FAIL",
+                      level=L_MILESTONE)
+            _rid4 = str((project.get("tree") or {}).get("id", "L0"))
+            self.loops.append({
+                "type": "integrate-fail", "task": _rid4,
+                "detail": f"constitution-pinned module unowned: {_pdetail}"})
+            self._doctor_advise(
+                {"id": "L0:integrate"}, "L0:integrate", 0,
+                "integrate_verify", "FAIL",
+                {"reasons": f"constitution-pinned module unowned: {_pdetail}"})
+        _dups = [f for f in _pof if "duplicate" in f]
         if _dups:
             _ddetail = "; ".join(_dups)
             self.emit("integrate", "engine", "spec-integrate",
@@ -6635,13 +6719,27 @@ def %(callable)s(environ, start_response):
         routes = self._declared_route_set(c)
         goal = (node.get("requirement") or self._goal
                 or node.get("title") or "Build the product")
+        # S10.22: a constitution-pinned module is NOT absorbed by the core —
+        # storage (or whatever the rule pins) goes THROUGH the pinned module
+        # via import; ordering it INTO core.py contradicts the constitution
+        # (v155: the reviewer rejected exactly that spec, forever).
+        pins = [(p, r) for p, r in self._constitution_pinned_paths()
+                if _snake(Path(p).stem) != _snake(own)]
+        if pins:
+            _pin_list = ", ".join(f"`{p}`" for p, _ in pins)
+            core_line = (f"- `src/{own}.py`: EVERY declared route handler; the "
+                         f"constitution-pinned module(s) ({_pin_list}) keep "
+                         "their OWN leaves — access them ONLY through import, "
+                         "never inline their responsibility here.")
+        else:
+            core_line = (f"- `src/{own}.py`: EVERY declared route handler AND "
+                         "the storage — one module owns the whole base product.")
         lines = [
             "## Scope (engine-rewritten at the small-product collapse)",
             f"Goal: {goal}",
             "",
             "In:",
-            f"- `src/{own}.py`: EVERY declared route handler AND the storage "
-            "— one module owns the whole base product.",
+            core_line,
         ]
         if routes:
             lines += ["", f"Declared routes (all owned by `src/{own}.py`):"]
@@ -6656,6 +6754,7 @@ def %(callable)s(environ, start_response):
         known = {_snake(i) for i in (self._node_registry or {})} | {own}
         if entry:
             known.add(_snake(Path(entry).stem))
+        known.update(_snake(Path(p).stem) for p, _ in pins)  # S10.22
 
         def _retarget(m: "re.Match") -> str:
             return (m.group(0) if _snake(m.group(1)) in known
@@ -6695,6 +6794,11 @@ def %(callable)s(environ, start_response):
         known = {_snake(i) for i in (self._node_registry or {})} | {_snake(own)}
         if entry:
             known.add(_snake(Path(entry).stem))
+        # S10.22: constitution-pinned stems are IMMOVABLE — never droppable,
+        # never retargeted (v155: the purge rewrote pinned src/db.py at
+        # core.py and the spec contradicted the constitution forever)
+        for _pp, _rule in self._constitution_pinned_paths():
+            known.add(_snake(Path(_pp).stem))
         pat = re.compile(r"src/([A-Za-z0-9_]+)\.py")
         dropped: set = self.__dict__.setdefault("_dropped_modules", set())
 
@@ -6860,7 +6964,45 @@ def %(callable)s(environ, start_response):
                 # the phantom modules). The engine REWRITES it for one module.
                 "spec_markdown": self._collapsed_core_spec(node),
             }
-            node["children"] = [core]
+            # S10.22: a constitution-pinned non-entry module is IMMOVABLE —
+            # the collapse must NOT swallow it into the core (v155: pinned
+            # src/db.py was absorbed into src/core.py, the purge retargeted
+            # every reference and the reviewer rejected the contradicting
+            # spec forever). Each pinned module keeps its OWN child leaf; the
+            # leaf id equals the module stem so the ownership convention
+            # (node id -> src/<id>.py) holds everywhere.
+            _pin_leaves = []
+            for _pp, _rule in self._constitution_pinned_paths():
+                _stem = _snake(Path(_pp).stem)
+                if _stem == core["id"]:
+                    continue
+                _pin_leaves.append({
+                    "id": _stem,
+                    "title": f"Constitution-pinned module {_pp}",
+                    "requirement": (f"Build {_pp} exactly as the constitution "
+                                    f"mandates — {_rule}"),
+                    "atomic": True,
+                    "metrics": {"modules": 1, "tasks": 2, "interfaces": 1,
+                                "estimated_loc": 60, "open_decisions": 0,
+                                "single_concern": True,
+                                "testable_criteria": True},
+                    "spec_markdown": (
+                        "## Scope (engine-written at the small-product "
+                        "collapse)\n"
+                        f"Constitution-pinned module: `{_pp}`. The rule "
+                        "pinning it:\n"
+                        f"> {_rule}\n\n"
+                        "In:\n"
+                        f"- `{_pp}`: implement the pinned responsibility "
+                        "here; the core module accesses it ONLY through "
+                        "import.\n"),
+                })
+                self.emit("decompose", "engine", "", _stem,
+                          "constitution-pinned module keeps its own leaf",
+                          f"{_pp} is pinned by the constitution — the "
+                          "collapse must not swallow it into the core",
+                          "small_product", "", level=L_MILESTONE)
+            node["children"] = _pin_leaves + [core]
             node.pop("atomic", None)            # the ROOT stays a branch
             leaf_out = {"verdict": "branch",
                         "reasons": [f"small product: {_nr} route(s) <= "
@@ -6868,10 +7010,14 @@ def %(callable)s(environ, start_response):
                         "basis": ("small-product floor: one base module owns all "
                                   "routes + storage; root stays a branch so late "
                                   "requirements still materialise")}
+            _base_shape = ("base collapsed to one module" if not _pin_leaves
+                           else ("base collapsed to one core module + %d "
+                                 "constitution-pinned leaf/leaves"
+                                 % len(_pin_leaves)))
             self.emit("decompose", "engine", "", nid,
                       "small product → single core leaf (root stays branch)",
                       f"{_nr} declared route(s) <= {self._small_product_routes}: "
-                      "base collapsed to one module; late requirements still "
+                      f"{_base_shape}; late requirements still "
                       "attach as further root children",
                       "small_product", "branch", level=L_MILESTONE)
             # v152 (S10.14): journal the leaf rewrite explicitly (the
