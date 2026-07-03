@@ -288,8 +288,44 @@ def _assert_nodes(func: ast.AST) -> Iterator[ast.AST]:
             yield node
 
 
+def _interface_handlers(run_dir: Path) -> dict[str, tuple[str, str]]:
+    """handler name -> (METHOD, path) from contracts/interface.json rows.
+
+    The machine contract names each route's handler (S10.13 grows it with
+    adopted routes), so the checker binds calls to the SAME datum the engine
+    declared instead of re-deriving it from tree ``exposes`` alone."""
+    iface = run_dir / "workspace" / "contracts" / "interface.json"
+    out: dict[str, tuple[str, str]] = {}
+    if not iface.is_file():
+        return out
+    try:
+        data = json.loads(iface.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        return out
+    rows = data.get("routes") if isinstance(data, dict) else data
+    if not isinstance(rows, list):
+        return out
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        method = str(item.get("method", "")).upper()
+        path = item.get("path") or ""
+        name = str(item.get("handler") or "").strip()
+        if name and method in HTTP_METHODS and str(path).startswith("/"):
+            out[name] = (method, str(path))
+    return out
+
+
 def check_test_status_asserts(run_dir: Path, tree: dict) -> list[Finding]:
-    """2xx status asserted after a route call must match the contracted status."""
+    """2xx status asserted after a route call must match the contracted status.
+
+    Binding rule (v152): each 2xx assert binds to the nearest PRECEDING
+    recognized route call in source order; a handler-SHAPED call the contract
+    does not know RESETS the binding, so the asserts answering it are skipped
+    — never blamed on an earlier recognized route (v152: test_core.py:87's
+    200 answered delete_notes at line 86 but was bound to post_notes at 85
+    and reported as a POST /notes mismatch).
+    """
     routes = contract_routes(tree, run_dir)
     handlers: dict[str, tuple[str, str]] = {}
     for node in walk_nodes(tree):
@@ -297,6 +333,8 @@ def check_test_status_asserts(run_dir: Path, tree: dict) -> list[Finding]:
             route = _handler_to_route(handler)
             if route:
                 handlers[handler.split("(", 1)[0].strip()] = route
+    # the machine contract wins: it names the engine-declared handler per route
+    handlers.update(_interface_handlers(run_dir))
 
     findings: list[Finding] = []
     tests_dir = run_dir / "workspace" / "tests"
@@ -320,6 +358,16 @@ def check_test_status_asserts(run_dir: Path, tree: dict) -> list[Finding]:
                     route = _route_of_call(node, handlers)
                     if route:
                         events.append((node.lineno, "route", route))
+                        continue
+                    fn = node.func
+                    name = (fn.attr if isinstance(fn, ast.Attribute)
+                            else getattr(fn, "id", None))
+                    if name and name not in handlers \
+                            and _handler_to_route(name):
+                        # handler-shaped call the contract does not know:
+                        # it resets the binding (asserts answering it are
+                        # skipped, never blamed on an earlier route)
+                        events.append((node.lineno, "unknown", None))
             for node in _assert_nodes(func):
                 for status in _success_statuses(node):
                     events.append((node.lineno, "assert", status))
@@ -329,6 +377,9 @@ def check_test_status_asserts(run_dir: Path, tree: dict) -> list[Finding]:
             for lineno, kind, payload in events:
                 if kind == "route":
                     current_route = payload  # type: ignore[assignment]
+                    continue
+                if kind == "unknown":
+                    current_route = None
                     continue
                 status = payload  # type: ignore[assignment]
                 if current_route is None:

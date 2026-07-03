@@ -37,10 +37,12 @@ from pathlib import Path
 TERMINAL_VERDICTS = {"READY", "NOT READY"}
 
 _COLLAPSE_MARKER = re.compile(r"collapsed to one module", re.IGNORECASE)
-# Markers a spec-rewrite/cleanup event would carry after a collapse.
+# Markers a spec-rewrite/cleanup event would carry after a collapse. The
+# S10.14 engine emits two explicit shapes: 'collapsed spec rewritten …' and
+# 'collapse purged dropped-module references' — both satisfy the invariant.
 _RESPEC_MARKER = re.compile(
     r"rewrit|re-?spec|spec\s+(rewrite|rewritten|updated after collapse|pruned|cleanup)"
-    r"|scope pruned|prune[sd]? collapsed",
+    r"|scope pruned|prune[sd]? collapsed|purged dropped-module",
     re.IGNORECASE,
 )
 _CARD_GATE_MARKER = re.compile(r"card (gate|completeness)", re.IGNORECASE)
