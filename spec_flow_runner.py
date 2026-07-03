@@ -5924,9 +5924,29 @@ def %(callable)s(environ, start_response):
         # a node that exposes nothing, and never a hard red — a weak decomposer
         # that cannot card is surfaced, not blocked; the boot/suite gate stays
         # the real authority.
+        # S10.21 (v154): a FOREIGN-route claim is NOT a fillable card gap — in
+        # v154 it drowned inside the generic 'card gate: incomplete' event
+        # (truncated at 300 chars behind the acceptance finding) and the fill
+        # loop, which can only add acceptance/examples, could never remove
+        # it; no doctor cause, no loop entry, and the run went on to order
+        # the rival handlers. Red it as its OWN attributable milestone.
+        def _split_foreign(findings: list) -> tuple:
+            f = [g for g in findings if RULE_ROUTE_OWNERSHIP in g]
+            return f, [g for g in findings if g not in f]
+
+        _foreign, gaps = _split_foreign(self._card_completeness_findings(node))
+        if _foreign:
+            for g in _foreign:
+                self.emit("review", "engine", "", nid,
+                          "card gate: foreign route claim", g,
+                          "card_route_claim", "FAIL", level=L_MILESTONE)
+            self.loops.append({"type": "foreign-route-claim", "task": nid,
+                               "detail": "; ".join(_foreign)[:300]})
+            self._doctor_advise(node, nid, depth, "card_route_claim", "FAIL",
+                                {"scope_findings": list(_foreign)})
         _card_fails = 0
         for _card_round in range(2):
-            gaps = self._card_completeness_findings(node)
+            _, gaps = _split_foreign(self._card_completeness_findings(node))
             if not gaps:
                 break
             _card_fails += 1
@@ -5960,8 +5980,9 @@ def %(callable)s(environ, start_response):
             if cout.get("examples"):
                 node["examples"] = cout["examples"]
         else:
-            # both rounds red — recheck the LAST fill before judging
-            gaps = self._card_completeness_findings(node)
+            # both rounds red — recheck the LAST fill before judging (the
+            # foreign-claim class is judged by its own gate above, S10.21)
+            _, gaps = _split_foreign(self._card_completeness_findings(node))
         # v152 (S10.15): a milestone FAIL demands an attributable resolution —
         # when the fill rework satisfies the gate, journal the matching PASS
         # (same 'card gate' action prefix, same node) so the run's journal

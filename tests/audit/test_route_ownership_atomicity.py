@@ -235,3 +235,42 @@ def test_single_owner_plan_has_no_duplicate_event(plugin, tmp_path):
     assert not any("duplicate route ownership" in str(lp.get("detail", ""))
                    for lp in res.loops), (
         "no integrate-fail loop entry may be recorded for a clean plan")
+
+
+# ── S10.21 the foreign-claim card finding is a LIVE, attributable gate ───────
+# v154: the S10.18 finding WAS computed for web_ui (trace events 64/78 carry
+# "route POST /notes is ALREADY owned by leaf 'core'") — but it was wired only
+# as a card-completeness gap: buried behind the acceptance finding in one
+# generic 'card gate: incomplete' event truncated at 300 chars, remediated by
+# a fill loop that can only add acceptance/examples (it can never remove a
+# route claim), escalated nowhere (no doctor cause, no loop entry), and the
+# later 'spec lint clean' PASS shared the same gate id. The run proceeded and
+# the binding still ordered the rival handlers. The foreign claim must be its
+# OWN milestone FAIL, emitted BEFORE any integrate-level duplicate FAIL.
+
+def test_foreign_claim_reds_as_own_event_before_integrate(plugin, tmp_path):
+    res = _run(tmp_path, plugin, _dup_owner_decomposer)
+    assert res is not None
+    events = [repr(ev) for ev in res.events]
+    claim_at = next((i for i, ev in enumerate(events)
+                     if "foreign route claim" in ev), None)
+    assert claim_at is not None, (
+        "a leaf whose declared surface claims a route another leaf owns must"
+        " red as a DEDICATED card-gate milestone (v154: the finding drowned"
+        " in the truncated 'card gate: incomplete' detail)")
+    assert "core" in events[claim_at] and "/notes" in events[claim_at], (
+        "the dedicated event must NAME the owner and the route, untruncated —"
+        f" got: {events[claim_at]!r}")
+    dup_at = next((i for i, ev in enumerate(events)
+                   if "duplicate route ownership" in ev), None)
+    assert dup_at is not None and claim_at < dup_at, (
+        "the card-level finding must precede the root-integrate duplicate"
+        " FAIL — early at the leaf, not only at the terminal")
+
+
+def test_single_owner_plan_has_no_foreign_claim_event(plugin, tmp_path):
+    res = _run(tmp_path, plugin, _single_owner_decomposer)
+    assert res is not None
+    dump = "\n".join(repr(ev) for ev in res.events)
+    assert "foreign route claim" not in dump, (
+        "a clean single-owner plan must never trip the foreign-claim gate")
