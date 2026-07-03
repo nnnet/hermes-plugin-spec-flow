@@ -112,7 +112,9 @@ class _LeafWorkspaceView:
     def _write(self, rel: str, content: str, kind: str) -> str:
         bad = _delivery_lint(rel, content, root=self.root,
                              contracts=getattr(self, "module_contracts",
-                                               None))
+                                               None),
+                             route_handlers=getattr(
+                                 self, "route_handler_contracts", None))
         if bad:
             # the door REFUSES: dirty code never lands (RULE_CODE_STYLE)
             try:
@@ -1091,7 +1093,40 @@ def _module_contract_violations(rel: str, tree: "ast.AST",
     return findings
 
 
-def _delivery_lint(rel: str, body: str, root=None, contracts=None) -> list:
+def _route_handler_erasure(rel: str, tree: "ast.AST",
+                           route_handlers) -> list:
+    """S12.2 — the write-door gate over the module ROUTE surface datum
+    (``route_handlers``: {module_stem: {handler: 'METHOD /path'}}): a
+    delivery to ``src/<stem>.py`` must bind EVERY contracted route handler
+    of that module at module level (def/class/assign — any real binding
+    counts, S11.3 semantics).
+
+    Why: v159 — the doctor's core rework re-guessed the module and erased
+    the amend-landed get_about/delete_notes; the erasing delivery landed,
+    /about 404-ed at assembly, and the doctor looped on 'weak_implementer'
+    without naming the erasure.
+    What: modules with no entry in the datum are untouched; a star-import
+    surface stays lenient. Findings name the erased handler AND its route.
+    Test: tests/audit/test_rework_preserves_route_surface.py."""
+    if not route_handlers:
+        return []
+    p = str(rel).replace("\\", "/")
+    if not p.startswith("src/"):
+        return []
+    want = route_handlers.get(Path(p).stem) or {}
+    if not want:
+        return []
+    defined = _module_level_names(tree.body, set())
+    if defined is None:
+        return []
+    return ["route handler contract: %s must define %s (`%s`) — a delivery "
+            "that drops a contracted route handler never lands (the route "
+            "would 404 at assembly)" % (rel, name, want[name])
+            for name in sorted(set(want) - defined)]
+
+
+def _delivery_lint(rel: str, body: str, root=None, contracts=None,
+                   route_handlers=None) -> list:
     """ONE write-door hygiene check for delivered CODE (src/*.py, tests/*.py).
     Enforces RULE_CODE_STYLE — the same constant workers see in their prompts,
     so prompt and gate can never drift. Findings (each a class that already
@@ -1134,6 +1169,8 @@ def _delivery_lint(rel: str, body: str, root=None, contracts=None) -> list:
     # S11.3: both contract gates read the engine-declared module symbol
     # datum the door was handed — never the live files (order-independent)
     findings.extend(_module_contract_violations(rel, tree, contracts))
+    # S12.2: the module ROUTE surface gate — an erasing rework never lands
+    findings.extend(_route_handler_erasure(rel, tree, route_handlers))
     return findings
 
 
@@ -1991,7 +2028,9 @@ class Workspace:
             return rel
         bad = _delivery_lint(rel, content, root=self.root,
                              contracts=getattr(self, "module_contracts",
-                                               None))
+                                               None),
+                             route_handlers=getattr(
+                                 self, "route_handler_contracts", None))
         if bad:
             # the door REFUSES: dirty code never lands (RULE_CODE_STYLE)
             self.artifacts.append({"path": rel, "type": "refused_%s" % kind,
@@ -4032,6 +4071,9 @@ class Engine:
                 return []
             if nid:
                 reg.setdefault(mp, set()).add(nid)
+                # S12.2: the amend's bound route lands in the module it EDITS
+                self._record_route_module(
+                    mp, Path(str(node.get("code_target"))).stem)
             return [mp]
         # S10.16 (v152): ownership means "this LEAF BUILDS the route" — only a
         # childless leaf may enter the datum. A branch/root text names routes by
@@ -4096,7 +4138,64 @@ class Engine:
         if owned and nid:
             for r in owned:
                 reg.setdefault(r, set()).add(nid)
+                # S12.2: (method, path) -> owner MODULE, so the write door
+                # can refuse a redelivery that erases a landed handler
+                self._record_route_module(r, self._module_for(nid))
         return owned
+
+    def _record_route_module(self, mp: "tuple", stem: str) -> None:
+        """S12.2 (v159): record (method, path) -> owner module stem — the
+        route-surface datum of a MODULE, recorded exactly where route
+        ownership is recorded (amends map to the module they edit via
+        ``code_target``).
+
+        Why: v159 — the integrate doctor's core rework rewrote src/core.py
+        and silently dropped the amend-landed get_about/delete_notes; the
+        module SYMBOL contract was empty (no importers), so no door could
+        refuse the erasure and /about 404-ed at assembly.
+        What: maintains ``_route_handler_modules`` and syncs the write-door
+        view ``workspace.route_handler_contracts``
+        ({stem: {handler: 'METHOD /path'}}) — the same datum
+        ``_module_route_binding_text`` prints into rework directives.
+        Test: tests/audit/test_rework_preserves_route_surface.py."""
+        if not (stem and isinstance(mp, tuple) and len(mp) == 2):
+            return
+        mods = self.__dict__.setdefault("_route_handler_modules", {})
+        mods[mp] = stem
+        by_stem: dict = {}
+        for (m, p), s in mods.items():
+            by_stem.setdefault(s, {})[
+                _canonical_handler_symbol(m, p)] = "%s %s" % (m, p)
+        try:
+            self.workspace.route_handler_contracts = by_stem
+        except Exception:        # noqa: BLE001 — no workspace yet (plan time)
+            pass
+
+    def _module_route_binding_text(self, stem: str) -> str:
+        """S12.2: the ROUTE contract block of a module — every product route
+        whose owner leaf lands in ``src/<stem>.py``, with its canonical
+        handler and owner leaf. Printed into the module-rework directive
+        (the S11.4 twin for routes: the rewriting LLM sees the frozen
+        surface instead of re-guessing it) while the write door enforces the
+        same datum regardless. Empty when the module owns no route.
+        Test: tests/audit/test_rework_preserves_route_surface.py."""
+        mods = self.__dict__.get("_route_handler_modules") or {}
+        owners = self.__dict__.get("_route_owners") or {}
+        rows = [(m, p) for (m, p), s in sorted(mods.items()) if s == stem]
+        if not rows:
+            return ""
+        lines = "\n".join(
+            "- `%s %s` -> `def %s(payload, query)`%s"
+            % (m, p, _canonical_handler_symbol(m, p),
+               (" (owner leaf: %s)" % ", ".join(sorted(owners.get((m, p), ()))))
+               if owners.get((m, p)) else "")
+            for m, p in rows)
+        return ("## Route -> handler contract for src/%s.py "
+                "(engine-declared)\n"
+                "This module is the owned surface of these product routes — "
+                "keep EVERY handler defined at module level. A delivery that "
+                "drops one is refused at the write door (the route would 404 "
+                "at assembly):\n%s" % (stem, lines))
 
     def _leaf_exposed_symbols(self, node: dict) -> list:
         """#113 Phase 0: the public symbol(s) THIS leaf exposes, as DATA — the
@@ -9003,6 +9102,14 @@ def %(callable)s(environ, start_response):
             _contract_block = self._module_contract_binding_text(module)
             if _contract_block:
                 directive += "\n" + _contract_block + "\n"
+            # S12.2 (v159): the rework re-prints the module's ROUTE surface
+            # too — the core rework prompt carried no trace of the
+            # amend-landed get_about/delete_notes, so the weak model
+            # re-guessed the module without them and /about 404-ed at
+            # assembly; the write door enforces the same datum anyway.
+            _route_block = self._module_route_binding_text(module)
+            if _route_block:
+                directive += "\n" + _route_block + "\n"
             if "Repair directive (integrate acceptance RED)" not in base:
                 sp.write_text(base + directive, encoding="utf-8")
         except OSError:

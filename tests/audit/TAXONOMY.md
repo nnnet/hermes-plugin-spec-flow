@@ -448,6 +448,21 @@ same wrong reading and stay green until product e2e.
   KeyError surfaced as request validation and both leaf artifacts had agreed
   on it). Lenient: unshaped body routes and optional `.get(...)` access are
   never flagged.
+- S12.2 a rework/redelivery of an owner module PRESERVES the contracted
+  route surface: (method, path) -> owner MODULE is engine data
+  (`_route_handler_modules`, recorded where ownership is recorded — an amend
+  maps to the module it edits via `code_target`); the write door refuses a
+  delivery to `src/<stem>.py` missing any contracted route handler
+  (`_route_handler_erasure`, S11.3 semantics — any module-level binding
+  counts), and the module-rework directive re-prints the route contract
+  (`_module_route_binding_text`, the S11.4 twin for routes). v159 root
+  cause of the open `product_entry:empty_delta` / /about 404: the amend
+  about_page LANDED get_about in src/core.py (commit #6, checkpoint 008);
+  the integrate doctor's "rework core (acceptance blamed it)" then rewrote
+  the module and the weak model dropped get_about AND delete_notes — the
+  module SYMBOL contract was empty (core had no leaf importers), so no door
+  could refuse the erasure and the doctor looped on 'weak_implementer'
+  without ever naming it.
 
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
