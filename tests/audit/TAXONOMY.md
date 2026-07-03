@@ -168,6 +168,34 @@ tester-invented `db` module with an unrelated repo's code.
   incomplete or non-atomic leaf card' FAILs #18/#19 core and #57/#65 web_ui
   were resolved by rework but left no event, so a genuinely-green run was
   flagged unresolved_milestone_fail ×4).
+- S10.16 the ownership datum admits ONLY childless leaves: ownership means
+  "this LEAF BUILDS the route", so a branch/root node — whose text names
+  every route by construction — never enters `_route_owners`, and
+  re-derivation drops a node's stale rows so a reworked spec (or a node that
+  gained children) falls OUT of the datum (v152 ticks 111-113, investigator
+  finding #1: the ROOT L0 was recorded as an owner of POST /notes, GET
+  /notes and GET /health — "3 owner leaves (L0, core, web_ui)").
+- S10.17 a DUPLICATE route owner is a root-integrate FAIL milestone +
+  doctor cause, recorded so the completion gate blocks: an UNRESOLVED
+  duplicate ends an honest NOT READY. The gate reads ONLY the
+  `_route_owners` datum — never a per-scenario match. Orphan findings
+  (0 owners) stay informational: serving is Phase 7's boot/suite authority,
+  and an adopted handler can honestly serve a route with no text-owning
+  leaf (v152 ticks 111-115, investigator finding #3: the duplicate finding
+  was logged with a NEUTRAL verdict at root integrate, the product went
+  READY at tick 114 and the doctor closed with treatments: 0 at tick 115 —
+  the engine suppressed its own RULE_ROUTE_OWNERSHIP violation from the
+  terminal).
+- S10.18 a FOREIGN-surface spec reds EARLY at the card gate: a leaf whose
+  own text claims a route ANOTHER node already owns in `_route_owners`
+  gets a finding NAMING the owner and demanding removal of the foreign
+  route text or explicit re-ownership through decomposition. Amend nodes
+  (code_target) stay exempt — they QUOTE the owner's source as edit
+  context (the S10.10/v151 class). (v152 investigator finding #2: web_ui's
+  spec copy-pasted the frozen JSON API routes with contradictory HTML
+  semantics; core.py and web_ui.py both defined post_notes/get_notes,
+  assembly adopted core's and web_ui's became dead rival code — caught
+  only at root integrate, which is LATE.)
 
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
