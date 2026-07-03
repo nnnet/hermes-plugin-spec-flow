@@ -110,7 +110,9 @@ class _LeafWorkspaceView:
         self.enabled = True
 
     def _write(self, rel: str, content: str, kind: str) -> str:
-        bad = _delivery_lint(rel, content, root=self.root)
+        bad = _delivery_lint(rel, content, root=self.root,
+                             contracts=getattr(self, "module_contracts",
+                                               None))
         if bad:
             # the door REFUSES: dirty code never lands (RULE_CODE_STYLE)
             try:
@@ -871,6 +873,38 @@ def _ascii_node_id(raw: str, fallback: str, taken=()) -> str:
 _CYRILLIC_RE = re.compile(r"[Ѐ-ӿ]")
 
 
+def _module_level_names(body, names) -> "Optional[set]":
+    """All names a module BINDS at module level (defs, classes, assignments,
+    imports), recursing into If/Try branches. Returns None when a
+    ``from … import *`` makes the surface unknowable — callers must skip the
+    module instead of false-redding (the v151 lesson). Shared by the phantom
+    scan (S10.25, live file) and the contract gates (S11.3, delivered body)."""
+    for st in body:
+        if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef,
+                           ast.ClassDef)):
+            names.add(st.name)
+        elif isinstance(st, ast.Assign):
+            names.update(t.id for t in st.targets
+                         if isinstance(t, ast.Name))
+        elif isinstance(st, ast.AnnAssign) \
+                and isinstance(st.target, ast.Name):
+            names.add(st.target.id)
+        elif isinstance(st, ast.Import):
+            names.update((a.asname or a.name).split(".")[0]
+                         for a in st.names)
+        elif isinstance(st, ast.ImportFrom):
+            if any(a.name == "*" for a in st.names):
+                return None          # unknowable surface — skip module
+            names.update(a.asname or a.name for a in st.names)
+        elif isinstance(st, (ast.If, ast.Try)):
+            for sub in ([st.body, st.orelse,
+                         getattr(st, "finalbody", [])]
+                        + [h.body for h in getattr(st, "handlers", [])]):
+                if _module_level_names(sub, names) is None:
+                    return None
+    return names
+
+
 def _phantom_dependency_symbols(rel: str, tree: "ast.AST", root) -> list:
     """Attributes used on a workspace-local imported module that the module
     does not define (S10.25, v156).
@@ -899,32 +933,6 @@ def _phantom_dependency_symbols(rel: str, tree: "ast.AST", root) -> list:
                         and (src / (a.name + ".py")).is_file()):
                     alias_to_mod[a.asname or a.name] = a.name
 
-    def _module_names(body, names) -> "Optional[set]":
-        for st in body:
-            if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef,
-                               ast.ClassDef)):
-                names.add(st.name)
-            elif isinstance(st, ast.Assign):
-                names.update(t.id for t in st.targets
-                             if isinstance(t, ast.Name))
-            elif isinstance(st, ast.AnnAssign) \
-                    and isinstance(st.target, ast.Name):
-                names.add(st.target.id)
-            elif isinstance(st, ast.Import):
-                names.update((a.asname or a.name).split(".")[0]
-                             for a in st.names)
-            elif isinstance(st, ast.ImportFrom):
-                if any(a.name == "*" for a in st.names):
-                    return None          # unknowable surface — skip module
-                names.update(a.asname or a.name for a in st.names)
-            elif isinstance(st, (ast.If, ast.Try)):
-                for sub in ([st.body, st.orelse,
-                             getattr(st, "finalbody", [])]
-                            + [h.body for h in getattr(st, "handlers", [])]):
-                    if _module_names(sub, names) is None:
-                        return None
-        return names
-
     defined: dict = {}
     for mod in set(alias_to_mod.values()):
         try:
@@ -932,7 +940,7 @@ def _phantom_dependency_symbols(rel: str, tree: "ast.AST", root) -> list:
                 encoding="utf-8", errors="replace"))
         except (OSError, SyntaxError):
             continue                     # other gates' job, never a phantom
-        names = _module_names(dep.body, set())
+        names = _module_level_names(dep.body, set())
         if names is not None:
             defined[mod] = names
     findings: list = []
@@ -985,7 +993,105 @@ def _render_module_surface(entries) -> str:
     return ", ".join(out)
 
 
-def _delivery_lint(rel: str, body: str, root=None) -> list:
+def _module_contract_violations(rel: str, tree: "ast.AST",
+                                contracts) -> list:
+    """S11.3 — the two delivery gates over the module SYMBOL CONTRACT datum
+    (``contracts``: {module_stem: [{"name", "args"}]}), at the ONE write door:
+
+      (a) EXPORTER completeness: ``src/<stem>.py`` with a non-empty contract
+          must bind EVERY contracted name at module level (def/class/assign —
+          any real binding counts; missing names are listed);
+      (b) IMPORTER restraint: ``from X import Y`` and ``X.Y`` where X is a
+          contracted module and Y outside the contract never lands. Checked
+          against the CONTRACT datum, never the live file, so build order
+          does not matter (this closes the from-import exemption of S10.25).
+          A module with an EMPTY contract may not be imported from at all —
+          the finding demands declared ``exposes``. ``from X import *`` on a
+          contracted module is refused (it bypasses the pinned surface);
+          bare ``import X`` with no attribute use stays clean; dunder attrs
+          and a self-import are skipped.
+
+    Modules with NO contract entry (stdlib, not-in-plan) are untouched —
+    S10.25 (live-file phantom scan) still owns those seams. v157: core.py
+    ``from db import init_db, store_note, list_notes`` vs db.py exporting
+    different names — ImportError at boot; with the datum, whichever side
+    disagrees reds at ITS delivery, never at assembly."""
+    if not contracts:
+        return []
+    findings: list = []
+    own = Path(str(rel)).stem
+    names_of = {m: {str((e or {}).get("name")) for e in (ents or [])}
+                for m, ents in contracts.items()}
+
+    def _surface(mod) -> str:
+        return _render_module_surface(contracts.get(mod))
+
+    # (a) exporter completeness — a delivered contracted module must bind
+    # every contracted symbol; a star-import surface (None) stays lenient
+    p = str(rel).replace("\\", "/")
+    if p.startswith("src/") and own in contracts and contracts[own]:
+        defined = _module_level_names(tree.body, set())
+        if defined is not None:
+            missing = sorted(names_of[own] - defined)
+            if missing:
+                findings.append(
+                    "module symbol contract: %s must define %s — contracted "
+                    "surface: %s (contracts/modules.json)"
+                    % (rel, ", ".join(missing), _surface(own)))
+    # (b) importer restraint — from-imports and attr uses vs the datum
+    alias_to_mod = {}
+    seen: set = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.ImportFrom) and n.level == 0 \
+                and n.module in contracts and n.module != own:
+            mod = n.module
+            if not contracts[mod]:
+                findings.append(
+                    "module symbol contract: %s imports from %s which "
+                    "exposes NO contracted symbols — the plan must declare "
+                    "its `exposes` before any importer may use it"
+                    % (rel, mod))
+                continue
+            for a in n.names:
+                if a.name == "*":
+                    findings.append(
+                        "module symbol contract: `from %s import *` in %s "
+                        "bypasses the contracted surface — import ONLY: %s"
+                        % (mod, rel, _surface(mod)))
+                elif a.name not in names_of[mod] \
+                        and not a.name.startswith("__"):
+                    findings.append(
+                        "module symbol contract violation: `from %s import "
+                        "%s` in %s — the contract for src/%s.py allows "
+                        "ONLY: %s" % (mod, a.name, rel, mod, _surface(mod)))
+        elif isinstance(n, ast.Import):
+            for a in n.names:
+                if "." not in a.name and a.name in contracts \
+                        and a.name != own:
+                    alias_to_mod[a.asname or a.name] = a.name
+    for n in ast.walk(tree):
+        if not (isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+                and n.value.id in alias_to_mod):
+            continue
+        mod = alias_to_mod[n.value.id]
+        if n.attr.startswith("__") or (mod, n.attr) in seen:
+            continue
+        if not contracts[mod]:
+            seen.add((mod, n.attr))
+            findings.append(
+                "module symbol contract: %s uses %s.%s but src/%s.py "
+                "exposes NO contracted symbols — the plan must declare its "
+                "`exposes` first" % (rel, n.value.id, n.attr, mod))
+        elif n.attr not in names_of[mod]:
+            seen.add((mod, n.attr))
+            findings.append(
+                "module symbol contract violation: %s.%s in %s — the "
+                "contract for src/%s.py allows ONLY: %s"
+                % (n.value.id, n.attr, rel, mod, _surface(mod)))
+    return findings
+
+
+def _delivery_lint(rel: str, body: str, root=None, contracts=None) -> list:
     """ONE write-door hygiene check for delivered CODE (src/*.py, tests/*.py).
     Enforces RULE_CODE_STYLE — the same constant workers see in their prompts,
     so prompt and gate can never drift. Findings (each a class that already
@@ -993,7 +1099,9 @@ def _delivery_lint(rel: str, body: str, root=None) -> list:
     non-ASCII identifiers (they become the product's API), Cyrillic anywhere
     in a code file, absolute host paths (v149 boundary class), phantom
     dependency symbols against the workspace ``root`` when the door passes it
-    (S10.25, v156 db.list_notes). Non-code artifacts (specs, notes,
+    (S10.25, v156 db.list_notes), and the module SYMBOL CONTRACT gates
+    against the engine datum in ``contracts`` (S11.3, v157 ImportError at
+    boot). Non-code artifacts (specs, notes,
     contracts) are NOT linted — human prose is data and may be any language.
     A SyntaxError is not the door's business: the identifier scan is skipped
     and the suite owns that verdict."""
@@ -1023,6 +1131,9 @@ def _delivery_lint(rel: str, body: str, root=None) -> list:
     findings.extend("non-ascii identifier %r in %s" % (v, rel)
                     for v in sorted(bad))
     findings.extend(_phantom_dependency_symbols(rel, tree, root))
+    # S11.3: both contract gates read the engine-declared module symbol
+    # datum the door was handed — never the live files (order-independent)
+    findings.extend(_module_contract_violations(rel, tree, contracts))
     return findings
 
 
@@ -1878,7 +1989,9 @@ class Workspace:
     def _write(self, rel: str, content: str, kind: str) -> str:
         if not self.enabled:
             return rel
-        bad = _delivery_lint(rel, content, root=self.root)
+        bad = _delivery_lint(rel, content, root=self.root,
+                             contracts=getattr(self, "module_contracts",
+                                               None))
         if bad:
             # the door REFUSES: dirty code never lands (RULE_CODE_STYLE)
             self.artifacts.append({"path": rel, "type": "refused_%s" % kind,
