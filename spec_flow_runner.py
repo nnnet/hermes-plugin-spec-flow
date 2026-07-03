@@ -9340,6 +9340,66 @@ def %(callable)s(environ, start_response):
         except OSError:
             pass
 
+    def _unserved_route_gate(self) -> list:
+        """S12.3 (v159): a DECLARED route with NO resolvable handler fails
+        FAST at the assembly barrier — a named FAIL milestone (route +
+        canonical handler + owner leaf) feeding the doctor at the FIRST
+        assembly, never only a generic 404 inside the suite.
+
+        Why: v159 — GET /about was contracted from early on; entry synthesis
+        serves declared routes only when a handler exists ('a missing HTML
+        page is simply omitted — it will 404'), so the run reached FINAL
+        assembly with a 404 and the orphan finding surfaced only in the last
+        plan check (tick 170), after the doctor had burnt its repair rounds
+        on unattributed 'weak_implementer'.
+        What: resolves every declared route (`_resolve_route_handlers`,
+        pure AST) right after the entry is synthesized; each unresolved
+        route emits a FAIL milestone + loop + doctor cause naming the route,
+        its canonical handler and its owner leaf/module. The inlined health
+        ok_route is exempt (the synthesized entry serves it). Silent on an
+        all-served plan; no-op for a non-web project.
+        Test: tests/audit/test_unserved_route_fastfail.py."""
+        try:
+            contract = self._product_contract() or {}
+        except Exception:        # noqa: BLE001 — no contract = nothing declared
+            return []
+        if not contract or not contract.get("entry") \
+                or contract.get("kind") in ("lib", "cli"):
+            return []
+        try:
+            _mapping, unresolved = self._resolve_route_handlers(contract)
+        except Exception:        # noqa: BLE001 — resolver is best-effort
+            return []
+        ok_route = ((contract.get("boot") or {}).get("ok_route") or "")
+        unresolved = [(m, p) for m, p in (unresolved or [])
+                      if not (m == "GET" and p == ok_route)]
+        if not unresolved:
+            return []
+        owners = self.__dict__.get("_route_owners") or {}
+        mods = self.__dict__.get("_route_handler_modules") or {}
+        findings: list = []
+        for m, p in unresolved:
+            own = ", ".join(sorted(owners.get((m, p), ())))
+            stem = mods.get((m, p))
+            detail = (
+                "`%s %s` -> `def %s(payload, query)` resolves to NO handler; "
+                "owner leaf: %s%s — the assembled product would 404 this "
+                "declared route"
+                % (m, p, _canonical_handler_symbol(m, p),
+                   own or "NONE (orphan)",
+                   (" (src/%s.py)" % stem) if stem else ""))
+            findings.append(detail)
+            self.loops.append({"type": "unserved-route", "task": "L0",
+                               "detail": detail[:400]})
+            self.emit("integrate", "engine", "", "L0:integrate",
+                      "assembly gate: declared route has no resolvable "
+                      "handler", detail[:300],
+                      "assembly_route_gate", "FAIL", level=L_MILESTONE)
+        self._doctor_advise({"id": "L0:integrate"}, "L0:integrate", 0,
+                            "assembly_route_gate", "FAIL",
+                            {"reasons": "; ".join(findings)[:300]})
+        return findings
+
     def _assembled_suite_failures(self) -> "Optional[list]":
         """Phase 7 (honest conjunction): run the assembled product's FULL test
         suite as the final authority and return the failing test ids ([] when
@@ -9392,6 +9452,10 @@ def %(callable)s(environ, start_response):
         # the AST hardening net (Phase 2) still guarantees malformed body -> 400.
         if not self._try_synthesize_entry():
             self._harden_entry()
+        # S12.3: a declared route with no resolvable handler is a NAMED fail
+        # at the FIRST assembly (route + owner leaf), never only a generic
+        # 404 discovered by the suite (v159: /about surfaced at tick 170)
+        self._unserved_route_gate()
         # run from the workspace root: paths stay short (tests/test_x.py),
         # confcutdir isolates the run from any host-project conftest.py;
         # --import-mode=importlib tolerates same-basename test files across

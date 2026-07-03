@@ -463,6 +463,16 @@ same wrong reading and stay green until product e2e.
   module SYMBOL contract was empty (core had no leaf importers), so no door
   could refuse the erasure and the doctor looped on 'weak_implementer'
   without ever naming it.
+- S12.3 a DECLARED route with NO resolvable handler fails FAST: at the
+  re-verify barrier (`_verify_tests`, right after entry synthesis, BEFORE
+  the suite runs) `_unserved_route_gate` resolves every declared route and
+  emits a named FAIL milestone per miss — route, canonical handler, owner
+  leaf and its module — feeding the doctor at the FIRST assembly. The
+  inlined health ok_route is exempt (the synthesized entry serves it);
+  an all-served plan is silent; non-web projects are a no-op. v159:
+  /about's 404 was honest but surfaced route-attributed only in the LAST
+  plan check (tick 170), after the doctor had burnt every repair round on
+  generic 'weak_implementer'.
 
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
