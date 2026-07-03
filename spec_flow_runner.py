@@ -110,7 +110,7 @@ class _LeafWorkspaceView:
         self.enabled = True
 
     def _write(self, rel: str, content: str, kind: str) -> str:
-        bad = _delivery_lint(rel, content)
+        bad = _delivery_lint(rel, content, root=self.root)
         if bad:
             # the door REFUSES: dirty code never lands (RULE_CODE_STYLE)
             try:
@@ -871,16 +871,98 @@ def _ascii_node_id(raw: str, fallback: str, taken=()) -> str:
 _CYRILLIC_RE = re.compile(r"[Ѐ-ӿ]")
 
 
-def _delivery_lint(rel: str, body: str) -> list:
+def _phantom_dependency_symbols(rel: str, tree: "ast.AST", root) -> list:
+    """Attributes used on a workspace-local imported module that the module
+    does not define (S10.25, v156).
+
+    Why: the integrate-time rework of core shipped ``db.list_notes()`` while
+    src/db.py defines get_notes — the assembled product 500'd GET /notes and
+    every smoke/e2e check went red against code no gate had refused.
+    What: for each plain ``import X`` (or ``import X as Y``) where
+    <root>/src/X.py exists and parses, every ``Y.attr`` load must name a
+    module-level def / class / assignment / import of X. A missing or
+    unparseable dependency, a dependency using ``import *``, dunder attrs and
+    a self-import are all skipped — build order and dynamic surfaces must
+    never false-red (the v151 lesson: one false positive sinks a run).
+    ``from X import Y`` stays out of scope — assembly import repair (S10.2)
+    owns that seam. Test: audit test_phantom_dependency_symbol.
+    """
+    if root is None:
+        return []
+    src = Path(root) / "src"
+    own_stem = Path(str(rel)).stem
+    alias_to_mod = {}
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            for a in n.names:
+                if ("." not in a.name and a.name != own_stem
+                        and (src / (a.name + ".py")).is_file()):
+                    alias_to_mod[a.asname or a.name] = a.name
+
+    def _module_names(body, names) -> "Optional[set]":
+        for st in body:
+            if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef,
+                               ast.ClassDef)):
+                names.add(st.name)
+            elif isinstance(st, ast.Assign):
+                names.update(t.id for t in st.targets
+                             if isinstance(t, ast.Name))
+            elif isinstance(st, ast.AnnAssign) \
+                    and isinstance(st.target, ast.Name):
+                names.add(st.target.id)
+            elif isinstance(st, ast.Import):
+                names.update((a.asname or a.name).split(".")[0]
+                             for a in st.names)
+            elif isinstance(st, ast.ImportFrom):
+                if any(a.name == "*" for a in st.names):
+                    return None          # unknowable surface — skip module
+                names.update(a.asname or a.name for a in st.names)
+            elif isinstance(st, (ast.If, ast.Try)):
+                for sub in ([st.body, st.orelse,
+                             getattr(st, "finalbody", [])]
+                            + [h.body for h in getattr(st, "handlers", [])]):
+                    if _module_names(sub, names) is None:
+                        return None
+        return names
+
+    defined: dict = {}
+    for mod in set(alias_to_mod.values()):
+        try:
+            dep = ast.parse((src / (mod + ".py")).read_text(
+                encoding="utf-8", errors="replace"))
+        except (OSError, SyntaxError):
+            continue                     # other gates' job, never a phantom
+        names = _module_names(dep.body, set())
+        if names is not None:
+            defined[mod] = names
+    findings: list = []
+    seen: set = set()
+    for n in ast.walk(tree):
+        if not (isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+                and n.value.id in alias_to_mod):
+            continue
+        mod = alias_to_mod[n.value.id]
+        if (mod in defined and n.attr not in defined[mod]
+                and not n.attr.startswith("__") and (mod, n.attr) not in seen):
+            seen.add((mod, n.attr))
+            findings.append(
+                "phantom dependency symbol %s.%s in %s — src/%s.py defines "
+                "no '%s'" % (n.value.id, n.attr, rel, mod, n.attr))
+    return findings
+
+
+def _delivery_lint(rel: str, body: str, root=None) -> list:
     """ONE write-door hygiene check for delivered CODE (src/*.py, tests/*.py).
     Enforces RULE_CODE_STYLE — the same constant workers see in their prompts,
     so prompt and gate can never drift. Findings (each a class that already
     cost a run): non-ASCII file path (v151 «красивый_вид» in workspace paths),
     non-ASCII identifiers (they become the product's API), Cyrillic anywhere
-    in a code file, absolute host paths (v149 boundary class). Non-code
-    artifacts (specs, notes, contracts) are NOT linted — human prose is data
-    and may be any language. A SyntaxError is not the door's business: the
-    identifier scan is skipped and the suite owns that verdict."""
+    in a code file, absolute host paths (v149 boundary class), phantom
+    dependency symbols against the workspace ``root`` when the door passes it
+    (S10.25, v156 db.list_notes). Non-code artifacts (specs, notes,
+    contracts) are NOT linted — human prose is data and may be any language.
+    A SyntaxError is not the door's business: the identifier scan is skipped
+    and the suite owns that verdict."""
     findings = []
     if not str(rel).isascii():
         findings.append("non-ascii file path %r" % rel)
@@ -906,6 +988,7 @@ def _delivery_lint(rel: str, body: str) -> list:
                 bad.add(v)
     findings.extend("non-ascii identifier %r in %s" % (v, rel)
                     for v in sorted(bad))
+    findings.extend(_phantom_dependency_symbols(rel, tree, root))
     return findings
 
 
@@ -1761,7 +1844,7 @@ class Workspace:
     def _write(self, rel: str, content: str, kind: str) -> str:
         if not self.enabled:
             return rel
-        bad = _delivery_lint(rel, content)
+        bad = _delivery_lint(rel, content, root=self.root)
         if bad:
             # the door REFUSES: dirty code never lands (RULE_CODE_STYLE)
             self.artifacts.append({"path": rel, "type": "refused_%s" % kind,
