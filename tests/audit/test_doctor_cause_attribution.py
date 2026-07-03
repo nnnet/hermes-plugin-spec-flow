@@ -198,3 +198,103 @@ def test_causes_on_non_done_nodes_untouched(tmp_path):
     assert eng._doctor_open_causes(), (
         "a cause on a node that never reached DONE is still live work — "
         "completion re-derivation must not touch it")
+
+
+# --- S12.8 (v161): EVERY re-runnable leaf gate registers its recheck ----------
+# v161 final event 144: 'doctor causes still open: web_ui:handler' — yet the
+# final artifact DID define get_ui (rework restored it and the node reached
+# DONE). The cause stayed open because _leaf_handler_gate never registered a
+# recheck, so _prune_stale_causes hit `continue` (no fn) and the honest-repair
+# work was vetoed by a STALE ledger entry — the exact S12.5 class, one gate
+# over. The S12.5 wiring is a per-gate obligation, not a per-incident patch.
+
+_UI_CONTRACT = {
+    "entry": "src/app.py",
+    "callable": ["wsgi_app"],
+    "boot": {"json_roundtrip": "/notes", "ok_route": "/health",
+             "html_route": "/ui"},
+    "routes": [],
+}
+_UI_NID = "web_ui"
+_UI_REL = "src/web_ui.py"
+_UI_NODE = {"id": _UI_NID, "title": "Web UI", "requirement": "own GET /ui"}
+
+_UI_MISSING = """\
+    def render_page():
+        return "<html><body><h1>Notes</h1></body></html>"
+"""
+
+_UI_FIXED = """\
+    def get_ui(payload, query):
+        return 200, "<html><body><h1>Notes</h1></body></html>"
+"""
+
+
+def _ui_engine(tmp_path):
+    eng = sfr.Engine(workspace=str(tmp_path / "wk"), depth=sfr.DEPTH_SPEC,
+                     doctor_project={"doctor": {"enabled": True}})
+    eng._product_contract = lambda: dict(_UI_CONTRACT)
+    return eng
+
+
+def _write_module(eng, body: str) -> None:
+    p = pathlib.Path(eng.workspace.root) / _UI_REL
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(textwrap.dedent(body), encoding="utf-8")
+
+
+def _open_handler_cause(eng) -> None:
+    _write_module(eng, _UI_MISSING)
+    ok = eng._leaf_handler_gate(dict(_UI_NODE), _UI_NID, 1, _UI_REL)
+    assert ok is False, "the module does not define get_ui — the gate reds"
+    opened = eng._doctor_open_causes()
+    assert any(n == _UI_NID for n, _c in opened), (
+        f"the gate FAIL must open a doctor cause on {_UI_NID}, got {opened}")
+
+
+def _mark_ui(eng, status: str) -> None:
+    eng.tasks[_UI_NID] = sfr.Task(id=_UI_NID, title="Web UI", kind="impl",
+                                  profile="", skill="", status=status)
+
+
+def test_restored_handler_on_done_node_closes_cause_attributably(tmp_path):
+    eng = _ui_engine(tmp_path)
+    _open_handler_cause(eng)
+    _write_module(eng, _UI_FIXED)       # rework restored the handler
+    _mark_ui(eng, "done")               # node reached DONE through its gates
+    eng._prune_stale_causes()           # root-gate evaluation re-derives
+    assert eng._doctor_open_causes() == [], (
+        "v161 event 144: get_ui WAS restored and the node was DONE, yet "
+        "'web_ui:handler' stayed open and held the root red — the handler "
+        "gate must register its S12.5 recheck like every re-runnable gate")
+    res = [lp for lp in eng.loops if lp.get("type") == "doctor"
+           and lp.get("outcome") == "resolved"]
+    assert res and "handler_gate" in str(res[-1].get("detail", "")), (
+        "the close must be ATTRIBUTABLE: an event naming the gate that "
+        f"re-ran clean, got {res}")
+
+
+def test_still_missing_handler_keeps_cause_open(tmp_path):
+    # GREEN twin: no blind auto-close — get_ui is still absent at completion
+    eng = _ui_engine(tmp_path)
+    _open_handler_cause(eng)
+    _mark_ui(eng, "done")               # DONE claimed, handler still missing
+    eng._prune_stale_causes()
+    assert eng._doctor_open_causes(), (
+        "the opening gate still fails on the current artifact — the cause "
+        "must stay open and hold the root red (honest ledger)")
+
+
+def test_handler_gate_quiet_recheck_is_side_effect_free(tmp_path):
+    # the S12.5 recheck contract: verdict only — no events, loops or doctor
+    eng = _ui_engine(tmp_path)
+    _write_module(eng, _UI_MISSING)
+    before_loops = len(eng.loops)
+    before_events = len(eng.events)
+    ok = eng._leaf_handler_gate(dict(_UI_NODE), _UI_NID, 1, _UI_REL,
+                                quiet=True)
+    assert ok is False
+    assert len(eng.loops) == before_loops and \
+        len(eng.events) == before_events, (
+        "quiet mode must not journal, emit or open causes")
+    assert eng._doctor_open_causes() == []

@@ -4759,7 +4759,8 @@ class Engine:
                         self._module_contract_binding(node)) if x)
 
     def _leaf_handler_gate(self, node: dict, nid: str, depth: int,
-                           code_rel: "Optional[str]") -> bool:
+                           code_rel: "Optional[str]",
+                           quiet: bool = False) -> bool:
         """Phase 2 (deterministic, hard, model-independent): a leaf contracted by
         the route -> handler binding to expose ``def <handler>(payload, query)``
         MUST actually define that symbol in the file it wrote. A missing handler
@@ -4809,6 +4810,8 @@ class Engine:
                 missing.append((want, m, p))
         if not missing:
             return True
+        if quiet:                    # S12.5 re-derivation: verdict only,
+            return False             # no events / loops / doctor side effects
         human = "; ".join("%s %s -> def %s(payload, query)" % (m, p, w)
                           for w, m, p in missing)
         self.loops.append({"type": "missing-handler", "task": nid,
@@ -4823,6 +4826,15 @@ class Engine:
                                 "%s does not define %s — contracted handler "
                                 "missing" % (code_rel, w)
                                 for w, _m, _p in missing]})
+        # S12.8 (v161): EVERY re-runnable leaf gate registers its S12.5
+        # recheck — the v161 'web_ui:handler' cause stayed open at the root
+        # although rework HAD restored get_ui, purely because this gate was
+        # the one without a recheck and _prune_stale_causes had nothing to
+        # re-derive the cause with.
+        self._register_gate_recheck(
+            nid, "handler_gate",
+            lambda: self._leaf_handler_gate(node, nid, depth, code_rel,
+                                            quiet=True))
         return False
 
     def _leaf_test_status_gate(self, node: dict, nid: str, depth: int,
