@@ -360,3 +360,98 @@ def test_engine_rules_reach_ctx_and_prompt(plugin, tmp_path, monkeypatch,
     assert ("estimated_loc <= %s" % er["leaf_max_loc"]) in sent
     assert ("POST -> %s" % er["route_success_status"]["POST"]) in sent
     assert er["route_ownership"] in sent
+
+
+# ── S10.9 a tiny-but-real leaf module is NOT "lost" ──────────────────────────
+# v151: src/ping_text.py delivered `def get_ping(payload, query): return 200,
+# "pong"` — present on the final tree, imported, serving its route — yet the
+# single-authority check flagged it "absent/empty" because it counts CODE
+# LINES (<3 == lost). A magic size threshold conflates "small by design" with
+# "orphaned in git"; that one false FAIL opened a doctor cause and
+# single-handedly flipped the run NOT READY. Lost-ness must be judged by WHAT
+# THE FILE DEFINES, never by its size.
+
+def test_tiny_real_leaf_module_is_not_lost():
+    lost = eng._leaf_code_lost
+    tiny = ('# code: src/ping_text.py\n# test: tests/test_ping_text.py\n'
+            'def get_ping(payload, query):\n    return 200, "pong"\n')
+    assert not lost(tiny), (
+        "a one-function module is REAL delivery — flagging it lost is the"
+        " v151 false red (size thresholds are not evidence of orphaning)")
+    assert lost(""), "an empty file IS lost"
+    assert lost("# just a comment\n"), "a comment-only stub IS lost"
+    assert lost("pass\n"), "a pass-only stub IS lost"
+    assert not lost("ROUTES = {('GET', '/x'): 'h'}\n"), (
+        "a module whose only payload is a dispatch table still defines data")
+    assert not lost("def broken(:\n"), (
+        "a syntactically broken file EXISTS — 'delivered but broken' is the"
+        " assembled suite's verdict to give, not the orphan check's")
+
+
+# ── S10.10 route ownership is DATA, not prose grep ───────────────────────────
+# v151: every amend spec EMBEDS the owner module's source as context
+# ("### Current `src/core.py` ..."), so the plan report's spec-text grep saw
+# POST /notes in SEVEN specs and reported "7 owner leaves — duplicate" for
+# every declared route. Ownership already exists as an engine datum
+# (_leaf_owned_routes: amend nodes own nothing); the report must READ that
+# datum, never re-derive it from prose (Charter P5: prose is not data).
+
+def test_ownership_report_reads_data_not_prose(tmp_path):
+    e = eng.Engine(workspace=str(tmp_path / "wk"), depth=eng.DEPTH_SPEC)
+    ws = e.workspace
+    ws.enabled = True
+    ws.root = str(tmp_path / "wk")
+    specs = pathlib.Path(ws.root) / "specs"
+    specs.mkdir(parents=True, exist_ok=True)
+    e._product_contract = lambda: {
+        "entry": "src/app.py",
+        "boot": {"json_roundtrip": "/notes", "ok_route": "/health"},
+        "routes": [],
+    }
+    # the REAL owner names its routes in its own requirement …
+    core = {"id": "core", "title": "notes service",
+            "requirement": "serve POST /notes, GET /notes and GET /health"}
+    assert e._leaf_owned_routes(core), "sanity: core must own the routes"
+    # … while an amend leaf merely QUOTES the owner's source as edit context
+    (specs / "core.md").write_text(
+        "serves POST /notes, GET /notes, GET /health", encoding="utf-8")
+    (specs / "beautify.md").write_text(
+        "EDIT src/core.py in place.\n### Current `src/core.py`\n"
+        "```python\nROUTES = {('POST', '/notes'): 'create',"
+        " ('GET', '/notes'): 'list', ('GET', '/health'): 'health'}\n```\n",
+        encoding="utf-8")
+    rep = e._plan_ownership_report()
+    assert not any("duplicate" in f for f in rep), (
+        "quoting another module's source in an amend spec must NOT create"
+        f" route ownership (v151 phantom '7 owner leaves') — got: {rep}")
+
+
+# ── S10.11 node ids are engine-normalized ASCII snake_case ───────────────────
+# v151: a human mid-run note was adopted as node «красивый_вид» — a non-ASCII
+# id the engine accepted silently into FILE NAMES (specs/<id>.md and, for a
+# module leaf, src/<id>.py). Ids are engine-owned data that become paths; the
+# engine must normalize them deterministically (journaling the rename), never
+# trust the raw string from a decomposer or an injection.
+
+def test_node_ids_normalized_to_ascii():
+    norm = eng._ascii_node_id
+    assert norm("красивый_вид", "l0_part5", set()) == "l0_part5", (
+        "a foreign-script id must fall back to the deterministic ASCII name")
+    assert norm("Get-Notes", "x", set()) == "get_notes"
+    assert norm("core", "x", set()) == "core"
+    assert norm("красивый_вид", "l0_part5", {"l0_part5"}) == "l0_part5_2"
+
+
+def test_requirement_nodes_carry_ascii_ids(tmp_path):
+    e = eng.Engine(workspace=str(tmp_path / "wk"), depth=eng.DEPTH_SPEC)
+    e._standing_requirements = lambda: [
+        ("красивый_вид", "make the notes nice to read")]
+    nodes = e._requirement_nodes(scope=None)
+    assert nodes, "sanity: the standing requirement must materialize"
+    nid = nodes[0]["id"]
+    assert nid.isascii() and nid == eng._snake(nid), (
+        f"a standing-requirement node id must be ASCII snake_case, got {nid!r}"
+        " (v151: «красивый_вид» flowed into workspace file names)")
+    # determinism: the SAME raw name maps to the SAME id on every poll —
+    # otherwise coverage bookkeeping breaks and the requirement re-attaches
+    assert e._requirement_nodes(scope=None)[0]["id"] == nid

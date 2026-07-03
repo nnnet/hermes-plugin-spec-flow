@@ -379,6 +379,9 @@ SMALL_PRODUCT_ROUTES_DEFAULT = 5
 # prompt renders verbatim (single source with the gates — never re-worded in
 # harness prompt text).
 RULE_ROUTE_OWNERSHIP = "every declared route is owned by exactly ONE leaf"
+RULE_NODE_ID_STYLE = (
+    "node ids MUST be ASCII snake_case English (ids become file names: "
+    "specs/<id>.md, src/<id>.py); the engine renames non-conforming ids")
 RULE_ATOMIC_LEAF_MODULE = (
     "an atomic leaf builds exactly ONE module: src/<snake(node_id)>.py; a "
     "concern needing several modules must become graph CHILDREN, never prose "
@@ -826,6 +829,47 @@ class LogSink:
 
 def _snake(s: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in s.lower()).strip("_")
+
+
+_ASCII_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def _ascii_node_id(raw: str, fallback: str, taken=()) -> str:
+    """Node ids become FILE NAMES (specs/<id>.md and src/<id>.py for a module
+    leaf); they must be ASCII snake_case no matter what script a decomposer or
+    a human note used (v151: «красивый_вид» flowed into workspace paths).
+    Deterministic: the same raw input always maps to the same id, so coverage
+    bookkeeping (is this requirement already a node?) keeps working across
+    polls. ``fallback`` names the id when nothing ASCII survives; ``taken``
+    disambiguates collisions."""
+    low = _snake(str(raw or ""))
+    base = re.sub(r"_+", "_", low.encode("ascii", "ignore").decode()).strip("_")
+    if not (base and _ASCII_ID_RE.match(base)):
+        base = _snake(str(fallback or "")) or "node"
+    cand, n = base, 2
+    while cand in set(taken):
+        cand = "%s_%d" % (base, n)
+        n += 1
+    return cand
+
+
+def _leaf_code_lost(body: str) -> bool:
+    """Single-authority helper: a delivered leaf file is LOST only when it is
+    empty/unreadable or defines NOTHING at module level (no def/class/
+    assignment). Size is NOT evidence: a one-function module is real delivery
+    (v151: ping_text.py was flagged "absent/empty" by a <3-code-lines
+    threshold and that single false FAIL flipped the run NOT READY). A
+    syntactically broken file is not "lost" — it exists; the assembled suite
+    owns that verdict."""
+    if not (body or "").strip():
+        return True
+    try:
+        tree = ast.parse(body)
+    except SyntaxError:
+        return False
+    return not any(isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                   ast.ClassDef, ast.Assign, ast.AnnAssign))
+                   for st in tree.body)
 
 
 # ---- B3: universal surface-overlap detectors (registry) -------------------
@@ -2392,12 +2436,24 @@ class Engine:
         for item in (fn() or []):
             name, statement = item[0], item[1]
             req_scope = item[2] if len(item) > 2 else None
-            if name in self.tasks:
+            # ids become file names — normalize BEFORE the coverage check so
+            # the same raw name maps to the same node id on every poll (v151:
+            # a human note became node «красивый_вид» in workspace paths)
+            nid = _ascii_node_id(name, "req_" + hashlib.sha1(
+                str(name).encode("utf-8")).hexdigest()[:8])
+            if nid in self.tasks or name in self.tasks:
                 continue            # already covered by an existing node
             if scope is not None and req_scope != scope:
                 continue
+            if nid != name and name not in self.__dict__.setdefault(
+                    "_req_id_renames", set()):
+                self._req_id_renames.add(name)
+                self.emit("decompose", "engine", "", nid,
+                          "requirement id normalized to ASCII snake_case "
+                          "(ids become file names)", "%s -> %s" % (name, nid),
+                          "id_gate", "RENAMED", level=L_MILESTONE)
             title = " ".join(str(statement).split())[:120]
-            out.append({"id": name, "title": title,
+            out.append({"id": nid, "req_name": str(name), "title": title,
                         "requirement": str(statement),
                         "_scoped": scope is not None,
                         # a standing requirement attached mid-run IS a late
@@ -3465,6 +3521,14 @@ class Engine:
             stem = (p or "").rstrip("/") or "/"
             if re.search(r"(?<![\w/])" + re.escape(stem) + r"(?![\w])", text):
                 owned.append((m, p))
+        # record the datum ONCE: the plan-ownership report reads THIS map,
+        # never spec prose (v151: amend specs quote the owner's source as
+        # edit context, so a text grep saw every route in every spec)
+        nid = str(node.get("id") or "")
+        if owned and nid:
+            reg = self.__dict__.setdefault("_route_owners", {})
+            for r in owned:
+                reg.setdefault(r, set()).add(nid)
         return owned
 
     def _leaf_exposed_symbols(self, node: dict) -> list:
@@ -3874,39 +3938,28 @@ class Engine:
 
     def _plan_ownership_report(self) -> list:
         """Phase 6 (deterministic, report-only): for every DECLARED route, how
-        many leaf specs claim it. 0 owners = orphan (no leaf builds the route);
-        >=2 = duplicate (two leaves both claim it, e.g. the v122 second
-        get_notes). Returns a list of plain-string findings (JSON-safe).
+        many leaves OWN it — read from the engine's own ownership datum
+        (``_route_owners``, recorded by ``_leaf_owned_routes`` as nodes are
+        processed), never re-derived from spec prose. v151: amend specs QUOTE
+        the owner module's source as edit context, so the old spec-text grep
+        saw every route in SEVEN specs and reported phantom duplicates —
+        prose is not data (Charter P5). 0 owners = orphan (no leaf builds the
+        route); >=2 = duplicate (e.g. the v122 second get_notes). Returns a
+        list of plain-string findings (JSON-safe).
 
-        DIAGNOSTIC ONLY — it never flips READY. Ownership is matched by the route
-        path appearing in a leaf spec, which is a heuristic; actual serving is
-        enforced by the real boot/suite gate (Phase 7), so a spec-phrasing quirk
-        can never false-red a product that genuinely works."""
-        ws = self.workspace
-        if not (getattr(ws, "enabled", False) and getattr(ws, "root", None)):
-            return []
+        DIAGNOSTIC ONLY — it never flips READY; actual serving is enforced by
+        the real boot/suite gate (Phase 7)."""
         try:
             routes = self._declared_route_set(self._product_contract() or {})
         except Exception:        # noqa: BLE001
             return []
-        if not routes:
+        owners_map = self.__dict__.get("_route_owners") or {}
+        if not routes or not owners_map:
+            # no ownership data recorded (degenerate run) — nothing to attest
             return []
-        specs = Path(ws.root) / "specs"
-        spec_texts = []
-        if specs.exists():
-            for p in sorted(specs.glob("*.md")):
-                if "." in p.stem:        # skip archived specs/<id>.vN.md
-                    continue
-                try:
-                    spec_texts.append((p.stem, p.read_text(
-                        encoding="utf-8", errors="replace")))
-                except OSError:
-                    continue
         findings = []
         for m, path in routes:
-            stem = (path or "").rstrip("/") or "/"
-            owners = sorted({s for s, t in spec_texts if re.search(
-                r"(?<![\w/])" + re.escape(stem) + r"(?![\w])", t)})
+            owners = sorted(owners_map.get((m, path), ()))
             if not owners:
                 findings.append("route %s %s: no owner leaf (orphan)" % (m, path))
             elif len(owners) > 1:
@@ -5276,9 +5329,9 @@ def %(callable)s(environ, start_response):
                     _body = _fp.read_text(encoding="utf-8") if _fp.is_file() else ""
                 except Exception:  # noqa: BLE001 — unreadable == lost
                     _body = ""
-                _code_lines = [ln for ln in _body.splitlines()
-                               if ln.strip() and not ln.strip().lstrip().startswith("#")]
-                if len(_code_lines) < 3:
+                # lost == defines nothing (see _leaf_code_lost) — a size
+                # threshold here false-redded a real one-function module (v151)
+                if _leaf_code_lost(_body):
                     _lost.append((_nid, _rel))
             if _lost:
                 _names = ", ".join(f"{n}->{r}" for n, r in _lost)
@@ -5412,6 +5465,7 @@ def %(callable)s(environ, start_response):
             "leaf_max_loc": _gates.MAX_LOC,
             "route_ownership": RULE_ROUTE_OWNERSHIP,
             "atomic_leaf_module": RULE_ATOMIC_LEAF_MODULE,
+            "node_id_style": RULE_NODE_ID_STYLE,
             # contracted success status per route (_route_success_status)
             "route_success_status": {
                 "POST": _route_success_status("POST"),
@@ -6233,6 +6287,29 @@ def %(callable)s(environ, start_response):
         children = node.get("children") or []
         if not children:
             return
+        # engine-owned id normalization BEFORE any dedup/registry work: ids
+        # become file names (v151: «красивый_вид» flowed into workspace paths);
+        # sibling depends_on references follow the rename
+        renames: dict = {}
+        taken = set(self._node_registry) | {
+            str(c.get("id") or "") for c in children}
+        for i, ch in enumerate(children):
+            cid = str(ch.get("id") or "")
+            new = _ascii_node_id(cid, "%s_part%d" % (_snake(nid), i + 1),
+                                 taken - {cid})
+            if new != cid:
+                renames[cid] = new
+                ch["id"] = new
+                taken.add(new)
+                self.emit("decompose", "engine", "", nid,
+                          "node id normalized to ASCII snake_case "
+                          "(ids become file names)", "%s -> %s" % (cid, new),
+                          "id_gate", "RENAMED", level=L_MILESTONE)
+        if renames:
+            for ch in children:
+                deps = ch.get("depends_on")
+                if deps:
+                    ch["depends_on"] = [renames.get(d, d) for d in deps]
         own_line = {a_id for a_id, _ in ancestors} | {nid}
         kept: list[dict] = []
         accepted: list[tuple[str, str]] = []

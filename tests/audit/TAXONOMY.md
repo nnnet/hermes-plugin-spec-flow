@@ -121,6 +121,20 @@ tester-invented `db` module with an unrelated repo's code.
   repair, workspace-boundary path gate, and the machine interface contract
   (`contracts/interface.json`, minimal OpenAPI-shaped subset) dumped from the
   same functions every consumer reads.
+- S10.9 lost-ness of delivered leaf code is judged by WHAT THE FILE DEFINES
+  (`_leaf_code_lost`: empty / no module-level def/class/assignment), never by
+  a size threshold (v151: one-function `ping_text.py` was flagged
+  "absent/empty" by a <3-code-lines count and that single false FAIL flipped
+  the run NOT READY).
+- S10.10 route ownership in the plan report is DATA (`_route_owners`,
+  recorded by `_leaf_owned_routes`), never a spec-prose grep (v151: amend
+  specs quote the owner module's source as edit context — the grep reported
+  "7 owner leaves — duplicate" for every declared route). Charter P5.
+- S10.11 node ids are engine-normalized ASCII snake_case (`_ascii_node_id`)
+  at BOTH adoption points (decomposer children, standing requirements), with
+  the rename journaled and sibling depends_on remapped; the id style is also
+  stated to the decomposer via engine_rules (v151: a human note became node
+  «красивый_вид» inside workspace file names).
 
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.

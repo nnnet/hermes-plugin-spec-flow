@@ -108,6 +108,7 @@ plan within them; the guarantee is the code, not this text):
 - leaf thresholds (leaf_check): modules <= {leaf_max_modules}, tasks <= {leaf_max_tasks}, interfaces <= {leaf_max_interfaces}, estimated_loc <= {leaf_max_loc}
 - route ownership: {route_ownership}
 - module ownership: {atomic_leaf_module}
+- node id style: {node_id_style}
 - contracted success status per route: POST -> {post_status}, any other method -> {other_status}"""
 
 
@@ -146,6 +147,7 @@ def _engine_rules(ctx: dict) -> dict:
             "leaf_max_loc": eng._gates.MAX_LOC,
             "route_ownership": eng.RULE_ROUTE_OWNERSHIP,
             "atomic_leaf_module": eng.RULE_ATOMIC_LEAF_MODULE,
+            "node_id_style": eng.RULE_NODE_ID_STYLE,
             "route_success_status": {
                 "POST": eng._route_success_status("POST"),
                 "other": eng._route_success_status("GET"),
@@ -364,6 +366,7 @@ def decompose(ctx: dict) -> dict:
         leaf_max_loc=er["leaf_max_loc"],
         route_ownership=er.get("route_ownership", ""),
         atomic_leaf_module=er.get("atomic_leaf_module", ""),
+        node_id_style=er.get("node_id_style", ""),
         post_status=rss.get("POST", ""), other_status=rss.get("other", ""))
     if ctx["depth"] == 0:
         prompt += ROOT_RULE
