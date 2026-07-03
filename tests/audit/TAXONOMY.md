@@ -310,6 +310,65 @@ tester-invented `db` module with an unrelated repo's code.
   → escalate over the S10.23 wrong-test class, red run end keeps the cause
   open); its root class is S10.23, no separate gate owed.
 
+## STAGE 11 — Inter-module symbol contracts (`test_module_symbol_contract.py`)
+THE META-CLASS (v149/v150/v156/v157 lineage): a value TWO leaves must agree
+on — the symbol surface between an exporting module and its importer — never
+existed as ONE engine-declared datum before both sides were coded. Each LLM
+guessed, the collision surfaced only at ASSEMBLY, and the doctor's rework
+re-guessed (v157: src/core.py line 3 `from db import init_db, store_note,
+list_notes` vs src/db.py exporting different names → ImportError at boot,
+whole suite + smoke red, doctor churned; v156: rework shipped
+`db.list_notes()` while db.py had get_notes; v149/v150: the SAME class on
+status codes and response bodies). The engine already solved this for HTTP
+routes — contracts/interface.json, single source, both sides read it, gates
+enforce. STAGE 11 GENERALIZES that route-contract solution to inter-module
+Python symbols:
+- S11.1 THE DATUM: for every dependency pair (typed `needs` edges among
+  siblings; the S10.22 collapsed plan — core imports each constitution-pinned
+  leaf) the engine MATERIALIZES the exporter's symbol contract at PLAN time
+  (`_register_module_import` → `_module_contracts`), before either side is
+  coded, and persists it to `contracts/modules.json` (module ->
+  [{name, args}]) via the ONE write door from the same in-memory dict every
+  consumer reads. Sources, deterministic, in priority order: the exporter's
+  `exposes` entries ('name(args)' shapes, unioned with canonical route
+  handlers via `_leaf_exposed_symbols`); else derivation from the exporter's
+  OWN requirement/spec text and the constitution rules — `<stem>.<name>`
+  references, the same way route bindings derive from human text (real p6:
+  'db.connect reads it per call' is the only storage symbol the human ever
+  stated; `<stem>.py` filename mentions are structural, never symbols);
+  else the EMPTY set — NO domain default is ever substituted.
+- S11.2 BOTH BINDINGS PRINT THE CONTRACT (`_leaf_bindings` →
+  `_module_contract_binding`): the exporter's spec orders 'you MUST define
+  AT MODULE LEVEL exactly: …', every importer's spec orders 'you may
+  import/call ONLY: …' — the SAME `_render_module_surface` string from the
+  same datum, so prompt and gate cannot drift. HONEST-RED PATH: an exporter
+  with importers and an EMPTY contract reds at the card gate
+  (`_card_completeness_findings`) demanding `exposes`, and every importer's
+  binding says 'do NOT import from it' — the plan must state the surface,
+  the engine never invents one.
+- S11.3 TWO DELIVERY GATES at the ONE write door
+  (`_module_contract_violations` inside `_delivery_lint`; both `_write`
+  doors pass the datum): (a) EXPORTER completeness — `src/<stem>.py` with a
+  non-empty contract must bind every contracted name at module level
+  (missing → refusal NAMING them); (b) IMPORTER restraint — `from X import
+  Y` and `X.Y` where X is contracted and Y outside the contract is refused
+  naming the contracted surface. Checked against the CONTRACT datum, never
+  the live file, so build order does not matter — this closes the
+  from-import exemption of S10.25 order-independently; the v157 collision
+  cannot land: whichever side disagrees with the datum reds at ITS delivery,
+  never at assembly. Documented edges: an EMPTY-contract module may not be
+  imported from at all (finding demands exposes); `from X import *` on a
+  contracted module is refused (it bypasses the pinned surface); bare
+  `import X` with no attribute use is clean; modules with NO contract
+  (stdlib, not-in-plan) stay untouched — S10.25 owns those seams; dunder
+  attrs and self-import are skipped; a star-import surface in the exporter
+  itself stays lenient (v151: one false positive sinks a run).
+- S11.4 DOCTOR/REWORK PRESERVES THE CONTRACT: the module repair directive
+  (`_remedy_rework_module`) re-prints the contract block, so a rewriting
+  LLM sees the frozen surface instead of re-guessing it (v157: three core
+  reworks, each a fresh guess) — and the write door enforces the same datum
+  regardless.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.
