@@ -951,6 +951,40 @@ def _phantom_dependency_symbols(rel: str, tree: "ast.AST", root) -> list:
     return findings
 
 
+def _parse_symbol_shape(s: str) -> "Optional[dict]":
+    """One 'name(args)' shape (an ``exposes`` entry or a derived reference)
+    parsed into the module-symbol-contract entry ``{"name", "args"}`` (S11.1).
+    ``args`` is None when the shape carries no parenthesis (arity unknown —
+    stated but not signed), ``[]`` for an explicit empty ``()``. ``class X``
+    entries keep the bare class name. Returns None for a non-symbol shape."""
+    txt = str(s or "").strip()
+    if txt.startswith("class "):
+        txt = txt[len("class "):].strip()
+    m = re.match(r"([A-Za-z_]\w*)\s*(\(([^()]*)\))?\s*$", txt)
+    if not m:
+        return None
+    args = None
+    if m.group(2) is not None:
+        args = [a.strip() for a in (m.group(3) or "").split(",") if a.strip()]
+    return {"name": m.group(1), "args": args}
+
+
+def _render_module_surface(entries) -> str:
+    """The ONE human-readable rendering of a module symbol contract —
+    'init_db(path), store_note(text), list_notes()'. Both bindings (exporter
+    and importer) and every gate finding print THIS string from the same
+    datum, so prompt and gate can never drift (S11.2)."""
+    out = []
+    for e in entries or []:
+        name = (e or {}).get("name")
+        if not name:
+            continue
+        args = e.get("args")
+        out.append("%s(...)" % name if args is None
+                   else "%s(%s)" % (name, ", ".join(args)))
+    return ", ".join(out)
+
+
 def _delivery_lint(rel: str, body: str, root=None) -> list:
     """ONE write-door hygiene check for delivered CODE (src/*.py, tests/*.py).
     Enforces RULE_CODE_STYLE — the same constant workers see in their prompts,
@@ -3859,9 +3893,26 @@ class Engine:
         gate stays inert — no false red on a cardless housekeeping node."""
         if node.get("children"):
             return []                       # a branch node carries no card
-        if not self._leaf_exposed_symbols(node):
-            return []                       # exposes nothing → no card required
         out: list = []
+        # S11.2 (v157): an exporter other leaves IMPORT must carry a
+        # NON-EMPTY symbol contract — an empty surface leaves every importer
+        # guessing (the ImportError-at-boot class). Red HERE demanding
+        # `exposes`; the engine never substitutes a domain default. Amend
+        # nodes are exempt (they edit an owner whose own card was gated).
+        if not node.get("code_target"):
+            _stem = self._module_for(str(node.get("id") or ""))
+            _imps = (self.__dict__.get("_module_importers") or {}).get(_stem)
+            if _imps and not (self.__dict__.get("_module_contracts")
+                              or {}).get(_stem):
+                out.append(
+                    "module `src/%s.py` is imported by %s but exposes NO "
+                    "contracted public symbols — declare `exposes` entries "
+                    "('name(args)') or state its callable surface in the "
+                    "requirement (e.g. `%s.<function>(...)`); importers are "
+                    "refused from importing an uncontracted module"
+                    % (_stem, ", ".join(sorted(_imps)), _stem))
+        if not self._leaf_exposed_symbols(node):
+            return out                      # exposes nothing → no card required
         acc = node.get("acceptance")
         if not acc or not [a for a in (acc if isinstance(acc, list) else [acc])
                            if str(a).strip()]:
@@ -4015,6 +4066,162 @@ class Engine:
                 "Status semantics: success statuses are CONTRACTED per route above "
                 "(never guess them); unknown path -> 404; known path with an "
                 "unsupported method -> 405; malformed JSON body -> 400.")
+
+    def _derive_module_contract(self, node: dict, stem: str) -> list:
+        """S11.1: the exporter's symbol contract, derived DETERMINISTICALLY
+        in priority order — never a domain default:
+
+          1. the node's exposed-symbol datum (`_leaf_exposed_symbols`:
+             declared ``exposes`` shapes unioned with canonical route
+             handlers), parsed as 'name(args)' entries;
+          2. else references the HUMAN data itself makes to the module —
+             ``<stem>.<name>`` in the node's OWN text fields and in the
+             constitution rules (the same way route bindings derive from
+             requirement text; v157's real p6 case: 'db.connect reads it
+             per call' is the only storage symbol the human ever stated);
+          3. else the EMPTY set — the importer may not import from the
+             module and the card gate reds demanding ``exposes``.
+
+        ``<stem>.py`` filename mentions are structural, not symbols."""
+        entries, seen = [], set()
+        for s in self._leaf_exposed_symbols(node):
+            ent = _parse_symbol_shape(s)
+            if ent and ent["name"] not in seen:
+                seen.add(ent["name"])
+                entries.append(ent)
+        if entries:
+            return entries
+        texts = [str(node.get(k) or "")
+                 for k in ("requirement", "title", "spec_markdown")]
+        texts += [str(r) for r in (getattr(self, "_constitution", None) or [])]
+        pat = re.compile(r"\b%s\.([A-Za-z_]\w*)\s*(\(([^()]*)\))?"
+                         % re.escape(stem))
+        for text in texts:
+            for m in pat.finditer(text):
+                name = m.group(1)
+                if name == "py" or name in seen:   # src/<stem>.py = filename
+                    continue
+                seen.add(name)
+                args = None
+                if m.group(2) is not None:
+                    args = [a.strip() for a in (m.group(3) or "").split(",")
+                            if a.strip()]
+                entries.append({"name": name, "args": args})
+        return entries
+
+    def _register_module_import(self, importer: str,
+                                exporter_node: dict) -> None:
+        """S11.1: MATERIALISE the symbol contract for one dependency pair at
+        PLAN time — before EITHER side is coded. The exporter's surface
+        becomes ONE engine-declared datum (`_module_contracts`) that the
+        bindings print, the write-door gates enforce and
+        ``contracts/modules.json`` persists — so two LLMs can never guess it
+        apart (v157: core imported init_db/store_note/list_notes while db.py
+        exported different names — ImportError at boot). Idempotent; the
+        importer registry feeds the importer-side binding and gate."""
+        stem = self._module_for(str(exporter_node.get("id") or ""))
+        imp = self._module_for(str(importer or ""))
+        if not stem or not imp or imp == stem:
+            return
+        contracts = self.__dict__.setdefault("_module_contracts", {})
+        importers = self.__dict__.setdefault("_module_importers", {})
+        if stem not in contracts:
+            contracts[stem] = self._derive_module_contract(
+                exporter_node, stem)
+        importers.setdefault(stem, set()).add(imp)
+        # the gates at the write doors read the SAME in-memory datum
+        self.workspace.module_contracts = contracts
+        self._materialize_module_contracts_file()
+        surface = (_render_module_surface(contracts[stem])
+                   or "(no contracted symbols — exposes required)")
+        self.emit("decompose", "engine", "", stem,
+                  "module symbol contract: src/%s.py -> %s" % (stem, surface),
+                  "importer(s): %s — one engine-declared surface both sides "
+                  "read; enforced at the write door"
+                  % ", ".join(sorted(importers[stem])),
+                  "module_contract", "", level=L_MILESTONE)
+
+    def _materialize_module_contracts_file(self) -> None:
+        """Persist the module-symbol-contract datum to
+        ``contracts/modules.json`` via the ONE write door — written from the
+        same in-memory dict every consumer reads (the modules analogue of
+        contracts/interface.json)."""
+        ws = self.workspace
+        if not (getattr(ws, "enabled", False) and getattr(ws, "root", None)):
+            return
+        data = dict(self.__dict__.get("_module_contracts") or {})
+        ws._write("contracts/modules.json",
+                  json.dumps(data, indent=2, sort_keys=True) + "\n",
+                  "contract")
+
+    def _module_contract_binding_text(self, stem: str) -> str:
+        """S11.2: the module-contract block(s) for the module ``stem`` —
+        exporter obligation ('you MUST define exactly …') when other leaves
+        import it, importer restriction ('you may import ONLY …') for every
+        module it depends on. Both sides render the SAME
+        ``_render_module_surface`` string from the same datum. Empty when the
+        module is in no dependency pair."""
+        contracts = self.__dict__.get("_module_contracts") or {}
+        importers = self.__dict__.get("_module_importers") or {}
+        parts = []
+        ents = contracts.get(stem)
+        if ents is not None and importers.get(stem):
+            who = ", ".join(sorted(importers[stem]))
+            if ents:
+                parts.append(
+                    "## Module symbol contract (engine-declared)\n"
+                    "`src/%s.py` is imported by: %s. You MUST define AT "
+                    "MODULE LEVEL every contracted public symbol — importers "
+                    "may use ONLY these:\n%s\n"
+                    "A delivery missing any contracted symbol is refused at "
+                    "the write door; `contracts/modules.json` is the single "
+                    "source of this surface." % (
+                        stem, who, _render_module_surface(ents)))
+            else:
+                parts.append(
+                    "## Module symbol contract (engine-declared)\n"
+                    "`src/%s.py` is imported by %s but exposes NO contracted "
+                    "symbols — the plan must declare its `exposes` before "
+                    "any importer may use it." % (stem, who))
+        for exp in sorted(importers):
+            if exp == stem or stem not in importers[exp]:
+                continue
+            dep_ents = contracts.get(exp) or []
+            if dep_ents:
+                parts.append(
+                    "## Imports from `src/%s.py` (engine-declared module "
+                    "contract)\n"
+                    "You may import/call ONLY: %s.\n"
+                    "`from %s import <anything else>`, `%s.<anything else>` "
+                    "and `from %s import *` are refused at the write door; "
+                    "`contracts/modules.json` is the single source of this "
+                    "surface." % (exp, _render_module_surface(dep_ents),
+                                  exp, exp, exp))
+            else:
+                parts.append(
+                    "## Imports from `src/%s.py` (engine-declared module "
+                    "contract)\n"
+                    "`src/%s.py` exposes NO contracted symbols yet — do "
+                    "NOT import from it; the plan must declare its "
+                    "`exposes` first." % (exp, exp))
+        return "\n\n".join(parts)
+
+    def _module_contract_binding(self, node: dict) -> str:
+        """The module-contract block for THIS node's code module — an amend
+        node (code_target) prints the contract of the module it EDITS, so a
+        rework can never re-guess the frozen surface (S11.4)."""
+        ctgt = node.get("code_target")
+        stem = (Path(str(ctgt)).stem if ctgt
+                else self._module_for(str(node.get("id") or "")))
+        return self._module_contract_binding_text(stem)
+
+    def _leaf_bindings(self, node: dict) -> str:
+        """Every engine-declared binding THIS leaf's spec must print: the
+        route -> handler contract (Phase 1) plus the module symbol contract
+        (S11.2) — each rendered from its single datum."""
+        return "\n\n".join(
+            x for x in (self._leaf_route_binding(node),
+                        self._module_contract_binding(node)) if x)
 
     def _leaf_handler_gate(self, node: dict, nid: str, depth: int,
                            code_rel: "Optional[str]") -> bool:
@@ -5565,8 +5772,11 @@ def %(callable)s(environ, start_response):
     def _module_for(self, nid: str) -> str:
         """Variant A: a deterministic, COLLISION-FREE module name per node.
         Same nid → same fn (resume-safe); two nids that snake to the same
-        base get a stable short-hash suffix so their src files never clash."""
-        with self._module_lock:
+        base get a stable short-hash suffix so their src files never clash.
+        Lazily self-initialising: plan-time consumers (S11 module contracts)
+        resolve module names before _run seeds the registry."""
+        with self.__dict__.setdefault("_module_lock", threading.Lock()):
+            self.__dict__.setdefault("_module_names", {})
             cached = self._module_names.get(nid)
             if cached is not None:
                 return cached
@@ -6098,7 +6308,7 @@ def %(callable)s(environ, start_response):
             nid, title, depth, spec_args["verdict"], spec_args["reasons"],
             parent, spec_args["plan"], node=node, target=self._target,
             module=self._module_for(nid),
-            route_binding=self._leaf_route_binding(node))
+            route_binding=self._leaf_bindings(node))
         # deterministic lint BEFORE the reviewer: the mechanical
         # traceability class (AC without REQ and the reverse) is fixed by
         # a bounded author round with the EXACT violations — a reviewer
@@ -6138,7 +6348,7 @@ def %(callable)s(environ, start_response):
                 spec_args["reasons"], parent, spec_args["plan"],
                 node=node, target=self._target,
             module=self._module_for(nid),
-                route_binding=self._leaf_route_binding(node))
+                route_binding=self._leaf_bindings(node))
         else:
             lint = _lint_spec_traceability(nid,
                                            str(node.get("spec_markdown")
@@ -6268,7 +6478,7 @@ def %(callable)s(environ, start_response):
                 nid, title, depth, spec_args["verdict"], spec_args["reasons"],
                 parent, spec_args["plan"], node=node, target=self._target,
                 module=self._module_for(nid),
-                route_binding=self._leaf_route_binding(node))
+                route_binding=self._leaf_bindings(node))
         # if a scope FAIL was raised but the rework cleared it, emit the closing
         # PASS on the SAME gate — otherwise the FAIL reads as an unresolved
         # problem forever (no later PASS to pair it with)
@@ -6351,7 +6561,7 @@ def %(callable)s(environ, start_response):
                     nid, title, depth, spec_args["verdict"], spec_args["reasons"],
                     parent, spec_args["plan"], node=node, target=self._target,
             module=self._module_for(nid),
-                    route_binding=self._leaf_route_binding(node))
+                    route_binding=self._leaf_bindings(node))
                 verdict, reasons = self._consult_reviewer(nid, title, spec_rel, depth)
             if verdict == "REJECT":
                 exhausted = getattr(self, "_review_exhausted", "record")
@@ -7214,6 +7424,12 @@ def %(callable)s(environ, start_response):
                           "collapse must not swallow it into the core",
                           "small_product", "", level=L_MILESTONE)
             node["children"] = _pin_leaves + [core]
+            # S11.1: the collapsed plan IS a dependency pair per pinned leaf —
+            # core accesses each pinned module ONLY through import, so the
+            # exporter's symbol contract is materialised NOW, before either
+            # side is coded (v157: both sides guessed the db surface apart).
+            for _pl in _pin_leaves:
+                self._register_module_import(core["id"], _pl)
             node.pop("atomic", None)            # the ROOT stays a branch
             leaf_out = {"verdict": "branch",
                         "reasons": [f"small product: {_nr} route(s) <= "
@@ -7347,6 +7563,17 @@ def %(callable)s(environ, start_response):
             # a leaf that consumes another's module sees it already present at
             # integrate, cutting rework rounds. Execution order only; the tree
             # keeps its declared order for display.
+            # S11.1: typed `needs` edges among the children are dependency
+            # pairs — materialise each exporter's symbol contract BEFORE any
+            # child is specced or coded, so both sides read one datum.
+            _by_id = {str(c.get("id")): c for c in node.get("children", [])
+                      if isinstance(c, dict)}
+            for _c in node.get("children", []):
+                for _e in (_c.get("needs") or []) if isinstance(_c, dict) \
+                        else []:
+                    _exp = _by_id.get(str((_e or {}).get("from")))
+                    if isinstance(_exp, dict):
+                        self._register_module_import(str(_c.get("id")), _exp)
             kids = self._topo_order(node.get("children", []))
             if self._parallel_children > 1:
                 # stage 1 + waves: each child's WHOLE subtree runs in its own
