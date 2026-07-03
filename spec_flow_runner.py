@@ -3293,6 +3293,14 @@ class Engine:
         covered = {p for p in boot.values() if p}
         extra = [["GET", p] for p in routes
                  if p not in covered and "{" not in p]
+        # S10.24: routes BOUND by late requirements routed to amend an owner
+        # module (engine data — _late_req_bound_route) extend the declared
+        # set: only a NEW method on a path the human text already names,
+        # never a prose-invented path.
+        for m, p in sorted(self.__dict__.get("_late_bound_routes") or ()):
+            if p in routes and m not in routes[p]:
+                routes[p].add(m)
+                extra.append([m, p])
         return {"entry": entry, "callable": callables, "boot": boot,
                 "routes": extra}
 
@@ -3631,8 +3639,28 @@ class Engine:
         # ownership here made the handler gate demand the amend node define the
         # owner's handler, and the anti-fork lint reject it as a duplicate (v145
         # красивый_вид: routed to amend web_ui, then RED for "restating" /ui).
+        # S10.24 (v156): the ONE exception is a route the ENGINE bound for the
+        # amend (`binds_route`, from _late_req_bound_route) — that is the
+        # node's own datum, not prose: owning it makes the binding order the
+        # canonical handler + contracted status, the handler gate demand it in
+        # the owner module, and the plan report see a real owner.
         if node.get("code_target"):
-            return []
+            bound = node.get("binds_route") or []
+            if len(bound) != 2:
+                return []
+            mp = (str(bound[0]).upper(), str(bound[1]))
+            # self-heal after resume: re-register the datum so the contract
+            # keeps carrying the bound route in a fresh engine
+            self.__dict__.setdefault("_late_bound_routes", set()).add(mp)
+            try:
+                if mp not in self._declared_route_set(
+                        self._product_contract() or {}):
+                    return []
+            except Exception:        # noqa: BLE001 — no contract = no claim
+                return []
+            if nid:
+                reg.setdefault(mp, set()).add(nid)
+            return [mp]
         # S10.16 (v152): ownership means "this LEAF BUILDS the route" — only a
         # childless leaf may enter the datum. A branch/root text names routes by
         # construction (it states the whole product): v152 recorded L0 as an
@@ -6587,6 +6615,58 @@ def %(callable)s(environ, start_response):
             remaining = leftover
         return waves
 
+    def _late_req_bound_route(self, extra: dict,
+                              amend: str) -> "Optional[tuple]":
+        """The (method, path) a late requirement routed to AMEND an owner
+        module adds to the product — engine-bound DATA (S10.24, v156).
+
+        Why: a late req implying a genuinely NEW (method, path) — 'allow
+        removing a note' folded into core — had NO datum carrying its route:
+        the amend leaf owns nothing, the prose names no literal route, so the
+        contract never grew, S10.13 adoption (canonical name on a DECLARED
+        path) had nothing to order the coder by, and the assembled entry
+        answered 405 while the leaf went DONE (v156 DELETE /notes).
+
+        What: the PATH is never invented — it must be a path the amend target
+        ALREADY serves per the ownership datum (`_route_owners`), minus
+        fixed-body liveness paths; the METHOD comes from the requirement's
+        own verbs (the same `_METHOD_SYNONYMS` the resolver family uses) and
+        must be NEW on that path. Exactly one candidate path and one new
+        method, else None — ambiguity is not license to guess.
+
+        Test: the v156 delete-note prose amending the owner of POST/GET
+        /notes binds ('DELETE', '/notes'); prose naming a new PATH, or two
+        new-method verbs at once, binds nothing (audit
+        test_late_req_route_growth)."""
+        try:
+            declared = set(self._declared_route_set(
+                self._product_contract() or {}))
+        except Exception:        # noqa: BLE001 — no contract = nothing to grow
+            return None
+        if not declared:
+            return None
+        stem = _snake(Path(amend).stem)
+        names = getattr(self, "_module_names", None) or {}
+        reg = self.__dict__.get("_route_owners") or {}
+        target_paths = {p for (m, p), owners in reg.items()
+                        if any((names.get(oid) or _snake(oid)) == stem
+                               for oid in owners)}
+        paths = sorted(p for p in target_paths
+                       if _route_fixed_body("GET", p) is None)
+        if len(paths) != 1:
+            return None
+        path = paths[0]
+        words = set(re.findall(r"[a-z]+", " ".join(
+            str(extra.get(k) or "")
+            for k in ("requirement", "title")).lower()))
+        cands = {m for m, syns in self._METHOD_SYNONYMS.items()
+                 if (m, path) not in declared
+                 and any(w == s or (w.startswith(s) and len(w) <= len(s) + 3)
+                         for s in syns for w in words)}
+        if len(cands) != 1:
+            return None
+        return (cands.pop(), path)
+
     def _attach_late_req(self, extra: dict, node: dict, depth: int, title: str,
                          nid: str, ancestors: tuple, child_ids: list) -> None:
         """Prepare ONE late-requirement node for execution (no LLM): route it to
@@ -6623,6 +6703,24 @@ def %(callable)s(environ, start_response):
                       "late requirement routed to EDIT existing surface",
                       f"writes into {amend} (no parallel module)",
                       "requirement", "AMEND", level=L_MILESTONE)
+            # S10.24 (v156): a late req implying a NEW method on a path its
+            # owner already serves BINDS that route as engine data — the
+            # contract, interface.json and the entry table grow from this
+            # datum (the path is never invented from prose). Without it the
+            # leaf goes DONE while the product 405s the behaviour forever.
+            bound = self._late_req_bound_route(extra, amend)
+            if bound:
+                extra["binds_route"] = [bound[0], bound[1]]
+                self.__dict__.setdefault(
+                    "_late_bound_routes", set()).add(bound)
+                self.emit("decompose", "engine", "", extra["id"],
+                          "late requirement binds a NEW method on an owned "
+                          "path — the product contract grows",
+                          "%s %s -> def %s(payload, query); success status %d"
+                          % (bound[0], bound[1],
+                             _canonical_handler_symbol(*bound),
+                             _route_success_status(bound[0])),
+                          "requirement", "BOUND", level=L_MILESTONE)
         else:
             self.emit("decompose", "engine", "", extra["id"],
                       f"late requirement materialized {where}",
