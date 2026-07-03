@@ -431,7 +431,8 @@ Python symbols:
 ## STAGE 12 — Request/config surface as data (`test_request_shape_gate.py`,
 `test_rework_preserves_route_surface.py`, `test_unserved_route_fastfail.py`,
 `test_doctor_cause_attribution.py`, `test_boot_shape_probe.py`,
-`test_smeared_status_autofix.py`)
+`test_smeared_status_autofix.py`, `test_finding_addressee.py`,
+`test_request_shape_autofix.py`)
 The v159 class: what a route ACCEPTS (request body fields) and what the
 product reads from the ENVIRONMENT (config) are two different human-stated
 surfaces; when neither exists as engine data, two agents can agree on the
@@ -606,6 +607,46 @@ same wrong reading and stay green until product e2e.
   mention of a route another leaf owns stays a dependency (v145); two
   literal candidates = ambiguity, bind nothing.
   (`test_late_req_route_growth.py`)
+- S12.12 a gate finding is ADDRESSED TO THE ARTIFACT OWNER: the doctor
+  cause, the rework loop and the S12.5 recheck land on the node that OWNS
+  the offending FILE (`_artifact_owner_nid` — reverse lookup of the file's
+  module stem in the collision-free node->module registry; for
+  tests/test_<m>.py that is <m>'s leaf), never on the owner of the route
+  the file merely touches — the route owner is context NAMED IN the
+  finding text, not the addressee. v163 (2026-07-03T21-53-39): the
+  assembled product was FULLY green (every v149-v162 class gone), yet the
+  terminal was NOT READY on one open cause `about_page:request_shape`
+  (event 159). The finding (events 126-127) was honest — tests/test_core.py
+  sent 'irrelevant' to `GET /about` (contracted shape []) — but the amend's
+  gate run attributed it to about_page (the ROUTE owner, its own nid) while
+  the offending ARTIFACT is CORE's test file: rework of about_page can
+  never edit core's file, so the cause could never close — an eternal root
+  red over a green product, the addressing twin of the S12.10 blame hole.
+  The request-shape gate now groups findings per offending artifact and
+  advises/journals/rechecks per addressee (a quiet recheck is scoped to ONE
+  addressee via `for_nid`, so a foreign artifact's red never vetoes another
+  node's close); the test-status gate (which also carries the S10.27
+  body-shape findings) had the SAME bug and addresses its single artifact
+  the same way. Green: a violation in a leaf's OWN test file still lands on
+  that leaf itself. (`test_finding_addressee.py`)
+- S12.13 a junk payload field sent to a BODYLESS route (contracted request
+  shape EMPTY) is a MECHANICALLY fixable test defect — the S12.7 class one
+  gate over: an empty shape leaves exactly ONE correct payload ({}), so
+  `_strip_junk_payload_dicts` empties the junk dict literal itself
+  (`get_about({"irrelevant": 1}, {})` -> `get_about({}, {})`, AST-span text
+  surgery) instead of round-tripping a zero-ambiguity edit through model
+  rework — journaled as a `request-shape-autofix` loop +
+  `request_shape_autofix` ENFORCED milestone addressed to the file owner
+  (S12.12). Repaired ONLY when the call shape is CANONICAL: a direct
+  canonical-handler call with a dict literal as the first positional arg
+  and every key a string constant. Honest reds preserved: a junk field on a
+  route with a NON-empty contract is ambiguous (junk? typo of a contracted
+  field?) and is NEVER autofixed; non-canonical shapes (the string-route
+  `_call("GET", "/about", {...})` form, kwargs payloads) stay classic red
+  findings; an already-clean call is untouched byte-identical; the quiet
+  S12.5 recheck never rewrites. v163: this junk field was the sole red
+  holding a fully correct live product NOT READY.
+  (`test_request_shape_autofix.py`)
 
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
