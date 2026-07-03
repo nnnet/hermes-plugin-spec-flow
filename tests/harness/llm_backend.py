@@ -1234,6 +1234,31 @@ def _strip_think(text: str) -> str:
     return out if out else text
 
 
+def _message_text(msg: dict) -> str:
+    """Normalize an OpenAI-shaped chat message to plain reply text.
+    Why: providers disagree on the `content` field shape — most return a
+    string, some return a LIST of content parts ([{"type": "text",
+    "text": ...}, ...]). v158 (S10.28): a list-shaped content hit
+    ``text.strip()`` -> AttributeError, escaped the narrow shape-except AND
+    ask()'s RuntimeError-only chain except, killed the orchestra coder/tester
+    steps ('list' object has no attribute 'strip') — the about_page leaf
+    delivered nothing and the doctor cause empty_delta stayed open all run.
+    What: flattens str / list-of-parts / part dicts (text|content keys) to one
+    string; falls back to `reasoning` (weak models answer there); anything
+    unrecognizable yields "" so the caller's 'empty completion' retry path
+    runs — a shape surprise degrades, never crashes.
+    Test: tests/audit/test_provider_reply_shape.py (real local HTTP server)."""
+    def _flat(v) -> str:
+        if isinstance(v, str):
+            return v
+        if isinstance(v, list):
+            return "".join(_flat(p) for p in v)
+        if isinstance(v, dict):
+            return _flat(v.get("text") or v.get("content") or "")
+        return ""
+    return _flat(msg.get("content")) or _flat(msg.get("reasoning"))
+
+
 def _provider_of(model: str) -> str:
     """The provider key a model routes through — the prefix before '/'
     (openrouter / xiaomimimo / claude), else the default openai backend. Used to
@@ -1323,9 +1348,10 @@ def _ask_openai(prompt: str, model: str, system: str | None = None,
             try:
                 out = json.loads(body)
                 msg = out["choices"][0]["message"]
-                # weak reasoning models (qwen3-next, …) sometimes return the
-                # answer in `reasoning` with an empty `content` — accept it.
-                text = msg.get("content") or msg.get("reasoning") or ""
+                # S10.28: ONE normalizer for the content shape (string, list
+                # of parts, part dicts; weak reasoning models answer in
+                # `reasoning` with an empty `content` — accepted too)
+                text = _message_text(msg)
                 if r_lvl == "off":
                     # off-fallback tail: a model that ignored the wire param /
                     # nudge may still emit an inline think block — cut it.
@@ -1342,7 +1368,12 @@ def _ask_openai(prompt: str, model: str, system: str | None = None,
                     return text
                 last = "empty completion"
                 err = "empty"
-            except (KeyError, IndexError, json.JSONDecodeError) as exc:
+            except (KeyError, IndexError, json.JSONDecodeError,
+                    TypeError, AttributeError) as exc:
+                # TypeError/AttributeError included (S10.28): any residual
+                # provider-shape surprise degrades to a retryable bad-shape
+                # attempt — it must never escape as an uncaught crash that
+                # kills the calling step (v158 orchestra coder/tester)
                 last = f"bad response shape: {exc}: {body[-200:]}"
                 err = "empty"
         else:
