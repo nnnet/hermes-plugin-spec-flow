@@ -5462,6 +5462,34 @@ def %(callable)s(environ, start_response):
                     "integrate_verify", "FAIL",
                     {"reasons": f"delivered leaf code missing: {_names}"})
 
+        # S10.17 (v152): the plan-ownership DATUM is the engine's own atomicity
+        # attestation (RULE_ROUTE_OWNERSHIP: exactly ONE owner leaf per route).
+        # v152 DETECTED "route POST /notes: 3 owner leaves — duplicate" at root
+        # integrate yet logged it with a NEUTRAL verdict: READY passed, doctor
+        # treatments stayed 0 — the engine suppressed its own violation from
+        # the terminal. A DUPLICATE owner is a root integrate FAIL, recorded so
+        # the completion gate blocks, and fed to the doctor: an UNRESOLVED
+        # duplicate ends NOT READY. Orphan findings (0 owners) stay
+        # informational — serving is Phase 7's boot/suite authority, and a
+        # route may be honestly served by an adopted handler with no
+        # text-owning leaf.
+        _dups = [f for f in self._plan_ownership_report() if "duplicate" in f]
+        if _dups:
+            _ddetail = "; ".join(_dups)
+            self.emit("integrate", "engine", "spec-integrate",
+                      "L0:integrate",
+                      "duplicate route ownership in the realized plan",
+                      f"{RULE_ROUTE_OWNERSHIP} — violated: {_ddetail}",
+                      "integrate_verify", "FAIL", level=L_MILESTONE)
+            _rid3 = str((project.get("tree") or {}).get("id", "L0"))
+            self.loops.append({
+                "type": "integrate-fail", "task": _rid3,
+                "detail": f"duplicate route ownership: {_ddetail}"})
+            self._doctor_advise(
+                {"id": "L0:integrate"}, "L0:integrate", 0,
+                "integrate_verify", "FAIL",
+                {"reasons": f"duplicate route ownership: {_ddetail}"})
+
         # Sweep: fire any declared revision that did not meet its in-run
         # trigger condition (back-compat + nothing declared is silently dropped).
         self._revision_sweep()

@@ -95,3 +95,85 @@ def test_rederivation_drops_stale_ownership(tmp_path):
     assert "web_ui" not in _owners(e).get(("POST", "/notes"), set()), (
         "re-derivation must drop the stale POST /notes row for web_ui")
     assert "web_ui" in _owners(e).get(("GET", "/health"), set())
+
+
+# ── S10.17 an UNRESOLVED duplicate owner is an honest NOT READY ──────────────
+# Dynamic, offline fake agents. > 5 declared routes so the small-product floor
+# does not collapse the rival leaves away. The gate reads ONLY the
+# _route_owners datum — no per-scenario special case.
+
+WEB_PROJECT = {
+    "name": "micro-notes",
+    "goal": ("A notes service over WSGI: POST /notes stores {text}; GET /notes"
+             " lists items; GET /health answers 200; GET /stats counts notes;"
+             " DELETE /notes clears them; GET /ui renders an HTML list;"
+             " GET /export returns the notes as CSV. src/app.py exposes"
+             " wsgi_app."),
+    "target": "POST then GET round-trips a note; sqlite3 stdlib only",
+    "constitution": ["Standard library only."],
+    "acceptance": {"smoke": ["the build succeeds"]},
+    "policy": dict(_POLICY),
+}
+
+_ACC = ["Given a note, When POSTed to /notes, Then GET /notes returns it"]
+
+
+def _dup_owner_decomposer(ctx):
+    # the v152 shape: web_ui's spec copy-pastes the frozen JSON API routes the
+    # core leaf already owns — TWO childless leaves claim the same route
+    if ctx["depth"] == 0:
+        return {"metrics": dict(_BIG),
+                "children": [
+                    {"id": "core",
+                     "title": "store and list notes via POST /notes and"
+                              " GET /notes"},
+                    {"id": "web_ui",
+                     "title": "HTML list at GET /ui; also serves POST /notes"
+                              " and GET /notes"}]}
+    return {"metrics": dict(_SMALL), "acceptance": list(_ACC)}
+
+
+def _single_owner_decomposer(ctx):
+    if ctx["depth"] == 0:
+        return {"metrics": dict(_BIG),
+                "children": [
+                    {"id": "core",
+                     "title": "store and list notes via POST /notes and"
+                              " GET /notes"},
+                    {"id": "web_ui", "title": "HTML list at GET /ui"}]}
+    return {"metrics": dict(_SMALL), "acceptance": list(_ACC)}
+
+
+def _run(tmp_path, plugin, decomposer):
+    return eng.run_project(dict(WEB_PROJECT),
+                           workspace=str(tmp_path / "wk"), depth="product",
+                           tools=plugin.tools,
+                           contracts_dir=str(eng.CONTRACTS),
+                           agents={"decomposer": decomposer,
+                                   "implementer": auto_implementer.implement})
+
+
+def test_duplicate_route_ownership_is_honest_not_ready(plugin, tmp_path):
+    res = _run(tmp_path, plugin, _dup_owner_decomposer)
+    assert res is not None
+    dump = "\n".join(repr(ev) for ev in res.events)
+    assert "duplicate route ownership" in dump, (
+        "a duplicate owner detected in _route_owners must surface as an"
+        " explicit root-integrate FAIL milestone (v152 ticks 111-113: the"
+        " finding was logged with a neutral verdict and READY sailed through)")
+    assert res.product_status == "NOT READY", (
+        "an UNRESOLVED duplicate route owner violates RULE_ROUTE_OWNERSHIP —"
+        " the terminal verdict must be an honest NOT READY (v152: READY at"
+        " tick 114, doctor treatments: 0 at tick 115)")
+
+
+def test_single_owner_plan_has_no_duplicate_event(plugin, tmp_path):
+    res = _run(tmp_path, plugin, _single_owner_decomposer)
+    assert res is not None
+    dump = "\n".join(repr(ev) for ev in res.events)
+    assert "duplicate route ownership" not in dump, (
+        "a clean single-owner plan must produce ZERO duplicate-ownership"
+        " events — the gate must never red on a legitimate plan")
+    assert not any("duplicate route ownership" in str(lp.get("detail", ""))
+                   for lp in res.loops), (
+        "no integrate-fail loop entry may be recorded for a clean plan")
