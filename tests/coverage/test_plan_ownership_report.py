@@ -46,10 +46,17 @@ def test_orphan_route_reported(tmp_path):
 
 
 def test_duplicate_route_reported(tmp_path):
+    # S10.19 made prose-only second claims a DEPENDENCY (first-owner-wins),
+    # so a genuine duplicate is a DECLARED one: the second leaf's typed
+    # `exposes` claims a route the first already owns
     eng = _engine(tmp_path)
     assert _own(eng, "health", "serve GET /health")
     assert _own(eng, "reader", "GET /notes lists notes")
-    assert _own(eng, "writer", "POST /notes stores; also GET /notes")
+    writer = eng._leaf_owned_routes(
+        {"id": "writer", "title": "writer",
+         "exposes": ["post_notes(payload, query)",
+                     "get_notes(payload, query)"]})
+    assert ("GET", "/notes") in writer
     rep = eng._plan_ownership_report()
     assert any("/notes" in f and "duplicate" in f for f in rep)
 

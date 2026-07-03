@@ -3555,13 +3555,27 @@ class Engine:
                 uniq.append(mp)
         return uniq
 
+    # spec_markdown lines that QUOTE inherited context — the 'Traces-to'
+    # header and 'Goal:' parent-goal quotes restate the WHOLE product by
+    # construction; matching them attributed every route to one leaf (S10.19b)
+    _INHERITED_CONTEXT_LINE = re.compile(
+        r"traces.?to|^\s*[-*#>\s]*\**goal\s*:", re.IGNORECASE)
+
     def _leaf_owned_routes(self, node: dict) -> list:
-        """The DECLARED routes THIS leaf owns: a route whose path token appears
-        in the leaf's own text (requirement / title / authored spec). The single
-        source of route ownership, shared by the route -> handler binding
-        (Phase 1), the leaf handler gate (Phase 2) and the plan-ownership report
-        (Phase 6) — derived ONCE, deterministically, never guessed. Returns a
-        list of ``(method, path)``; empty for a non-HTTP leaf."""
+        """The DECLARED routes THIS leaf owns. The single source of route
+        ownership, shared by the route -> handler binding (Phase 1), the leaf
+        handler gate (Phase 2) and the plan-ownership report (Phase 6) —
+        derived ONCE, deterministically, never guessed. Returns a list of
+        ``(method, path)``; empty for a non-HTTP leaf.
+
+        Derivation (S10.19, v154): a node carrying typed ``exposes`` (C2)
+        owns EXACTLY the declared routes — prose is never consulted. The
+        prose fallback matches only the node's OWN claim text (requirement /
+        title / authored spec minus inherited 'Traces-to'/'Goal:' quote
+        lines), and a matched route ALREADY recorded to another leaf is a
+        DEPENDENCY, not a claim — excluded and journaled (first-owner-wins;
+        v154: web_ui's 'reusing the existing … /notes logic' made the engine
+        itself order rival post_notes/get_notes handlers)."""
         # The datum mirrors the node's CURRENT text/shape (S10.16): drop this
         # node's stale rows FIRST, so a reworked spec (foreign route removed)
         # or a node that later gained children falls OUT of _route_owners
@@ -3592,13 +3606,50 @@ class Engine:
             return []
         if not routes:
             return []
-        text = " ".join(str(node.get(k) or "")
-                        for k in ("requirement", "title", "spec_markdown"))
-        owned = []
-        for m, p in routes:
-            stem = (p or "").rstrip("/") or "/"
-            if re.search(r"(?<![\w/])" + re.escape(stem) + r"(?![\w])", text):
-                owned.append((m, p))
+        declared = node.get("exposes") or []
+        if declared:
+            # S10.19a: typed edges are the SINGLE source when present — the
+            # decomposer's declared surface, never prose. A declared claim of
+            # a foreign route is a REAL duplicate (kept for S10.17/S10.18).
+            bare = {str(s).split("(")[0].replace("class ", "").strip()
+                    for s in declared}
+            owned = [(m, p) for m, p in routes
+                     if _canonical_handler_symbol(m, p) in bare]
+        else:
+            # S10.19b: prose fallback reads the node's OWN claim text —
+            # inherited 'Traces-to'/'Goal:' quote lines restate the parent
+            # goal and never register ownership
+            own_md = "\n".join(
+                ln for ln in str(node.get("spec_markdown") or "").splitlines()
+                if not self._INHERITED_CONTEXT_LINE.search(ln))
+            text = " ".join([str(node.get("requirement") or ""),
+                             str(node.get("title") or ""), own_md])
+            owned = []
+            for m, p in routes:
+                stem = (p or "").rstrip("/") or "/"
+                if re.search(r"(?<![\w/])" + re.escape(stem) + r"(?![\w])",
+                             text):
+                    owned.append((m, p))
+            # S10.19c: a prose-matched route ALREADY recorded to another leaf
+            # is a DEPENDENCY, not a claim (first-owner-wins — deterministic
+            # by the datum). v154: 'reusing the existing … /notes logic' made
+            # the binding order rival post_notes/get_notes handlers.
+            kept = []
+            for m, p in owned:
+                owner = sorted(x for x in reg.get((m, p), ()) if x != nid)
+                if not owner:
+                    kept.append((m, p))
+                    continue
+                seen = self.__dict__.setdefault("_route_dep_logged", set())
+                if (nid, m, p) not in seen:
+                    seen.add((nid, m, p))
+                    self.emit("decompose", "engine", "", nid,
+                              "route dependency (owned by %s): %s %s"
+                              % (owner[0], m, p),
+                              "the leaf text references a route another leaf"
+                              " builds — reuse it, never re-implement it",
+                              level=L_DETAIL)
+            owned = kept
         # record the datum ONCE: the plan-ownership report reads THIS map,
         # never spec prose (v151: amend specs quote the owner's source as
         # edit context, so a text grep saw every route in every spec)

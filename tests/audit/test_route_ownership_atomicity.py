@@ -119,8 +119,10 @@ _ACC = ["Given a note, When POSTed to /notes, Then GET /notes returns it"]
 
 
 def _dup_owner_decomposer(ctx):
-    # the v152 shape: web_ui's spec copy-pastes the frozen JSON API routes the
-    # core leaf already owns — TWO childless leaves claim the same route
+    # the v152 shape: web_ui claims the JSON API routes the core leaf already
+    # owns — TWO childless leaves claim the same route. S10.19 dissolves a
+    # prose-only second claim into a dependency, so the genuine duplicate is
+    # DECLARED via web_ui's typed exposes.
     if ctx["depth"] == 0:
         return {"metrics": dict(_BIG),
                 "children": [
@@ -129,7 +131,10 @@ def _dup_owner_decomposer(ctx):
                               " GET /notes"},
                     {"id": "web_ui",
                      "title": "HTML list at GET /ui; also serves POST /notes"
-                              " and GET /notes"}]}
+                              " and GET /notes",
+                     "exposes": ["post_notes(payload, query)",
+                                 "get_notes(payload, query)",
+                                 "get_ui(payload, query)"]}]}
     return {"metrics": dict(_SMALL), "acceptance": list(_ACC)}
 
 
@@ -179,8 +184,11 @@ def test_card_gate_reds_on_foreign_route_claim(tmp_path):
     owner = {"id": "core", "title": "core notes",
              "requirement": "serve POST /notes and GET /notes"}
     assert e._leaf_owned_routes(owner)
+    # S10.19: a prose-only second claim is treated as a dependency, so the
+    # genuine foreign claim arrives via the leaf's DECLARED exposes
     rival = {"id": "web_ui", "title": "web ui",
              "requirement": "render an HTML list; also serve POST /notes",
+             "exposes": ["post_notes(payload, query)"],
              "acceptance": ["Given a note, When POSTed, Then HTML shows it"]}
     finds = e._card_completeness_findings(rival)
     assert any("core" in f and "/notes" in f for f in finds), (
