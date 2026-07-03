@@ -6513,6 +6513,52 @@ def %(callable)s(environ, start_response):
                           "owns retargeted at the core module)"] + kept
         return "\n".join(lines)
 
+    def _purge_dropped_module_refs(self, node: dict, own: str) -> list:
+        """v152 (S10.14): the collapse rewrote only the collapsed LEAF spec —
+        the ROOT's own ``spec_markdown`` (written to specs/<root>.md AFTER the
+        collapse) and any specs/*.md already on disk still carried the plan
+        the floor just rejected (l0.md ordered src/db.py + `db.connect` in its
+        acceptance criteria though no node owned db.py; the coder and every
+        downstream checker then chased a phantom). Applies the SAME retarget
+        rule as ``_collapsed_core_spec`` — a src file reference no node owns
+        is rewritten at the surviving core module — to the root node's pending
+        markdown and to every written spec. Returns the list of purged spec
+        targets (empty when nothing foreign was referenced)."""
+        try:
+            entry = str((self._product_contract() or {}).get("entry") or "")
+        except Exception:        # noqa: BLE001 — no contract = no entry to allow
+            entry = ""
+        known = {_snake(i) for i in (self._node_registry or {})} | {_snake(own)}
+        if entry:
+            known.add(_snake(Path(entry).stem))
+        pat = re.compile(r"src/([A-Za-z0-9_]+)\.py")
+
+        def _retarget(m: "re.Match") -> str:
+            return (m.group(0) if _snake(m.group(1)) in known
+                    else f"src/{own}.py")
+
+        purged: list = []
+        old = str(node.get("spec_markdown") or "")
+        if old:
+            new = pat.sub(_retarget, old)
+            if new != old:
+                node["spec_markdown"] = new
+                purged.append(f"specs/{_snake(node.get('id') or '')}.md")
+        ws = self.workspace
+        root = getattr(ws, "root", None)
+        if getattr(ws, "enabled", False) and root:
+            for p in sorted((Path(root) / "specs").glob("*.md")):
+                try:
+                    text = p.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                new = pat.sub(_retarget, text)
+                if new != text:
+                    # the ONE write door (specs are prose — never code-linted)
+                    ws._write(f"specs/{p.name}", new, "spec")
+                    purged.append(f"specs/{p.name}")
+        return purged
+
     def _visit(self, node: dict, depth: int, contract_ctx: Optional[dict], phase: str,
                parent: Optional[str] = None, ancestors: tuple = ()):
         if "metrics" not in node:
@@ -6644,6 +6690,23 @@ def %(callable)s(environ, start_response):
                       "base collapsed to one module; late requirements still "
                       "attach as further root children",
                       "small_product", "branch", level=L_MILESTONE)
+            # v152 (S10.14): journal the leaf rewrite explicitly (the
+            # collapse_without_spec_rewrite invariant reads this event) …
+            self.emit("decompose", "engine", "", core["id"],
+                      "collapsed spec rewritten for the single core module",
+                      "engine-rewritten scope: every declared route + storage "
+                      f"in src/{core['id']}.py; inherited plan retargeted",
+                      "small_product", "", level=L_DETAIL)
+            # … and purge the dropped-plan references the rejected split left
+            # in the ROOT's own markdown and in already-written specs — the
+            # leaf rewrite alone kept l0.md ordering src files no node owns
+            _purged = self._purge_dropped_module_refs(node, core["id"])
+            if _purged:
+                self.emit("decompose", "engine", "", nid,
+                          "collapse purged dropped-module references",
+                          ("retargeted at src/%s.py in: %s"
+                           % (core["id"], ", ".join(_purged)))[:300],
+                          "small_product", "", level=L_MILESTONE)
             # VERIFY the rewrite through the SAME deterministic ownership gate
             # the card check runs (_card_completeness_findings, "NO node owns"):
             # a clean collapse plans no src file outside its own module/entry.

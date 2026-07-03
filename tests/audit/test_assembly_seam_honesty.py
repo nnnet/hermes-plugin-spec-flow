@@ -609,3 +609,68 @@ def test_route_table_adoption_still_extends_contract(tmp_path):
     rows = _iface_routes(e)
     assert rows[("DELETE", "/notes")]["handler"] == "wipe"
     assert rows[("DELETE", "/notes")]["success_status"] == 200
+
+
+# ── S10.14 collapse purges dropped-module references EVERYWHERE ──────────────
+# v152: the small-product floor collapsed the base to one core module and
+# _collapsed_core_spec rewrote the LEAF spec — but the ROOT's own
+# spec_markdown (written to specs/l0.md later) and other specs still carried
+# src/db.py / `db.connect` (AC-L0-4/AC-L0-5) though NO node owned db.py. The
+# collapse must retarget dropped-module references in every spec it can reach
+# (the root's pending markdown + already-written specs/*.md) and journal BOTH
+# rewrites, so the cleanup is attributable in the trace.
+
+def test_collapse_purges_dropped_refs_everywhere(plugin, tmp_path):
+    from harness import auto_implementer
+    res = eng.run_project(dict(WEB_PROJECT),
+                          workspace=str(tmp_path / "wk"), depth="product",
+                          tools=plugin.tools, contracts_dir=str(eng.CONTRACTS),
+                          agents={"decomposer": _rejected_plan_decomposer,
+                                  "implementer": auto_implementer.implement})
+    assert res is not None
+    dump = "\n".join(repr(ev) for ev in res.events)
+    assert "small product" in dump, "the floor must collapse this run"
+    for spec in sorted((tmp_path / "wk" / "specs").glob("*.md")):
+        assert "src/db.py" not in spec.read_text(encoding="utf-8"), (
+            f"{spec.name} still plans src/db.py after the collapse dropped it"
+            " (v152: l0.md / product_entry.md kept ordering a module no node"
+            " owns)")
+    assert "collapse purged dropped-module references" in dump, (
+        "the purge must be journaled — an unattributable spec mutation is a"
+        " silent state change")
+    assert "collapsed spec rewritten" in dump, (
+        "_collapsed_core_spec rewrites the leaf spec — the journal must show"
+        " it (the collapse_without_spec_rewrite invariant reads this event)")
+
+
+def _entry_only_plan_decomposer(ctx):
+    # green edge: the root spec plans ONLY owned files (the declared entry) —
+    # a collapse with nothing foreign to purge must stay silent
+    if ctx["depth"] == 0:
+        return {"atomic": False, "metrics": dict(_BIG),
+                "spec_markdown": ("## Scope\nIn:\n"
+                                  "- src/app.py: wsgi_app dispatching the"
+                                  " routes\n"),
+                "children": [{"id": "wsgi_handler",
+                              "title": "WSGI route handlers"}]}
+    return {"metrics": dict(_SMALL),
+            "acceptance": ["Given a note, When POSTed to /notes, Then GET"
+                           " /notes returns it"]}
+
+
+def test_collapse_purge_silent_when_nothing_foreign(plugin, tmp_path):
+    from harness import auto_implementer
+    res = eng.run_project(dict(WEB_PROJECT),
+                          workspace=str(tmp_path / "wk"), depth="product",
+                          tools=plugin.tools, contracts_dir=str(eng.CONTRACTS),
+                          agents={"decomposer": _entry_only_plan_decomposer,
+                                  "implementer": auto_implementer.implement})
+    assert res is not None
+    dump = "\n".join(repr(ev) for ev in res.events)
+    assert "small product" in dump, "the floor must collapse this run"
+    assert "collapse purged dropped-module references" not in dump, (
+        "an entry-only plan has nothing to purge — the event must not fire"
+        " on a legitimate edge (false-positive guard)")
+    l0 = tmp_path / "wk" / "specs" / "l0.md"
+    assert l0.is_file() and "src/app.py" in l0.read_text(encoding="utf-8"), (
+        "a mention of the OWNED entry module must survive the purge intact")
