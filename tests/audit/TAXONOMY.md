@@ -430,7 +430,8 @@ Python symbols:
 
 ## STAGE 12 — Request/config surface as data (`test_request_shape_gate.py`,
 `test_rework_preserves_route_surface.py`, `test_unserved_route_fastfail.py`,
-`test_doctor_cause_attribution.py`)
+`test_doctor_cause_attribution.py`, `test_boot_shape_probe.py`,
+`test_smeared_status_autofix.py`)
 The v159 class: what a route ACCEPTS (request body fields) and what the
 product reads from the ENVIRONMENT (config) are two different human-stated
 surfaces; when neither exists as engine data, two agents can agree on the
@@ -497,6 +498,50 @@ same wrong reading and stay green until product e2e.
   contract_check + review_pass + verification, yet the (mislabeled, S12.4)
   cause stayed open forever and single-handedly flipped a fully green
   product to NOT READY. (`test_doctor_cause_attribution.py`)
+- S12.6 config-vs-request confusion is judged by LIVE BEHAVIOUR at the
+  boot-gate, code-shape-independent: `_ROOT_BOOT_PROBE` exercises EVERY
+  contracted route with its CONTRACTED example payload (the S12.1
+  `request_fields` datum; GET/DELETE = no body) with the constitution's env
+  vars ABSENT from the environment; a 4xx naming a required field OUTSIDE
+  the contracted shape is a deterministic RED naming the field, the route,
+  and — for a constitution env var — 'X is an environment variable
+  (constitution), never a request field'. A config-starved 5xx stays legal
+  (an honest server-side config error); a 4xx naming a CONTRACTED field
+  cannot occur (the probe sends every contracted field) and is deliberately
+  not judged. v161: the v159 class landed AGAIN despite S12.1 — the
+  required-field surface lived in the SHARED dispatch wrapper (the router
+  maps ANY KeyError to 400 "missing required field" while src/core.py reads
+  `os.environ['NOTES_DB']` in every handler), so even bodyless GET /ui
+  400-ed 'NOTES_DB'; no `payload[...]` shape exists anywhere, making the
+  AST leaf gate (`_leaf_request_shape_gate`) structurally blind — and the
+  probe's own env defaults (`os.environ.setdefault`) masked the behaviour.
+  (`test_boot_shape_probe.py`)
+- S12.7 a MECHANICALLY fixable test defect is repaired by the ENGINE, never
+  round-tripped through model rework: a smeared success-membership assert on
+  an owned route whose set CONTAINS the contracted status carries zero
+  ambiguity (the contracted value is engine data), so
+  `_leaf_test_status_gate` rewrites `assert code in (200, 201)` ->
+  `assert code == 201` (and `assertIn` -> `assertEqual`) itself — AST-span
+  text surgery (`_rewrite_exact_status_asserts`), journaled as a
+  `test-status-autofix` loop + `test_status_autofix` ENFORCED milestone.
+  A smear WITHOUT the contracted member has no mechanical answer and stays
+  an honest red; the quiet S12.5 recheck stays side-effect-free. v160+v161:
+  the identical finding text «asserts membership over [200, 201] — assert
+  exactly the contracted status 201» went into rework in BOTH runs and the
+  worker delivered the SAME smear back both times — the final v161
+  tests/test_app.py:89 still read `assert code in (200, 201)` and the open
+  cause vetoed the terminal. (`test_smeared_status_autofix.py`)
+- S12.8 the S12.5 recheck is a PER-GATE OBLIGATION: every re-runnable leaf
+  gate that opens a doctor cause MUST register its side-effect-free recheck
+  (`_register_gate_recheck`), else `_prune_stale_causes` has nothing to
+  re-derive the cause with and `continue`s — an honest repair is then vetoed
+  by a STALE ledger entry, the exact S12.5 class one gate over. v161 (event
+  144): 'web_ui:handler' held the root red although rework HAD restored
+  get_ui and the node reached DONE — `_leaf_handler_gate` was the one gate
+  without a recheck. Verified from the same trace: the
+  product_entry:test_status recheck DID run and held HONESTLY (the smear
+  was still in the final artifact — the S12.7 class), so the ledger is
+  honest wherever the wiring exists. (`test_doctor_cause_attribution.py`)
 
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
