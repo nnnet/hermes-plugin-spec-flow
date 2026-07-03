@@ -307,3 +307,145 @@ def test_v157_collision_is_impossible_at_delivery(tmp_path):
     # and the conforming db lands: the pair is coherent BY CONSTRUCTION
     ws._write("src/db.py", _DB_OK, "code")
     assert (tmp_path / "wk" / "src" / "db.py").is_file()
+
+
+# ── S11.4 doctor/rework re-prints the frozen surface ─────────────────────────
+
+def test_rework_directive_reprints_contract_block(tmp_path):
+    # v157: the doctor reworked core three times and each rewrite re-guessed
+    # the db surface — the repair directive must re-print the contract block
+    e = _engine(tmp_path)
+    _register(e)
+    ws = e.workspace
+    ws._write("specs/core.md", "# core\nold spec without the contract\n",
+              "spec")
+    e.agents = dict(getattr(e, "agents", None) or {})
+    e.agents["implementer"] = lambda ctx: None
+    assert e._remedy_rework_module("core", "GET /notes -> 500")
+    text = (tmp_path / "wk" / "specs" / "core.md").read_text(
+        encoding="utf-8")
+    assert _DB_SURFACE in text, (
+        "the repair directive must re-print the module symbol contract so "
+        "the rewriting LLM sees the frozen surface — spec after rework: "
+        f"{text!r}")
+
+
+# ── S11 dynamic: offline run, both bindings carry the same contract ─────────
+
+_POLICY = {"measurable_target": True, "spend_per_action_usd": 0,
+           "human_in_loop": True, "involves_outreach": False,
+           "consent_obtained": True, "legal_exposure": False,
+           "legality_reviewed": True}
+
+_PINNED_PROJECT = {
+    "name": "micro-notes-symbols",
+    "goal": ("A tiny notes service over WSGI: POST /notes stores {text} and"
+             " returns {id}; GET /notes returns the items. src/app.py"
+             " exposes wsgi_app."),
+    "target": "POST then GET round-trips a note; sqlite3 stdlib only",
+    "constitution": [_PIN_RULE, _CONNECT_RULE],
+    "acceptance": {"smoke": ["the build succeeds"]},
+    "policy": dict(_POLICY),
+}
+
+_BIG = {"modules": 2, "tasks": 8, "interfaces": 2, "estimated_loc": 300,
+        "open_decisions": 0, "single_concern": False,
+        "testable_criteria": True}
+_SMALL = {"modules": 1, "tasks": 3, "interfaces": 1, "estimated_loc": 60,
+          "open_decisions": 0, "single_concern": True,
+          "testable_criteria": True}
+
+
+def _split_decomposer(ctx):
+    # the v155/v157 shape: a 2-child plan the small-product floor rejects
+    if ctx["depth"] == 0:
+        return {"atomic": False, "metrics": dict(_BIG),
+                "spec_markdown": ("## Scope\nIn:\n"
+                                  "- src/db.py: sqlite storage\n"
+                                  "- src/app.py: wsgi_app dispatch\n"),
+                "children": [{"id": "db_persistence",
+                              "title": "sqlite storage layer"},
+                             {"id": "wsgi_handler",
+                              "title": "WSGI route handlers"}]}
+    return {"metrics": dict(_SMALL),
+            "acceptance": ["Given a note, When POSTed to /notes, Then GET"
+                           " /notes returns it"]}
+
+
+def _conforming_implementer(ctx):
+    ws, node = ctx["workspace"], ctx["node"]
+    if node == "db":
+        ws._write("src/db.py",
+                  "import os\nimport sqlite3\n\n\ndef connect():\n"
+                  "    return sqlite3.connect(os.environ['NOTES_DB'])\n",
+                  "code")
+    else:
+        ws._write(f"src/{node}.py",
+                  "import db\n\n\ndef post_notes(payload, query):\n"
+                  "    db.connect()\n    return 201, {\"id\": 1}\n\n\n"
+                  "def get_notes(payload, query):\n"
+                  "    db.connect()\n    return 200, {\"items\": []}\n",
+                  "code")
+    ws._write(f"tests/test_{node}.py",
+              f"def test_{node}_placeholder():\n    assert True\n", "test")
+
+
+def _v157_implementer(ctx):
+    ws, node = ctx["workspace"], ctx["node"]
+    if node == "db":
+        ws._write("src/db.py", _DB_WRONG, "code")     # invented names
+    else:
+        ws._write(f"src/{node}.py",
+                  _V157_CORE_IMPORT +                 # the literal line
+                  "\n\ndef post_notes(payload, query):\n"
+                  "    return 201, {\"id\": store_note(payload)}\n", "code")
+
+
+def test_dynamic_collapse_bindings_share_contract(plugin, tmp_path):
+    res = eng.run_project(dict(_PINNED_PROJECT),
+                          workspace=str(tmp_path / "wk"), depth="product",
+                          tools=plugin.tools,
+                          contracts_dir=str(eng.CONTRACTS),
+                          agents={"decomposer": _split_decomposer,
+                                  "implementer": _conforming_implementer})
+    assert res is not None
+    mj = json.loads((tmp_path / "wk" / "contracts" / "modules.json")
+                    .read_text(encoding="utf-8"))
+    assert [x.get("name") for x in mj.get("db", [])] == ["connect"], (
+        "the collapsed plan (core imports pinned db) must materialise db's "
+        f"contract from the constitution's db.connect; got {mj!r}")
+    specs = {p.name: p.read_text(encoding="utf-8")
+             for p in sorted((tmp_path / "wk" / "specs").glob("*.md"))}
+    db_spec = specs.get("db.md", "")
+    core_spec = specs.get("core.md", "")
+    assert "connect(...)" in db_spec and "MUST define" in db_spec, (
+        "the EXPORTER spec must carry the engine-declared symbol contract; "
+        f"got {db_spec!r}")
+    assert "connect(...)" in core_spec and "ONLY" in core_spec, (
+        "the IMPORTER spec must carry the SAME rendered surface; got "
+        f"{core_spec!r}")
+    assert (tmp_path / "wk" / "src" / "db.py").is_file(), (
+        "a conforming exporter must land cleanly (green edge)")
+
+
+def test_dynamic_v157_collision_never_lands(plugin, tmp_path):
+    # both sides re-guess the surface exactly as v157 did — with the datum
+    # the collision is refused at DELIVERY and can never reach assembly
+    res = eng.run_project(dict(_PINNED_PROJECT),
+                          workspace=str(tmp_path / "wk"), depth="product",
+                          tools=plugin.tools,
+                          contracts_dir=str(eng.CONTRACTS),
+                          agents={"decomposer": _split_decomposer,
+                                  "implementer": _v157_implementer})
+    assert res is not None
+    landed = {p.name: p.read_text(encoding="utf-8")
+              for p in (tmp_path / "wk" / "src").glob("*.py")
+              if p.is_file()} if (tmp_path / "wk" / "src").is_dir() else {}
+    for name, text in landed.items():
+        assert _V157_CORE_IMPORT.strip() not in text, (
+            f"the v157 phantom import LANDED in src/{name} — the importer "
+            "gate must refuse it at the write door")
+    db_text = landed.get("db.py", "")
+    assert "insert_note" not in db_text and "get_notes" not in db_text, (
+        "db.py with invented names landed — the exporter gate must refuse "
+        "a delivery missing the contracted symbols")
