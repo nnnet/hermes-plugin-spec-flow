@@ -140,3 +140,12 @@ tester-invented `db` module with an unrelated repo's code.
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.
 - run-detached.sh will not launch while `pytest tests/audit` is red.
+- BOTH DIRECTIONS (v151 lesson): every engine gate gets a RED known-answer
+  case (it catches the bad input) AND a GREEN known-answer case (it stays
+  silent on a legitimate edge input — tiny-by-design module, quoted context,
+  foreign-script id). A gate audited only for misses can still sink a run
+  with one false positive: v151's ONLY red was the lost-leaf check
+  false-flagging a real one-function module.
+- A docstring that claims "single source / shared by X and Y" is a CONTRACT:
+  pin it with a consumer test (S10.10 pattern) — v151's ownership report
+  grepped prose while its own docstring promised the datum.
