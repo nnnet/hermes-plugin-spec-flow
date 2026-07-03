@@ -9328,9 +9328,11 @@ def %(callable)s(environ, start_response):
         for m in re.finditer(r"\bsrc/([A-Za-z_][A-Za-z0-9_]*)\.py", text):
             stems.append(m.group(1))
         if not stems:
-            # No src/<file>.py frame — but a ROOT BOOT-GATE detail still names the
-            # failing ROUTE ("GET /ui -> 500"). Blame the route's owner (Шаг 1).
-            return self._blamed_module_from_routes(text, entry_stem)
+            # No src/<file>.py frame: attribute by the ROUTE-OWNERSHIP datum
+            # of the FAILING TEST's exercised route (S12.10), then fall back
+            # to the boot-detail route grep ("GET /ui -> 500", Шаг 1).
+            return (self._blamed_module_from_failing_tests(text, entry_stem)
+                    or self._blamed_module_from_routes(text, entry_stem))
         # deepest frame last in a pytest traceback; prefer a known leaf that is
         # neither the entry nor a test, scanning from the deepest frame upward.
         for stem in reversed(stems):
@@ -9339,9 +9341,92 @@ def %(callable)s(environ, start_response):
             if stem in self.tasks or stem == "product_entry":
                 if stem != "product_entry":
                     return stem
-        # frames named only the entry / tests — fall back to route-owner blame so
-        # a boot-gate detail that ALSO mentions the entry frame still heals the leaf.
-        return self._blamed_module_from_routes(text, entry_stem)
+        # frames named only the entry / tests — fall back to the failing-test
+        # ownership attribution (S12.10), then to route-owner blame so a
+        # boot-gate detail that ALSO mentions the entry frame heals the leaf.
+        return (self._blamed_module_from_failing_tests(text, entry_stem)
+                or self._blamed_module_from_routes(text, entry_stem))
+
+    def _blamed_module_from_failing_tests(self, text: str,
+                                          entry_stem: str = "") \
+            -> "Optional[str]":
+        """S12.10 (v162): blame by the ROUTE-OWNERSHIP datum of the FAILING
+        test's exercised route — never by whatever route token happens to be
+        printed anywhere in the pytest dump.
+
+        Why: v162 — the assembled suite failed on test_get_about_* and
+        test_get_ui_* (surfaces owned by about_page/web_ui) with NO
+        src/<file>.py frame; the doctor ran 'rework core (acceptance blamed
+        it)' three times while the /about и /ui 404s stayed untouched. The
+        old route fallback greps ALL paths out of the whole output (a
+        co-failing core test steals the blame) and resolves owners through
+        the resolved-handler mapping — which by construction has NO entry
+        for an unserved route, the exact class that needs blame the most.
+        What: parse the failing test ids from FAILED/ERROR lines, locate
+        each test function in its file, extract its route calls with the
+        SAME ("METHOD", "/path") string-constant scan the test-status gate
+        uses, map each route to its owner module through the ownership
+        datum (`_route_handler_modules`, else `_route_owners` ->
+        `_module_for`), and return the module most failing tests point at
+        (deterministic alphabetical tie-break). The entry module never
+        takes blame here (entry-level repair is the caller's fallback).
+        Test: tests/audit/test_repair_blame_ownership.py."""
+        root = getattr(getattr(self, "workspace", None), "root", None)
+        if not (text and root):
+            return None
+        fails = re.findall(r"(?:FAILED|ERROR)\s+(\S+\.py)::(\S+)", text)
+        if not fails:
+            return None
+        mods = self.__dict__.get("_route_handler_modules") or {}
+        owners = self.__dict__.get("_route_owners") or {}
+        if not (mods or owners):
+            return None
+        by_file: dict = {}
+        for f, tp in fails:
+            name = tp.split("::")[-1].split("[", 1)[0]
+            by_file.setdefault(f, set()).add(name)
+        votes: dict = {}
+        for rel, names in by_file.items():
+            try:
+                src_text = (Path(root) / rel).read_text(
+                    encoding="utf-8", errors="replace")
+                tree = ast.parse(src_text)
+            except (OSError, SyntaxError, ValueError):
+                continue
+            fns = [n for n in tree.body
+                   if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+            fns += [m for c in tree.body if isinstance(c, ast.ClassDef)
+                    for m in c.body
+                    if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))]
+            for fn_node in fns:
+                if fn_node.name not in names:
+                    continue
+                stems_hit: set = set()
+                for call in ast.walk(fn_node):
+                    if not isinstance(call, ast.Call):
+                        continue
+                    consts = [a.value for a in call.args
+                              if isinstance(a, ast.Constant)
+                              and isinstance(a.value, str)]
+                    meths = [c.upper() for c in consts
+                             if c.upper() in ("GET", "POST", "PUT", "PATCH",
+                                              "DELETE")]
+                    paths = [c for c in consts if c.startswith("/")]
+                    if not (meths and paths):
+                        continue
+                    mp = (meths[0], paths[0])
+                    stem = mods.get(mp)
+                    if not stem:
+                        own = sorted(owners.get(mp, ()))
+                        stem = self._module_for(own[0]) if own else None
+                    if stem and stem != entry_stem:
+                        stems_hit.add(stem)
+                for stem in stems_hit:   # one vote per failing TEST
+                    votes[stem] = votes.get(stem, 0) + 1
+        if not votes:
+            return None
+        top = max(votes.values())
+        return sorted(s for s, v in votes.items() if v == top)[0]
 
     def _blamed_module_from_routes(self, text: str,
                                    entry_stem: str = "") -> "Optional[str]":

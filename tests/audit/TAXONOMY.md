@@ -568,6 +568,25 @@ same wrong reading and stay green until product e2e.
   return/response shape) it is a RED 'request-shape-datum' finding: the
   derivation missed a human-stated shape. (`test_boot_shape_probe.py`,
   `test_unserved_route_fastfail.py`)
+- S12.10 the integrate-repair blame picker attributes by the ROUTE-OWNERSHIP
+  datum of the FAILING TEST's exercised route. v162: the assembled suite
+  failed on test_get_about_* / test_get_ui_* (owned by about_page/web_ui),
+  no src/<file>.py frame existed (pure assertion failures), and the doctor
+  ran 'module repair: rework core (acceptance blamed it)' 3x (ticks
+  144/147/150) — the round-1 core rework is what DROPPED get_ui/get_about
+  in the first place. Two holes in the old fallback
+  (`_blamed_module_from_routes`): it greps ALL route paths out of the whole
+  pytest dump, so a co-failing core-owned test steals the blame; and it
+  resolves owners through the resolved-HANDLER mapping, which by
+  construction has no entry for an unserved route — the exact class that
+  needs blame the most. Now `_blamed_module_from_failing_tests` parses the
+  failing test ids, extracts each failing test's OWN route calls with the
+  same ("METHOD", "/path") constant scan the test-status gate uses, and
+  maps routes to owner modules through `_route_handler_modules` /
+  `_route_owners` -> `_module_for` (majority vote, deterministic
+  tie-break, entry never blamed here). A real src frame still wins (a crash
+  site is the strongest signal); a genuinely core-owned failure still
+  blames core. (`test_repair_blame_ownership.py`)
 
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
