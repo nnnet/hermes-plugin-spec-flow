@@ -2810,6 +2810,16 @@ class Engine:
             routes -= {r for r in routes if r.rstrip("/") in served_elsewhere}
         except Exception:  # noqa: BLE001 — sibling scan is best-effort
             pass
+        # S10.26 (v156): a route the ownership DATUM (_route_owners) records
+        # to ANOTHER leaf is a dependency this node merely narrates. The
+        # dispatch-evidence scan above misses an owner whose canonical
+        # handler carries no literal path (core's get_health), so web_ui was
+        # charged with /health and the doctor cause web_ui:empty_delta
+        # stayed open for the whole run. Datum over prose — the v151 lesson.
+        _reg = self.__dict__.get("_route_owners") or {}
+        _foreign = {p.rstrip("/") for (_m, p), _owners in _reg.items()
+                    if any(x != nid for x in _owners)}
+        routes -= {r for r in routes if r.rstrip("/") in _foreign}
         low = body.lower()
         missing = []
         for r in routes:
