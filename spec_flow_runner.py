@@ -4932,6 +4932,33 @@ class Engine:
                                             quiet=True))
         return False
 
+    def _artifact_owner_nid(self, rel: "Optional[str]", default: str) -> str:
+        """S12.12 (v163): the doctor ADDRESSEE of a gate finding is the node
+        that OWNS the offending artifact — for src/<m>.py and tests/test_<m>.py
+        that is the leaf whose module is <m> (the engine's own node->module
+        registry, `_module_names`), never the owner of the route the file
+        merely touches.
+
+        Why: v163 — a request-shape finding on tests/test_core.py touching
+        GET /about opened its cause on about_page (the amend that OWNS the
+        route); rework of about_page can never edit core's file, so the cause
+        could never close and a fully green product was held NOT READY
+        forever. The route owner is context (named in the finding text); the
+        FILE owner is the addressee whose rework can actually fix it.
+        What: strips the test_ prefix, reverse-looks the stem up in the
+        collision-free module registry; an unregistered stem falls back to
+        the calling node (a leaf judging its own files resolves to itself).
+        Test: tests/audit/test_finding_addressee.py."""
+        stem = Path(rel or "").stem
+        if stem.startswith("test_"):
+            stem = stem[len("test_"):]
+        if stem:
+            for onid, mod in (getattr(self, "_module_names", None)
+                              or {}).items():
+                if mod == stem:
+                    return onid
+        return default
+
     def _leaf_test_status_gate(self, node: dict, nid: str, depth: int,
                                test_rel: "Optional[str]",
                                quiet: bool = False) -> bool:
@@ -5187,9 +5214,11 @@ class Engine:
             if notes:
                 (Path(self.workspace.root) / test_rel).write_text(
                     new_text, encoding="utf-8")
-                self.loops.append({"type": "test-status-autofix", "task": nid,
+                _fix_addr = self._artifact_owner_nid(test_rel, nid)
+                self.loops.append({"type": "test-status-autofix",
+                                   "task": _fix_addr,
                                    "detail": "; ".join(notes)[:400]})
-                self.emit("review", "engine", "", nid,
+                self.emit("review", "engine", "", _fix_addr,
                           "test-status autofix: smeared success assertion "
                           "rewritten to the contracted status",
                           "; ".join(notes)[:300], "test_status_autofix",
@@ -5202,16 +5231,22 @@ class Engine:
             return True
         if quiet:                    # S12.5 re-derivation: verdict only,
             return False             # no events / loops / doctor side effects
-        self.loops.append({"type": "test-status-mismatch", "task": nid,
+        # S12.12 (v163): every finding above names test_rel as the offending
+        # artifact — the addressee is the node that OWNS that file (an amend
+        # judges its target module's test), never the route owner the finding
+        # merely mentions; rework of the wrong node can never fix the file
+        addr = self._artifact_owner_nid(test_rel, nid)
+        addr_node = node if addr == nid else {"depends_on": ()}
+        self.loops.append({"type": "test-status-mismatch", "task": addr,
                            "detail": "; ".join(findings)[:400]})
-        self.emit("review", "engine", "", nid,
+        self.emit("review", "engine", "", addr,
                   "test-status gate: leaf test contradicts the contracted "
                   "success status or body shape", "; ".join(findings)[:300],
                   "test_status_gate", "FAIL", level=L_MILESTONE)
-        self._doctor_advise(node, nid, depth, "test_status_gate", "FAIL",
+        self._doctor_advise(addr_node, addr, depth, "test_status_gate", "FAIL",
                             {"scope_findings": findings})
         self._register_gate_recheck(
-            nid, "test_status_gate",
+            addr, "test_status_gate",
             lambda: self._leaf_test_status_gate(node, nid, depth, test_rel,
                                                 quiet=True))
         return False
@@ -5219,7 +5254,8 @@ class Engine:
     def _leaf_request_shape_gate(self, node: dict, nid: str, depth: int,
                                  code_rel: "Optional[str]",
                                  test_rel: "Optional[str]",
-                                 quiet: bool = False) -> bool:
+                                 quiet: bool = False,
+                                 for_nid: "Optional[str]" = None) -> bool:
         """S12.1 (v159), deterministic, model-independent: the REQUEST shape
         of a route is engine data — a handler's required-field checks must be
         a SUBSET of the contracted request fields, and a leaf test must not
@@ -5240,7 +5276,18 @@ class Engine:
         field outside the contract reds. Lenient by design (v151): no owned
         routes, no contracted shape for the route, optional `.get(...)`
         access, or an unparseable file = no-op.
-        Test: tests/audit/test_request_shape_gate.py."""
+        S12.12 (v163): findings are ADDRESSED per offending ARTIFACT — the
+        doctor cause / rework loop / recheck land on the node that OWNS the
+        named file (`_artifact_owner_nid`), never on the route owner running
+        the gate; `for_nid` scopes a quiet recheck to one addressee's
+        findings so a foreign artifact's red never vetoes another node.
+        S12.13 (v163): a junk field sent by a DIRECT canonical-handler call
+        to a route whose contracted shape is EMPTY is mechanically repaired
+        (`_strip_junk_payload_dicts`) — the S12.7 twin; a junk field on a
+        NON-empty contract is ambiguous and stays an honest red.
+        Test: tests/audit/test_request_shape_gate.py,
+        tests/audit/test_finding_addressee.py,
+        tests/audit/test_request_shape_autofix.py."""
         owned = self._leaf_owned_routes(node)
         if not owned or not getattr(self.workspace, "root", None):
             return True
@@ -5291,7 +5338,7 @@ class Engine:
                     req.add(n.left.value)
             return req
 
-        findings: list = []
+        findings: list = []      # (offending artifact rel, finding text)
         handler_route = {_canonical_handler_symbol(m, p): (m, p)
                          for m, p in shaped}
         # (a) HANDLER source: required-field checks must be a subset of the
@@ -5309,20 +5356,20 @@ class Engine:
                 allowed = set(shaped[route])
                 for f in sorted(_required_fields(fn_node) - allowed):
                     if f in env_vars:
-                        findings.append(
+                        findings.append((code_rel, (
                             "%s: handler %s (%s %s) requires payload field "
                             "%r — but %s is an ENVIRONMENT VARIABLE (the "
                             "constitution's CONFIG surface), never a request "
                             "field; read it via os.environ; contracted "
                             "request fields: %r"
                             % (code_rel, fn_node.name, route[0], route[1],
-                               f, f, sorted(allowed)))
+                               f, f, sorted(allowed)))))
                     else:
-                        findings.append(
+                        findings.append((code_rel, (
                             "%s: handler %s (%s %s) requires payload field "
                             "%r absent from the contracted request shape %r"
                             % (code_rel, fn_node.name, route[0], route[1],
-                               f, sorted(allowed)))
+                               f, sorted(allowed)))))
         # (b) LEAF TEST: a payload sent to a shaped route must stay inside
         # the contract — the tester following the same wrong reading is
         # exactly how v159 stayed green until product e2e
@@ -5365,29 +5412,45 @@ class Engine:
                         and isinstance(k.value, str)}
                 extra = sorted(keys - set(shaped[route]))
                 if extra:
-                    findings.append(
+                    findings.append((test_rel, (
                         "%s sends payload field(s) %s to `%s %s` outside the "
                         "contracted request shape %r — the test must send "
                         "ONLY contracted fields"
                         % (test_rel, ", ".join(map(repr, extra)),
-                           route[0], route[1], sorted(shaped[route])))
+                           route[0], route[1], sorted(shaped[route])))))
         if not findings:
             return True
+        # S12.12 (v163): address every finding to the node that OWNS its
+        # offending artifact — an amend's test_rel is its TARGET module's
+        # test file, so a violation there belongs to the module's leaf; the
+        # route owner is context inside the finding text, never the addressee
+        # (v163: about_page:request_shape could never close because rework of
+        # about_page can never edit tests/test_core.py)
+        by_addr: dict = {}
+        for rel, text in findings:
+            by_addr.setdefault(self._artifact_owner_nid(rel, nid),
+                               []).append(text)
         if quiet:                    # S12.5 re-derivation: verdict only,
+            if for_nid is not None:  # scoped to ONE addressee's findings
+                return for_nid not in by_addr
             return False             # no events / loops / doctor side effects
-        self.loops.append({"type": "request-shape-mismatch", "task": nid,
-                           "detail": "; ".join(findings)[:400]})
-        self.emit("review", "engine", "", nid,
-                  "request-shape gate: handler/test names request fields "
-                  "outside the contracted shape",
-                  "; ".join(findings)[:300], "request_shape_gate", "FAIL",
-                  level=L_MILESTONE)
-        self._doctor_advise(node, nid, depth, "request_shape_gate", "FAIL",
-                            {"scope_findings": findings})
-        self._register_gate_recheck(
-            nid, "request_shape_gate",
-            lambda: self._leaf_request_shape_gate(node, nid, depth, code_rel,
-                                                  test_rel, quiet=True))
+        for addr in sorted(by_addr):
+            texts = by_addr[addr]
+            addr_node = node if addr == nid else {"depends_on": ()}
+            self.loops.append({"type": "request-shape-mismatch", "task": addr,
+                               "detail": "; ".join(texts)[:400]})
+            self.emit("review", "engine", "", addr,
+                      "request-shape gate: handler/test names request fields "
+                      "outside the contracted shape",
+                      "; ".join(texts)[:300], "request_shape_gate", "FAIL",
+                      level=L_MILESTONE)
+            self._doctor_advise(addr_node, addr, depth, "request_shape_gate",
+                                "FAIL", {"scope_findings": texts})
+            self._register_gate_recheck(
+                addr, "request_shape_gate",
+                lambda a=addr: self._leaf_request_shape_gate(
+                    node, nid, depth, code_rel, test_rel,
+                    quiet=True, for_nid=a))
         return False
 
     def _plan_ownership_report(self) -> list:
