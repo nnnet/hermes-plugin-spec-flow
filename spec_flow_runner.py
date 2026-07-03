@@ -4050,16 +4050,34 @@ class Engine:
         (module_stem, func_name)}`` for CONCRETE routes whose handler is a
         module-level dispatchable def (not raw WSGI, not a storage function).
         Consumers MERGE these into the declared set — adoption extends the
-        served contract, it never overrides a declared route."""
+        served contract, it never overrides a declared route.
+
+        v152 (S10.13): a late requirement routed to EDIT an owner module in
+        place lands as the engine-CANONICAL handler (`delete_notes(payload,
+        query)`) with NO dispatch table — nothing for the table scan to read,
+        so the contract never grew and the entry never served the route. The
+        handler name and the (payload, query) ABI are both engine-declared
+        data (`_canonical_handler_symbol` + the route binding), so a
+        module-level def carrying both, for a PATH the product already
+        declares, is that route's handler by the engine's own convention:
+        adopt (method, declared_path) combos the contract does not declare.
+        Paths are never invented — only new METHODS on declared paths."""
         ws = self.workspace
         out: dict = {}
         if not (getattr(ws, "enabled", False) and getattr(ws, "root", None)):
             return out
         try:
-            entry_name = Path((self._product_contract() or {})
-                              .get("entry") or "").name
+            contract = self._product_contract() or {}
         except Exception:        # noqa: BLE001 — no contract = nothing to skip
-            entry_name = ""
+            contract = {}
+        entry_name = Path(contract.get("entry") or "").name
+        try:
+            declared = list(self._declared_route_set(contract))
+        except Exception:        # noqa: BLE001 — unreadable contract = no paths
+            declared = []
+        declared_set = set(declared)
+        known_paths = sorted({p for _m, p in declared
+                              if p.startswith("/") and "{" not in p})
         src = Path(ws.root) / "src"
         if not src.is_dir():
             return out
@@ -4100,6 +4118,22 @@ class Engine:
                             or params[0].lower() in self._DEP_FIRST_PARAMS):
                         continue
                     out.setdefault((method, path), (py.stem, v.id))
+            # canonical-name adoption (v152, S10.13): an in-place late edit
+            # carries no dispatch table — the engine-ordered canonical name
+            # plus the pq ABI identify the handler for a DECLARED path; only
+            # new methods on known paths are adopted (never new paths, never
+            # a declared route)
+            for p in known_paths:
+                for m in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+                    if (m, p) in declared_set:
+                        continue
+                    want = _canonical_handler_symbol(m, p)
+                    params = defs.get(want)
+                    if (not params
+                            or params[:2] == ["environ", "start_response"]
+                            or params[0].lower() in self._DEP_FIRST_PARAMS):
+                        continue
+                    out.setdefault((m, p), (py.stem, want))
         return out
 
     def _resolve_route_handlers(self, contract: dict) -> tuple:

@@ -18,6 +18,7 @@ Stage-wide principle: every value TWO independent artifacts must agree on
 datum both sides read — and the suite that judges the product must see ONLY
 the product.
 """
+import json
 import pathlib
 import subprocess
 import sys
@@ -505,3 +506,106 @@ def test_code_style_rule_reaches_worker_prompts():
     src = pathlib.Path(rw.__file__).read_text(encoding="utf-8")
     assert src.count("_code_style_block()") >= 2, (
         "both the implementer and the reviewer systems must carry the rule")
+
+
+# ── S10.13 the interface contract GROWS with late requirements ───────────────
+# v152: the late requirement delete_note was routed to EDIT src/core.py in
+# place; the implementer delivered the engine-canonical handler
+# `delete_notes(payload, query)` but no dispatch table, so route adoption had
+# nothing to read: contracts/interface.json kept only the 4 base routes, the
+# assembled entry never wired DELETE /notes (the entry test asserted 405 on
+# it), and downstream checkers bound status asserts to the wrong calls. The
+# handler NAME and the (payload, query) ABI are BOTH engine-declared data
+# (`_canonical_handler_symbol` + the route binding orders that exact shape) —
+# a module-level function carrying both, for a PATH the product already
+# declares, is that route's handler by the engine's own convention and must
+# extend the served contract (declared routes are never overridden).
+
+_GROW_CONTRACT = {
+    "entry": "src/app.py",
+    "callable": ["wsgi_app"],
+    "boot": {"json_roundtrip": "/notes", "ok_route": "/health"},
+    "routes": [],
+}
+
+
+def _grow_engine(tmp_path, module_src):
+    e = eng.Engine(workspace=str(tmp_path / "wk"), depth=eng.DEPTH_SPEC)
+    e._product_contract = lambda: dict(_GROW_CONTRACT)
+    src = pathlib.Path(e.workspace.root) / "src"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "core.py").write_text(module_src, encoding="utf-8")
+    return e
+
+
+def _iface_routes(e):
+    e._write_interface_contract()
+    data = json.loads(
+        (pathlib.Path(e.workspace.root) / "contracts" / "interface.json")
+        .read_text(encoding="utf-8"))
+    return {(r["method"], r["path"]): r for r in data["routes"]}
+
+
+def test_contract_grows_with_canonical_late_handler(tmp_path):
+    e = _grow_engine(tmp_path, textwrap.dedent("""\
+        def post_notes(payload, query):
+            return 201, {"id": 1}
+
+
+        def delete_notes(payload, query):
+            return 200, {}
+    """))
+    rows = _iface_routes(e)
+    row = rows.get(("DELETE", "/notes"))
+    assert row, (
+        "a canonical-named (payload, query) handler for a declared product"
+        " path is a served route by the engine's own binding convention —"
+        " the interface contract must grow with it (v152: DELETE /notes"
+        f" existed in code but not in interface.json) — got: {sorted(rows)}")
+    assert row["success_status"] == 200
+    assert row["handler"] == "delete_notes"
+    # the assembly resolver reads the SAME adoption datum: the grown route
+    # must be wired into the synthesized entry, not only declared on paper
+    mapping, _unresolved = e._resolve_route_handlers(dict(_GROW_CONTRACT))
+    assert mapping.get(("DELETE", "/notes"), ())[:2] == ("core",
+                                                         "delete_notes")
+
+
+def test_canonical_adoption_green_edges(tmp_path):
+    e = _grow_engine(tmp_path, textwrap.dedent("""\
+        def delete_notes(conn, note_id):
+            return 1
+
+
+        def put_notes(environ, start_response):
+            return []
+
+
+        def delete_admin(payload, query):
+            return 200, {}
+    """))
+    rows = _iface_routes(e)
+    assert ("DELETE", "/notes") not in rows, (
+        "a storage function (dep-first ABI) is NOT a route handler — the"
+        " same rule the table adoption applies")
+    assert ("PUT", "/notes") not in rows, "raw WSGI is not a pq handler"
+    assert all(p != "/admin" for _m, p in rows), (
+        "adoption extends METHODS on declared paths — it never invents a"
+        " path the product does not declare")
+    # a DECLARED route keeps its canonical handler (adoption never overrides)
+    assert rows[("POST", "/notes")]["handler"] == "post_notes"
+
+
+def test_route_table_adoption_still_extends_contract(tmp_path):
+    # regression pin (v150 capability, green before S10.13): a route served
+    # only by a module's OWN dispatch table also grows the contract
+    e = _grow_engine(tmp_path, textwrap.dedent("""\
+        def wipe(payload, query):
+            return 200, {}
+
+
+        _ROUTES = {('DELETE', '/notes'): wipe}
+    """))
+    rows = _iface_routes(e)
+    assert rows[("DELETE", "/notes")]["handler"] == "wipe"
+    assert rows[("DELETE", "/notes")]["success_status"] == 200

@@ -142,6 +142,32 @@ tester-invented `db` module with an unrelated repo's code.
   write_refused history. The rule is ONE constant (RULE_CODE_STYLE) rendered
   into the implementer and reviewer prompts — prompt and gate cannot drift.
   Human prose artifacts (specs, notes) are data and are never linted.
+- S10.13 the interface contract GROWS with late requirements: route adoption
+  (`_adopted_route_tables`, the ONE datum the resolver and
+  `_write_interface_contract` both read) covers not only module dispatch
+  tables but also the engine-CANONICAL handler shape — a module-level
+  `<method>_<segments>(payload, query)` def for a DECLARED product path adopts
+  the (method, path) combo; new paths are never invented and declared routes
+  are never overridden (v152: late req delete_note landed
+  `delete_notes(payload, query)` in src/core.py via an in-place edit, yet
+  contracts/interface.json kept only the 4 base routes and the entry answered
+  405 on DELETE /notes).
+- S10.14 the small-product collapse purges dropped-module references
+  EVERYWHERE, not only in the collapsed leaf spec: the ROOT's own
+  spec_markdown and every already-written specs/*.md are retargeted at the
+  surviving core module, and BOTH rewrites are journaled ('collapsed spec
+  rewritten…' + 'collapse purged dropped-module references…') so the journal
+  invariant can attribute the cleanup (v152: specs/l0.md and
+  specs/product_entry.md still ordered src/db.py / `db.connect` though no
+  node owned db.py after the collapse).
+- S10.15 a gate FAIL requires an attributable resolution EVENT: when the card
+  gate passes after a previous FAIL for the same node the engine emits a
+  matching milestone PASS with the same action prefix ('card gate: …'), and
+  the journal invariant accepts exactly that (same prefix + same task + PASS)
+  as closure — never the mere absence of a later failure (v152: 'card gate:
+  incomplete or non-atomic leaf card' FAILs #18/#19 core and #57/#65 web_ui
+  were resolved by rework but left no event, so a genuinely-green run was
+  flagged unresolved_milestone_fail ×4).
 
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
