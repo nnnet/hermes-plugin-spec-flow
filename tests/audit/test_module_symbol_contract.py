@@ -162,3 +162,148 @@ def test_no_contract_module_gets_no_binding(tmp_path):
     assert e._module_contract_binding(stranger) == "", (
         "a node in NO dependency pair gets no module-contract block — the "
         "datum never invents obligations")
+
+
+# ── S11.3 delivery gates at the ONE write door (contract datum, not files) ────
+
+_DB_OK = ("def init_db(path):\n    return path\n\n\n"
+          "def store_note(text):\n    return 1\n\n\n"
+          "def list_notes():\n    return []\n")
+
+# the v156/v157 exporter shape: right module, DIFFERENT invented names
+_DB_WRONG = ("def insert_note(text):\n    return 1\n\n\n"
+             "def get_notes():\n    return []\n")
+
+# v157 workspace/src/core.py line 3 — literal reproduction
+_V157_CORE_IMPORT = "from db import init_db, store_note, list_notes\n"
+
+
+def test_exporter_missing_contracted_symbol_is_refused(tmp_path):
+    e = _engine(tmp_path)
+    _register(e)
+    ws = e.workspace
+    ws._write("src/db.py", _DB_WRONG, "code")
+    ref = _refusals(ws, "src/db.py")
+    assert ref, ("an exporter delivery missing contracted symbols must be "
+                 "REFUSED at the write door (v157: db.py shipped different "
+                 "names and the collision surfaced only at assembly)")
+    reason = ref[0].get("reason", "")
+    for missing in ("init_db", "store_note", "list_notes"):
+        assert missing in reason, (
+            f"the refusal must NAME the missing symbol {missing}; got "
+            f"{reason!r}")
+    assert not (tmp_path / "wk" / "src" / "db.py").exists(), (
+        "a refused exporter delivery must never land")
+    # green twin: the conforming exporter lands cleanly
+    ws._write("src/db.py", _DB_OK, "code")
+    assert (tmp_path / "wk" / "src" / "db.py").is_file()
+    assert len(_refusals(ws, "src/db.py")) == 1
+
+
+def test_importer_from_import_outside_contract_is_refused(tmp_path):
+    # ORDER-INDEPENDENT: src/db.py does NOT exist on disk — the gate reads
+    # the CONTRACT datum, closing the from-import exemption of S10.25
+    e = _engine(tmp_path)
+    _register(e)
+    ws = e.workspace
+    ws._write("src/core.py",
+              "from db import store_note, drop_all\n\n\n"
+              "def post_notes(payload, query):\n"
+              "    return 201, {\"id\": store_note(payload)}\n", "code")
+    ref = _refusals(ws, "src/core.py")
+    assert ref, ("`from X import Y` with Y outside X's symbol contract must "
+                 "be refused at the write door even when src/X.py is not "
+                 "built yet (build order must not matter)")
+    reason = ref[0].get("reason", "")
+    assert "drop_all" in reason and _DB_SURFACE in reason, (
+        "the refusal must name the phantom symbol AND print the contracted "
+        f"surface; got {reason!r}")
+    # green twin: contracted symbols import cleanly (still no db.py on disk)
+    ws._write("src/core.py",
+              "from db import init_db, store_note\n\n\n"
+              "def post_notes(payload, query):\n"
+              "    return 201, {\"id\": store_note(payload)}\n", "code")
+    assert (tmp_path / "wk" / "src" / "core.py").is_file()
+
+
+def test_importer_attr_use_outside_contract_is_refused(tmp_path):
+    # the attr form checked against the DATUM (S10.25 needs the live file;
+    # the contract gate must not) — src/db.py absent on purpose
+    e = _engine(tmp_path)
+    _register(e)
+    ws = e.workspace
+    ws._write("tests/test_core.py",
+              "import db\n\n\ndef test_wipe():\n    db.wipe()\n", "test")
+    ref = _refusals(ws, "tests/test_core.py")
+    assert ref and "wipe" in ref[0].get("reason", ""), (
+        "`X.attr` outside X's contract must be refused in tests/ too, "
+        f"file-independent; got {ref!r}")
+    # green: contracted attr call + bare import land
+    ws._write("tests/test_core.py",
+              "import db\n\n\ndef test_list():\n    db.list_notes()\n",
+              "test")
+    assert (tmp_path / "wk" / "tests" / "test_core.py").is_file()
+
+
+def test_star_import_of_contracted_module_is_refused(tmp_path):
+    # documented behavior: `from X import *` bypasses the pinned surface —
+    # refused for a CONTRACTED module; bare `import X` with no attr use is
+    # clean (nothing to check)
+    e = _engine(tmp_path)
+    _register(e)
+    ws = e.workspace
+    ws._write("src/core.py", "from db import *\n", "code")
+    assert _refusals(ws, "src/core.py"), (
+        "star-import evades the symbol contract and must be refused")
+    ws._write("src/web_ui.py", "import db\n\n\nX = 1\n", "code")
+    assert (tmp_path / "wk" / "src" / "web_ui.py").is_file(), (
+        "bare `import X` uses no symbol — it must land")
+
+
+def test_uncontracted_modules_stay_untouched(tmp_path):
+    # green edges: stdlib and not-in-plan modules are NOT the datum's
+    # business — S10.25 (live-file phantom scan) still owns those seams
+    e = _engine(tmp_path)
+    _register(e)
+    ws = e.workspace
+    ws._write("src/core.py",
+              "import json\nfrom helpers import anything_at_all\n\n\n"
+              "def get_notes(payload, query):\n"
+              "    return 200, json.dumps([])\n", "code")
+    assert (tmp_path / "wk" / "src" / "core.py").is_file(), (
+        "modules with NO contract (stdlib, not-in-plan) must land untouched")
+
+
+def test_import_from_empty_contract_module_is_refused(tmp_path):
+    # the honest-red path end-to-end: nothing derivable → EMPTY contract →
+    # ANY import from the module is refused, pointing at the missing exposes
+    e = _engine(tmp_path, constitution=["No third-party packages."])
+    _register(e, exposes=None)
+    ws = e.workspace
+    ws._write("src/core.py", "from db import connect\n", "code")
+    ref = _refusals(ws, "src/core.py")
+    assert ref and "exposes" in ref[0].get("reason", ""), (
+        "importing from a module whose contract is EMPTY must be refused "
+        f"demanding declared exposes; got {ref!r}")
+
+
+def test_v157_collision_is_impossible_at_delivery(tmp_path):
+    """v157 literal: core.py 'from db import init_db, store_note, list_notes'
+    + db.py with different names must be IMPOSSIBLE to land — one side reds
+    at delivery, never at assembly."""
+    e = _engine(tmp_path)
+    _register(e)                             # contract = the three symbols
+    ws = e.workspace
+    # core's import agrees with the CONTRACT → lands (waiting for db)
+    ws._write("src/core.py", _V157_CORE_IMPORT + "\n\n"
+              "def post_notes(payload, query):\n"
+              "    return 201, {\"id\": store_note(payload)}\n", "code")
+    assert (tmp_path / "wk" / "src" / "core.py").is_file()
+    # db's rework ships the OTHER guess → refused at ITS delivery
+    ws._write("src/db.py", _DB_WRONG, "code")
+    assert _refusals(ws, "src/db.py"), (
+        "the v157 collision reached assembly as an ImportError at boot — "
+        "the exporter side must red at delivery instead")
+    # and the conforming db lands: the pair is coherent BY CONSTRUCTION
+    ws._write("src/db.py", _DB_OK, "code")
+    assert (tmp_path / "wk" / "src" / "db.py").is_file()
