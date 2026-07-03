@@ -133,3 +133,17 @@ def test_tiny_budget_halts_run_honestly(plugin, tmp_path):
     assert "budget exhausted" in dump, (
         "crossing run_call_budget must emit an explicit FAIL milestone —"
         " a silent halt would be a dishonest terminal")
+
+
+# ── S6.10 detached runs RECORD CHECKPOINTS by default ────────────────────────
+# A detached run that dies (v148) or needs replay (--from-run) is only
+# recoverable if snapshots exist; checkpointing must not depend on the
+# operator remembering a flag. The launcher injects --checkpoint-every
+# unless the caller passed one explicitly.
+
+def test_launcher_defaults_checkpoint_recording():
+    text = (_TESTS / "run-detached.sh").read_text(encoding="utf-8")
+    assert '--checkpoint-every' in text and 'set -- "$@" --checkpoint-every' \
+        in text, (
+        "run-detached.sh must default checkpoint recording on (explicit"
+        " --checkpoint-every from the caller wins)")

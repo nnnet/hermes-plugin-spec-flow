@@ -41,6 +41,14 @@ fi
 #
 # An eager heartbeat is written to the log BEFORE exec so the observer can tell a
 # launched-but-killed run from one that never spawned.
+# Checkpoint recording is ON for every detached run: a run that dies or must
+# be replayed (--from-run / --from-checkpoint) needs snapshots to resume from.
+# An explicit --checkpoint-every on the command line wins over this default.
+case " $* " in
+  *" --checkpoint-every"*) : ;;
+  *) set -- "$@" --checkpoint-every 1 ;;
+esac
+
 echo "[run-detached] launching pid-of-setsid… ts=${TS} args=$* log=${LOG}" >"${LOG}"
 
 # setsid => new session (no controlling terminal => immune to caller's SIGHUP)
