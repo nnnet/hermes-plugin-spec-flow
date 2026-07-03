@@ -587,6 +587,25 @@ same wrong reading and stay green until product e2e.
   tie-break, entry never blamed here). A real src frame still wins (a crash
   site is the strongest signal); a genuinely core-owned failure still
   blames core. (`test_repair_blame_ownership.py`)
+- S12.11 an amend for a late requirement that LITERALLY names a new
+  "METHOD /path" binds + owns that route. v162: 'ADD AN ABOUT PAGE ...
+  Serve GET /about ...' was routed to amend src/core.py; about_page was
+  never renamed and no datum rows were dropped — the node simply NEVER
+  owned anything: `_late_req_bound_route` only binds a NEW METHOD on a
+  path the target already serves (the v156 DELETE /notes shape), so the
+  literal new PATH bound nothing, `_leaf_owned_routes` returned [] for the
+  amend, `_route_handler_modules` never carried /about -> core, the S12.2
+  rework directive/write door had no surface to defend, the round-1 core
+  rework erased get_about, and the final plan check (tick 154) reported
+  'route GET /about: no owner leaf (orphan)'. The binder now takes a
+  literal route the requirement itself names FIRST — only when it is
+  already DECLARED (the contract grew from the same human text; nothing is
+  invented from prose) and owned by NO leaf; ownership + the module-surface
+  datum register at ATTACH time, not lazily at the first gate that asks.
+  Greens: a pure presentation refinement (красивый_вид) binds nothing; a
+  mention of a route another leaf owns stays a dependency (v145); two
+  literal candidates = ambiguity, bind nothing.
+  (`test_late_req_route_growth.py`)
 
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.

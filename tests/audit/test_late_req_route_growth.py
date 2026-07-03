@@ -180,3 +180,122 @@ def test_ambiguous_verbs_bind_nothing(tmp_path):
     assert declared == {("POST", "/notes"), ("GET", "/notes"),
                         ("GET", "/health")}, (
         "ambiguous verbs must bind nothing: %s" % sorted(declared))
+
+
+# --- S12.11 (v162): an amend for a LITERAL new path must bind + own it --------
+# v162 (2026-07-03T19-55-37): 'ADD AN ABOUT PAGE ... Serve GET /about ...' was
+# routed to amend src/core.py; `_late_req_bound_route` only knows how to bind
+# a NEW METHOD on a path the target already serves, so the literal GET /about
+# bound NOTHING -> the amend node owned no route (`_leaf_owned_routes` == []),
+# `_route_handler_modules` never recorded /about -> core, the S12.2 rework
+# directive/write door had no surface to defend, the round-1 core rework
+# dropped get_about, and the final plan check (tick 154) said
+# 'route GET /about: no owner leaf (orphan)'. The path is NOT invented from
+# prose: GET /about is already DECLARED (the contract derives from the same
+# human text) — the binder only attributes ownership of a declared, unowned
+# route to the amend that the engine itself routed to build it.
+
+_ABOUT_REQ = (
+    "ADD AN ABOUT PAGE (added by the human mid-run; binding). "
+    "Serve GET /about as a small server-rendered HTML page describing what "
+    "this little notes service is. No storage, no API change — a standalone "
+    "page. Standard library only (return 200 + an HTML string). Build it "
+    "AND prove GET /about returns HTML.")
+
+_NICE_REQ = (
+    "MAKE THE NOTES NICE TO READ (added by the human mid-run; binding). "
+    "The notes that a reader sees should be presented in a clean, friendly, "
+    "easy-to-read layout — a clear heading, a tidy list, a simple way to "
+    "add one. Standard library only; improve the existing presentation "
+    "rather than adding a separate one alongside it.")
+
+
+def _attach_about(eng) -> dict:
+    eng._standing_requirements = lambda: [("about_page", _ABOUT_REQ)]
+    assert ("GET", "/about") in set(
+        eng._declared_route_set(eng._product_contract())), (
+        "fixture precondition: the contract already grew GET /about from "
+        "the SAME human text — the binder invents nothing")
+    extra = {"id": "about_page", "title": "ADD AN ABOUT PAGE",
+             "requirement": _ABOUT_REQ, "_late_req": True}
+    eng._amend_target = lambda e: "src/core.py"   # deterministic router seam
+    eng._attach_late_req(extra, {"id": "L0"}, 1, "root", "L0", (), [])
+    return extra
+
+
+def test_literal_new_path_amend_binds_and_owns(tmp_path):
+    eng = _engine(tmp_path)
+    extra = _attach_about(eng)
+    assert extra.get("binds_route") == ["GET", "/about"], (
+        "v162: the about amend bound NOTHING (binds_route=%r) — GET /about "
+        "then had no owner, no module record, and the core rework erased "
+        "get_about unopposed" % (extra.get("binds_route"),))
+    assert set(eng._leaf_owned_routes(extra)) == {("GET", "/about")}, (
+        "the amend leaf must OWN its bound route")
+    mods = eng.__dict__.get("_route_handler_modules") or {}
+    assert mods.get(("GET", "/about")) == "core", (
+        "the route-surface datum must record /about into the module the "
+        "amend EDITS, so the S12.2 write door defends it: %s" % mods)
+
+
+def test_bound_about_enters_the_core_rework_surface(tmp_path):
+    eng = _engine(tmp_path)
+    _attach_about(eng)
+    block = eng._module_route_binding_text("core")
+    assert "GET /about" in block and "get_about" in block, (
+        "the module rework directive must print the /about surface — v162's "
+        "core rework prompt carried no trace of it and the weak model "
+        "re-guessed the module without get_about: %r" % block[:300])
+
+
+def test_final_plan_check_sees_an_owner_for_about(tmp_path):
+    eng = _engine(tmp_path)
+    _attach_about(eng)
+    findings = [f for f in eng._plan_ownership_report()
+                if "/about" in f and "orphan" in f]
+    assert not findings, (
+        "v162 tick 154: 'route GET /about: no owner leaf (orphan)' at the "
+        "FINAL plan check — with the binding the owner must exist: %s"
+        % findings)
+
+
+# --- GREEN edges ---------------------------------------------------------------
+
+def test_pure_refinement_amend_binds_nothing(tmp_path):
+    # v162's красивый_вид class: no literal route, no new-method verb — a
+    # presentation refinement of the owner's existing surface binds nothing
+    eng = _engine(tmp_path)
+    extra = {"id": "nice_view", "title": "MAKE THE NOTES NICE TO READ",
+             "requirement": _NICE_REQ, "_late_req": True}
+    eng._amend_target = lambda e: "src/core.py"
+    eng._attach_late_req(extra, {"id": "L0"}, 1, "root", "L0", (), [])
+    assert not extra.get("binds_route")
+    assert eng._leaf_owned_routes(extra) == []
+
+
+def test_owned_literal_route_mention_binds_nothing(tmp_path):
+    # v145 protection: an amend whose prose mentions the owner's EXISTING
+    # route ('the existing GET /notes list') must not claim it
+    eng = _engine(tmp_path)
+    extra = {"id": "reuse_notes", "title": "polish the list",
+             "requirement": ("Polish the existing GET /notes list "
+                             "presentation without changing the API."),
+             "_late_req": True}
+    eng._amend_target = lambda e: "src/core.py"
+    eng._attach_late_req(extra, {"id": "L0"}, 1, "root", "L0", (), [])
+    assert not extra.get("binds_route"), (
+        "mentioning a route another leaf owns is a DEPENDENCY, not a claim")
+
+
+def test_two_literal_unowned_routes_bind_nothing(tmp_path):
+    # ambiguity is not license to guess: two literal new paths at once
+    eng = _engine(tmp_path)
+    req = ("ADD INFO PAGES. Serve GET /about and also GET /faq as small "
+           "HTML pages.")
+    eng._standing_requirements = lambda: [("info_pages", req)]
+    extra = {"id": "info_pages", "title": "ADD INFO PAGES",
+             "requirement": req, "_late_req": True}
+    eng._amend_target = lambda e: "src/core.py"
+    eng._attach_late_req(extra, {"id": "L0"}, 1, "root", "L0", (), [])
+    assert not extra.get("binds_route"), (
+        "two literal candidate routes = ambiguity; the binder must not pick")

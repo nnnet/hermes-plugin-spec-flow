@@ -7921,6 +7921,27 @@ def %(callable)s(environ, start_response):
             return None
         if not declared:
             return None
+        req_text = " ".join(str(extra.get(k) or "")
+                            for k in ("requirement", "title"))
+        # S12.11 (v162): a LITERAL "METHOD /path" the requirement itself
+        # names, already DECLARED (the contract grew from this same human
+        # text — nothing is invented) and owned by NO leaf, is the amend's
+        # own route: the engine routed this node to build exactly that
+        # surface. v162: 'Serve GET /about ...' amended core with NO
+        # binding — /about had no owner, no module record, the S12.2 write
+        # door had nothing to defend, and the core rework erased get_about.
+        # A route another leaf owns stays a dependency (v145); two literal
+        # candidates = ambiguity, bind nothing.
+        reg0 = self.__dict__.get("_route_owners") or {}
+        literal = []
+        for lm in re.finditer(
+                r"\b(GET|POST|PUT|DELETE|PATCH)\s+(/[A-Za-z0-9_./{}-]*)",
+                req_text):
+            mp = (lm.group(1).upper(), lm.group(2).rstrip(".,;:)"))
+            if mp in declared and not reg0.get(mp) and mp not in literal:
+                literal.append(mp)
+        if literal:
+            return literal[0] if len(literal) == 1 else None
         stem = _snake(Path(amend).stem)
         names = getattr(self, "_module_names", None) or {}
         reg = self.__dict__.get("_route_owners") or {}
@@ -7989,6 +8010,12 @@ def %(callable)s(environ, start_response):
                 extra["binds_route"] = [bound[0], bound[1]]
                 self.__dict__.setdefault(
                     "_late_bound_routes", set()).add(bound)
+                # S12.11 (v162): register ownership + the module-surface
+                # datum NOW, not lazily at the first gate that happens to
+                # ask — the rework directive and the S12.2 write door must
+                # already see the bound route when an integrate repair
+                # rewrites the amended module
+                self._leaf_owned_routes(extra)
                 self.emit("decompose", "engine", "", extra["id"],
                           "late requirement binds a NEW method on an owned "
                           "path — the product contract grows",
