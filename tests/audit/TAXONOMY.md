@@ -196,6 +196,42 @@ tester-invented `db` module with an unrelated repo's code.
   semantics; core.py and web_ui.py both defined post_notes/get_notes,
   assembly adopted core's and web_ui's became dead rival code — caught
   only at root integrate, which is LATE.)
+- S10.19 route ownership derives from the node's OWN claim, never from
+  inherited or dependency prose: a node carrying typed `exposes` (C2) owns
+  EXACTLY the declared routes (prose ignored); the prose fallback reads only
+  requirement/title/authored spec minus inherited 'Traces-to'/'Goal:' quote
+  lines; and a prose-matched route ALREADY recorded to another leaf in
+  `_route_owners` is a DEPENDENCY — excluded from `owned`
+  (first-owner-wins, deterministic by the datum) and journaled as 'route
+  dependency (owned by <leaf>)'. A declared (exposes) claim of a foreign
+  route stays in the datum: it is a REAL duplicate for S10.17/S10.18
+  (v154: web_ui's requirement said "reusing the existing notes storage and
+  /notes logic" and its spec's Traces-to quoted the parent goal —
+  `_leaf_owned_routes` matched both, so `_leaf_route_binding` itself
+  ORDERED rival post_notes/get_notes handlers in specs/web_ui.md lines
+  26-27; the engine manufactured the duplicate S10.17 then honestly redded
+  at root integrate, event ~139).
+- S10.20 dropped-module hygiene is DURABLE for the whole run, not a
+  one-shot purge: the collapse records the retargeted stems in
+  `_dropped_modules`, sanitizes the node's prose fields (spec_markdown,
+  requirement, plan), and installs the SAME retarget rule on the spec
+  write door, so every LATER specs/*.md write is cleaned too; modules
+  never dropped stay untouched (v154: event #11 'collapse purged
+  dropped-module references — retargeted at src/core.py in: specs/l0.md',
+  yet the FINAL l0.md ordered src/db.py again — REQ-L0-5 + the module
+  list, re-authored by the lint rework from unsanitized data — and
+  specs/product_entry.md, written later than the purge, named it too).
+- S10.21 the foreign-route claim is its OWN attributable card-gate
+  milestone ('card gate: foreign route claim', FAIL) with a doctor cause
+  and a loop entry, emitted at the LEAF before any integrate-level
+  duplicate FAIL — never a fillable card gap: the acceptance-fill rework
+  can only add acceptance/examples and can never remove a route claim
+  (v154: the S10.18 finding WAS computed but drowned in the generic 'card
+  gate: incomplete' events 64/78, truncated at 300 chars behind the
+  acceptance finding, got no doctor cause, and the later 'spec lint clean'
+  PASS shared the gate id — the run proceeded to order the rival handlers,
+  redding only at integrate event ~139). A single-owner plan produces no
+  such event.
 
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
