@@ -3453,7 +3453,8 @@ class Engine:
         route like /ui is picked up too). A project that describes no HTTP service
         (library / CLI / pipeline) yields {} ⇒ no assembly node, no boot-gate, no
         reconcile. Returns {entry, callable, boot:{ok_route, html_route,
-        json_roundtrip}} or {}. Heuristic, model-independent (pure text)."""
+        json_roundtrip}, media:{path -> 'json'|'html'}} or {}. Heuristic,
+        model-independent (pure text)."""
         texts = [str(t) for t in (self._constitution or [])]
         if getattr(self, "_goal", ""):
             texts.append(str(self._goal))
@@ -3524,6 +3525,29 @@ class Engine:
                 if "GET" in methods:
                     boot["ok_route"] = path
                     break
+        # S10.27: the contracted BODY MEDIUM per path, read from the human
+        # wording around each METHOD-route mention (the same source the boot
+        # classifier reads — a bare path mention without a METHOD never votes,
+        # so "reusing ... /notes logic" next to 'HTML' cannot poison /notes).
+        # A JSON body literal ({"text": ...}) or the word 'json' votes json;
+        # page/HTML wording votes html; conflicting votes leave the path
+        # unclassified (lenient — one false positive sinks a run, v151).
+        votes: dict = {}
+        for txt in texts:                # window never crosses a statement
+            tl = str(txt).lower()
+            for mm in re.finditer(
+                    r"\b(GET|POST|PUT|DELETE|PATCH)\s+(/[A-Za-z0-9_./{}-]*)",
+                    str(txt)):
+                vp = mm.group(2).rstrip(".,;:)")
+                win = tl[max(0, mm.start() - 90):mm.end() + 90]
+                v = votes.setdefault(vp, [False, False])
+                if re.search(r"\b(html|page|browser|form|renders|rendered)\b",
+                             win):
+                    v[0] = True
+                if re.search(r"\{\s*[\"'a-z]", win) or "json" in win:
+                    v[1] = True
+        media = {vp: ("html" if h else "json")
+                 for vp, (h, j) in votes.items() if h != j}
         # Every OTHER declared route (e.g. a late-injected GET /about absorbed
         # into an existing module) must also be live in the assembled entry. The
         # curated triple alone let unwired late routes 404 while the product was
@@ -3542,7 +3566,7 @@ class Engine:
                 routes[p].add(m)
                 extra.append([m, p])
         return {"entry": entry, "callable": callables, "boot": boot,
-                "routes": extra}
+                "routes": extra, "media": media}
 
     def _assembly_node(self, force: bool = False) -> "Optional[dict]":
         """B2 mechanism 3: an ENGINE-generated assembly leaf.
@@ -3815,6 +3839,30 @@ class Engine:
         "PATCH": ("patch", "update", "edit", "modify"),
         "DELETE": ("delete", "remove", "destroy", "drop"),
     }
+
+    def _route_media_map(self) -> dict:
+        """path -> contracted body medium ('json' | 'html') — ONE datum BOTH
+        the interface-contract writer and the leaf test gate read (S10.27).
+
+        Why: v158 — a leaf test asserted HTML markers on GET /notes whose
+        contracted body is frozen JSON; the medium lived nowhere machine-
+        readable, so nothing could red the foreign shape before assembly.
+        What: the human-wording media map from `_product_contract` plus the
+        engine's own fixed-body routes (GET /health is JSON by datum);
+        unknown/ambiguous paths are simply absent (lenient).
+        Test: tests/audit/test_leaf_test_body_shape_gate.py."""
+        try:
+            c = self._product_contract() or {}
+        except Exception:        # noqa: BLE001 — no contract = no media
+            return {}
+        media = dict(c.get("media") or {})
+        try:
+            for m, p in self._declared_route_set(c):
+                if _route_fixed_body(m, p) is not None:
+                    media.setdefault(p, "json")
+        except Exception:        # noqa: BLE001 — datum stays best-effort
+            pass
+        return media
 
     def _declared_route_set(self, contract: dict) -> list:
         """The concrete (method, path) routes the assembled entry must serve,
@@ -4438,7 +4486,16 @@ class Engine:
         (contract: 201) reached assembly, where the doctor read
         'assert 201 == 200', blamed the CORE module and reworked the wrong
         artifact three times. Feature amends (code_target != entry) keep the
-        exemption unless the engine bound them a route."""
+        exemption unless the engine bound them a route.
+
+        S10.27 (v158): the gate also checks the contracted BODY SHAPE, for
+        EVERY leaf whose test calls a media-classified route (the amend
+        exemption is status-scope only — the v158 tests came from an amend's
+        tester): a POSITIVE membership assertion of an HTML tag marker
+        (``'<ul' in body`` / ``assertIn('<h1>', body)``) after calling a
+        route whose contracted medium is JSON (`_route_media_map`) reds at
+        the leaf, naming the contracted shape and the HTML-owning route.
+        Marker-level only — never an HTML parser; unknown media = lenient."""
         if not (test_rel and getattr(self.workspace, "root", None)):
             return True
         owned = {(m.upper(), p): _route_success_status(m)
@@ -4453,7 +4510,8 @@ class Engine:
                 owned.setdefault((m.upper(), p), _route_success_status(m))
             for m, p in self._adopted_route_tables():
                 owned.setdefault((m.upper(), p), _route_success_status(m))
-        if not owned:
+        media = self._route_media_map()
+        if not owned and not media:
             return True
         try:
             text = (Path(self.workspace.root) / test_rel).read_text(
@@ -4512,6 +4570,29 @@ class Engine:
                 and isinstance(stmt.func, ast.Attribute)
                 and stmt.func.attr.startswith("assert"))
 
+        _html_mark = re.compile(r"^\s*<(?:!|/?[A-Za-z])")
+
+        def _html_marker_asserted(stmt) -> "Optional[str]":
+            # S10.27: a POSITIVE membership assertion of an HTML tag marker
+            # ('<ul' in body / assertIn('<h1>', body)). Marker-level string
+            # constants only — deliberately NOT an HTML parser.
+            if isinstance(stmt, ast.Assert):
+                for n in ast.walk(stmt.test):
+                    if isinstance(n, ast.Compare) \
+                            and any(isinstance(op, ast.In) for op in n.ops) \
+                            and isinstance(n.left, ast.Constant) \
+                            and isinstance(n.left.value, str) \
+                            and _html_mark.match(n.left.value):
+                        return n.left.value
+            elif isinstance(stmt, ast.Call) \
+                    and isinstance(stmt.func, ast.Attribute) \
+                    and stmt.func.attr == "assertIn" and stmt.args:
+                a0 = stmt.args[0]
+                if isinstance(a0, ast.Constant) and isinstance(a0.value, str) \
+                        and _html_mark.match(a0.value):
+                    return a0.value
+            return None
+
         findings: list = []
         # module-level test functions plus unittest.TestCase methods
         fns = [n for n in tree.body
@@ -4531,6 +4612,25 @@ class Engine:
                 if _is_assertion(stmt):
                     if last_route is None:
                         continue
+                    # S10.27 (body shape) — checked for EVERY leaf, ownership
+                    # and the amend exemption are status-scope only
+                    marker = _html_marker_asserted(stmt)
+                    if marker and media.get(last_route[1]) == "json":
+                        own_html = next(
+                            (p for p in sorted(media) if media[p] == "html"),
+                            None)
+                        findings.append(
+                            "%s asserts HTML marker %r after `%s %s` whose "
+                            "CONTRACTED body is JSON — assert the JSON shape "
+                            "here%s"
+                            % (test_rel, marker, last_route[0], last_route[1],
+                               (" (the HTML surface belongs to `GET %s` — "
+                                "put HTML assertions in that route's test)"
+                                % own_html) if own_html else ""))
+                        last_route = None   # one finding per call site
+                        continue
+                    if not owned:
+                        continue            # shape-only mode (plain amend)
                     exact, member = _asserted_statuses(stmt)
                     if not exact and not member:
                         continue
@@ -4586,7 +4686,7 @@ class Engine:
                            "detail": "; ".join(findings)[:400]})
         self.emit("review", "engine", "", nid,
                   "test-status gate: leaf test contradicts the contracted "
-                  "success status", "; ".join(findings)[:300],
+                  "success status or body shape", "; ".join(findings)[:300],
                   "test_status_gate", "FAIL", level=L_MILESTONE)
         self._doctor_advise(node, nid, depth, "test_status_gate", "FAIL",
                             {"scope_findings": findings})
@@ -8733,6 +8833,7 @@ def %(callable)s(environ, start_response):
         declared = set(routes)
         routes = list(routes) + [mp for mp in sorted(adopted)
                                  if mp not in declared]
+        _media = self._route_media_map()
         route_rows = []
         for m, p in sorted(routes):
             fn_adopted = None if (m, p) in declared else adopted.get((m, p))
@@ -8748,6 +8849,13 @@ def %(callable)s(environ, start_response):
                 # -> {"status": "ok"}); v149-class collisions happen exactly
                 # when such a datum lives nowhere machine-readable
                 row["body"] = fixed
+            # S10.27: the contracted body MEDIUM (same datum the leaf test
+            # gate reads) — machine-readable so a consumer can diff a test
+            # asserting HTML markers against a JSON-bodied route
+            _md = _media.get(p)
+            if _md:
+                row["media"] = {"json": "application/json",
+                                "html": "text/html"}[_md]
             route_rows.append(row)
         data = {
             "format": "spec-flow interface contract v1",
