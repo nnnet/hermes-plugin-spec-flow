@@ -127,3 +127,56 @@ def test_gate_runs_at_the_reverify_barrier():
     assert gate_at != -1, "_verify_tests never calls _unserved_route_gate"
     assert suite_at == -1 or gate_at < suite_at, (
         "the gate must fire at the FIRST assembly, before the suite verdict")
+
+
+# --- S12.9 (v162): the gate must RE-FIRE when a repair shrinks the surface ----
+# v162: at the FIRST assembly every route resolved (get_ui/get_about lived in
+# core.py) and the gate was legitimately silent; the round-1 'rework core'
+# then DROPPED both handlers, the repair loop re-synthesized the entry (now
+# wiring 3 of 5 routes) and re-ran the suite — but never re-ran the gate, so
+# the 404s it created stayed nameless until the final plan check (tick 154).
+
+def test_gate_refires_inside_the_repair_loop():
+    # the repair round re-synthesizes the entry; the unserved gate must run
+    # again right after — the surface may have SHRUNK under the rework
+    src = pathlib.Path(sfr.__file__).read_text(encoding="utf-8")
+    body = src.split("def _verify_tests", 1)[1].split("\n    def ")[0]
+    loop = body.split("for _round in range", 1)
+    assert len(loop) == 2, "_verify_tests lost its repair loop"
+    resync_at = loop[1].find("_try_synthesize_entry")
+    gate_at = loop[1].find("_unserved_route_gate")
+    assert resync_at != -1, "the repair round no longer re-synthesizes"
+    assert gate_at != -1 and gate_at > resync_at, (
+        "v162: the repair round re-synthesized the entry but never re-ran "
+        "_unserved_route_gate — handlers dropped BY the repair 404'd "
+        "namelessly until the final plan check")
+
+
+def test_regressed_route_refires_after_green(tmp_path):
+    # behavior: served -> gate silent; the rework drops the handler ->
+    # the SAME gate call now fires (and is not swallowed by dedup)
+    served = _SERVED + """\
+
+
+    def get_about(payload, query):
+        return 200, "<html>about</html>"
+"""
+    eng = _engine(tmp_path, core_body=served)
+    assert eng._unserved_route_gate() == []
+    core = pathlib.Path(eng.workspace.root) / "src/core.py"
+    core.write_text(textwrap.dedent(_SERVED), encoding="utf-8")  # rework drop
+    findings = eng._unserved_route_gate()
+    assert findings and "/about" in findings[0], (
+        "the rework dropped get_about — the gate re-run must fire")
+
+
+def test_repeated_gate_calls_do_not_duplicate_findings(tmp_path):
+    # GREEN edge: the loop now calls the gate once per round — an unresolved
+    # route already reported must not spam a duplicate loop/milestone per
+    # round (noise buries the one actionable finding)
+    eng = _engine(tmp_path)
+    eng._unserved_route_gate()
+    eng._unserved_route_gate()
+    loops = [l for l in eng.loops if l["type"] == "unserved-route"]
+    assert len(loops) == 1, (
+        f"one unresolved route reported twice: {len(loops)} loop entries")

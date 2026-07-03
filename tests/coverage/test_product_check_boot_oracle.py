@@ -143,11 +143,12 @@ _APP_400 = _APP_HEAD % (
 
 
 def _boot_eng(tmp_path, app_src):
-    root = tmp_path / "ws"
-    (root / "src").mkdir(parents=True)
+    # a REAL engine: _assembled_product_boots now journals datum skips
+    # (S12.9) through emit/loops, which a bare __new__ stub does not carry
+    e = Engine(workspace=str(tmp_path / "ws"), depth=DEPTH_PRODUCT)
+    root = pathlib.Path(e.workspace.root)
+    (root / "src").mkdir(parents=True, exist_ok=True)
     (root / "src" / "app.py").write_text(app_src, encoding="utf-8")
-    e = Engine.__new__(Engine)
-    e.workspace = type("W", (), {"enabled": True, "root": str(root)})()
     e._product_contract = lambda: {
         "entry": "src/app.py", "callable": ["wsgi_app"],
         "boot": {"ok_route": "/health", "json_roundtrip": "/notes"}}

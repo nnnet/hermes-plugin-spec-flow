@@ -542,6 +542,32 @@ same wrong reading and stay green until product e2e.
   product_entry:test_status recheck DID run and held HONESTLY (the smear
   was still in the final artifact — the S12.7 class), so the ledger is
   honest wherever the wiring exists. (`test_doctor_cause_attribution.py`)
+- S12.9 a gate is only real on the paths a run actually TRAVERSES, and a
+  probe that skips is a LOGGED skip, never an invisible cap. v162
+  (2026-07-03T19-55-37): the final artifact carried BOTH target behaviours
+  (POST/GET /notes -> 400 'NOTES_DB', GET /ui + /about -> 404) yet the trace
+  had ZERO S12.6 findings and ZERO unserved-route findings until the final
+  plan check. Two silencing layers, neither a missing datum (request_fields
+  was materialised — hypothesis (a) rejected) nor env leakage (the probe
+  pops the constitution env vars — hypothesis (c) rejected):
+  (1) `_ROOT_BOOT_PROBE` is fail-fast (`fail()` = SystemExit) and the S12.6
+  request-shape section sat LAST, so the 404 on one unwired late route
+  exited the probe before the shape section ever ran; the section now runs
+  FIRST (an unwired route only 404s there — no field-demand message — so it
+  cannot false-red it). (2) `_unserved_route_gate` ran once per
+  `_verify_tests`, BEFORE the first suite run — at that instant every route
+  resolved (get_ui/get_about still lived in core.py), so it was silent
+  legitimately; the round-1 'rework core' then DROPPED both handlers and
+  the repair loop re-synthesized the entry WITHOUT re-running the gate —
+  the 404s the repair itself created stayed nameless. The gate now re-runs
+  after every in-loop re-synthesis (deduped per route; a served-then-
+  dropped route re-fires). Anti-silence twin: `_request_shape_datum_gate` —
+  a contracted POST/PUT/PATCH route ABSENT from the S12.1 datum is a logged
+  SKIP event (gate=request_shape_probe, verdict=SKIP), and when the human
+  text names body fields next to that route (a brace list that is not a
+  return/response shape) it is a RED 'request-shape-datum' finding: the
+  derivation missed a human-stated shape. (`test_boot_shape_probe.py`,
+  `test_unserved_route_fastfail.py`)
 
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.

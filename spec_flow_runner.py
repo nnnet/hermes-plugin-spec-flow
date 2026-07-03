@@ -2467,6 +2467,70 @@ def call(method, path, payload=None, query="", raw_body=None):
     raw = b"".join(chunks if chunks else [])
     return cap.get("status", 0), raw
 
+# S12.6 (v161) + S12.9 (v162): CONFIG-vs-REQUEST confusion judged by
+# BEHAVIOUR, code-shape-independent. The v159 class re-landed in a SHARED
+# dispatch wrapper (any KeyError -> 400 "missing required field") over
+# os.environ['NOTES_DB'] reads — a shape the AST leaf gate
+# (`_leaf_request_shape_gate`) never sees. Probe every contracted route with
+# its CONTRACTED example payload (the S12.1 `request_fields` datum;
+# GET/DELETE = no body) with the constitution's env vars ABSENT: a 4xx naming
+# a required field OUTSIDE the contracted shape is a deterministic RED. A
+# config-starved 5xx stays legal (an honest server error); a 4xx naming a
+# CONTRACTED field cannot occur — the probe sends every contracted field —
+# so it is deliberately not judged.
+# This section runs FIRST (v162): the probe is fail-fast, and when it sat
+# after the route checks a 404 on one unwired late route exited the probe
+# before the shape section ever ran — the whole-product config confusion
+# stayed nameless while its exact target behaviour sat in the final artifact.
+# An unwired route only 404s here (no field-demand message), so it never
+# false-reds this section and is still named by the checks below / the
+# S12.3 unserved-route gate.
+import re as _re
+_shapes = cfg.get("request_shapes") or []
+_cfg_envs = list(cfg.get("config_env_vars") or [])
+if _shapes:
+    _saved = {v: os.environ.pop(v) for v in _cfg_envs if v in os.environ}
+    try:
+        for _sp in _shapes:
+            try:
+                _m = str(_sp[0]).upper()
+                _p, _fields = str(_sp[1]), [str(f) for f in (_sp[2] or [])]
+            except Exception:
+                continue
+            _payload = ({f: "probe" for f in _fields}
+                        if _m not in ("GET", "DELETE", "HEAD") else None)
+            try:
+                _st, _raw = call(_m, _p, _payload)
+            except Exception:
+                continue        # a config-starved crash is the 5xx class
+            if not (400 <= _st < 500):
+                continue
+            _text = (_raw or b"").decode("utf-8", "replace")
+            try:                # judge the MESSAGE, not the JSON envelope keys
+                _doc = json.loads(_text)
+                _msg = (" ".join(str(v) for v in _doc.values())
+                        if isinstance(_doc, dict) else _text)
+            except Exception:
+                _msg = _text
+            if not _re.search(r"required|missing|field", _msg, _re.I):
+                continue        # not a field-demand rejection (404/405/...)
+            _named = set(_re.findall(
+                r"['\"]([A-Za-z_][A-Za-z0-9_]*)['\"]", _msg))
+            _named |= set(_re.findall(
+                r"field[:\s]+['\"]?([A-Za-z_][A-Za-z0-9_]*)", _msg, _re.I))
+            _outside = sorted(t for t in _named if t not in _fields)
+            if not _outside:
+                continue        # names only contracted fields — not judged
+            _t = next((t for t in _outside if t in _cfg_envs), _outside[0])
+            _extra = ((" — %s is an environment variable (constitution), "
+                       "never a request field" % _t)
+                      if _t in _cfg_envs else "")
+            fail("%s %s -> %d naming required field %r outside the "
+                 "contracted request shape %r%s"
+                 % (_m, _p, _st, _t, _fields, _extra))
+    finally:
+        os.environ.update(_saved)
+
 if ok_route:
     st, _ = call("GET", ok_route)
     if st != 200:
@@ -2521,61 +2585,6 @@ for _spec in (cfg.get("extra_routes") or []):
     if _st == 404:
         fail("%s %s -> 404 (declared route never wired in the entry)"
              % (_method, _path))
-# S12.6 (v161): CONFIG-vs-REQUEST confusion judged by BEHAVIOUR, code-shape-
-# independent. The v159 class re-landed in a SHARED dispatch wrapper (any
-# KeyError -> 400 "missing required field") over os.environ['NOTES_DB'] reads
-# — a shape the AST leaf gate (`_leaf_request_shape_gate`) never sees. Probe
-# every contracted route with its CONTRACTED example payload (the S12.1
-# `request_fields` datum; GET/DELETE = no body) with the constitution's env
-# vars ABSENT: a 4xx naming a required field OUTSIDE the contracted shape is
-# a deterministic RED. A config-starved 5xx stays legal (an honest server
-# error); a 4xx naming a CONTRACTED field cannot occur — the probe sends
-# every contracted field — so it is deliberately not judged.
-import re as _re
-_shapes = cfg.get("request_shapes") or []
-_cfg_envs = list(cfg.get("config_env_vars") or [])
-if _shapes:
-    _saved = {v: os.environ.pop(v) for v in _cfg_envs if v in os.environ}
-    try:
-        for _sp in _shapes:
-            try:
-                _m = str(_sp[0]).upper()
-                _p, _fields = str(_sp[1]), [str(f) for f in (_sp[2] or [])]
-            except Exception:
-                continue
-            _payload = ({f: "probe" for f in _fields}
-                        if _m not in ("GET", "DELETE", "HEAD") else None)
-            try:
-                _st, _raw = call(_m, _p, _payload)
-            except Exception:
-                continue        # a config-starved crash is the 5xx class
-            if not (400 <= _st < 500):
-                continue
-            _text = (_raw or b"").decode("utf-8", "replace")
-            try:                # judge the MESSAGE, not the JSON envelope keys
-                _doc = json.loads(_text)
-                _msg = (" ".join(str(v) for v in _doc.values())
-                        if isinstance(_doc, dict) else _text)
-            except Exception:
-                _msg = _text
-            if not _re.search(r"required|missing|field", _msg, _re.I):
-                continue        # not a field-demand rejection (404/405/...)
-            _named = set(_re.findall(
-                r"['\"]([A-Za-z_][A-Za-z0-9_]*)['\"]", _msg))
-            _named |= set(_re.findall(
-                r"field[:\s]+['\"]?([A-Za-z_][A-Za-z0-9_]*)", _msg, _re.I))
-            _outside = sorted(t for t in _named if t not in _fields)
-            if not _outside:
-                continue        # names only contracted fields — not judged
-            _t = next((t for t in _outside if t in _cfg_envs), _outside[0])
-            _extra = ((" — %s is an environment variable (constitution), "
-                       "never a request field" % _t)
-                      if _t in _cfg_envs else "")
-            fail("%s %s -> %d naming required field %r outside the "
-                 "contracted request shape %r%s"
-                 % (_m, _p, _st, _t, _fields, _extra))
-    finally:
-        os.environ.update(_saved)
 print("BOOTGATE_OK")
 '''
 
@@ -4113,6 +4122,92 @@ class Engine:
         except Exception:        # noqa: BLE001 — no contract = no routes
             pass
         return out
+
+    def _request_shape_datum_gate(self, reqf: dict, contract: dict) -> None:
+        """S12.9 (v162): anti-silence for the boot-gate shape probe — a
+        contracted body-method route ABSENT from the S12.1 request-shape
+        datum is never an invisible no-op.
+
+        Why: v162 — the probe's shape section iterates the datum, so an
+        empty/partial datum silently shrinks the probed surface: had the
+        datum not derived, the NOTES_DB config confusion would have stayed
+        unprobeable with zero trace of the cap.
+        What: for every declared POST/PUT/PATCH route with no datum row —
+        when the human texts DO shape its body (a brace field list adjacent
+        to the route mention that is not a return/response shape) it is a
+        RED finding ('request-shape-datum' loop + FAIL milestone + doctor
+        cause): the S12.1 derivation missed a human-stated shape; otherwise
+        it is a LOGGED SKIP event (gate=request_shape_probe, verdict=SKIP)
+        naming the route. Each route reports once per run.
+        Test: tests/audit/test_boot_shape_probe.py (S12.9 section)."""
+        try:
+            declared = self._declared_route_set(contract or {})
+        except Exception:        # noqa: BLE001 — no contract = no routes
+            return
+        missing = [(m, p) for m, p in declared
+                   if (m or "GET").upper() in ("POST", "PUT", "PATCH")
+                   and ((m or "GET").upper(), p) not in reqf]
+        if not missing:
+            return
+        texts = [str(t) for t in (getattr(self, "_constitution", None) or [])]
+        if getattr(self, "_goal", ""):
+            texts.append(str(self._goal))
+        try:
+            fn = self._standing_requirements
+            items = fn() if callable(fn) else (fn or [])
+            for item in (items or []):
+                texts.append(str(item[1] if len(item) > 1 else item[0]))
+        except Exception:        # noqa: BLE001 — no injections yet
+            pass
+        reported = self.__dict__.setdefault("_shape_datum_reported", set())
+        for m, p in missing:
+            key = ((m or "GET").upper(), p)
+            if key in reported:
+                continue
+            reported.add(key)
+            shaped_by_human = False
+            mention = re.compile(r"\b%s\s+%s(?![\w/])"
+                                 % (key[0], re.escape(p)), re.IGNORECASE)
+            for text in texts:
+                for hit in mention.finditer(text):
+                    window = text[hit.end():hit.end() + 90]
+                    for br in re.finditer(r"\{[^{}]*\}", window):
+                        # a brace announced by a return-verb is the RESPONSE
+                        # shape ('returning {"id": ...}'), never a request
+                        prefix = window[:br.start()][-30:]
+                        if re.search(r"(?:return\w*|respond\w*|response|->)"
+                                     r"[^{}]{0,15}$", prefix, re.IGNORECASE):
+                            continue
+                        if re.search(r"[A-Za-z_]\w*", br.group(0)):
+                            shaped_by_human = True
+                            break
+                    if shaped_by_human:
+                        break
+                if shaped_by_human:
+                    break
+            if shaped_by_human:
+                detail = ("%s %s: the human text names body fields next to "
+                          "this route, yet the request-shape datum "
+                          "(_route_request_fields) has NO row — a derivation "
+                          "hole; the boot-gate shape probe cannot judge this "
+                          "route" % key)
+                self.loops.append({"type": "request-shape-datum",
+                                   "task": "L0", "detail": detail[:400]})
+                self.emit("integrate", "engine", "", "L0:integrate",
+                          "request-shape datum missing for a human-shaped "
+                          "route", detail[:300],
+                          "request_shape_probe", "FAIL", level=L_MILESTONE)
+                self._doctor_advise({"id": "L0:integrate"}, "L0:integrate",
+                                    0, "request_shape_probe", "FAIL",
+                                    {"reasons": detail[:300]})
+            else:
+                self.emit("integrate", "engine", "", "L0:integrate",
+                          "request-shape probe skipped: no request_fields "
+                          "datum",
+                          "%s %s: the human text shapes no body for this "
+                          "route — the probe's shape section will not judge "
+                          "it" % key,
+                          "request_shape_probe", "SKIP", level=L_MILESTONE)
 
     # an ALL-CAPS token is an env var only when ADJACENT to env-var wording
     # (plain ALL-CAPS prose words — ONLY, FROZEN, API — must never match)
@@ -9592,11 +9687,18 @@ def %(callable)s(environ, start_response):
         ok_route = ((contract.get("boot") or {}).get("ok_route") or "")
         unresolved = [(m, p) for m, p in (unresolved or [])
                       if not (m == "GET" and p == ok_route)]
+        # S12.9: the gate is now called once per repair round too — dedupe by
+        # route so one unresolved route reports ONCE, while a route that was
+        # served, then dropped by a rework, re-fires (removed from the set
+        # whenever it resolves again).
+        reported = self.__dict__.setdefault("_unserved_reported", set())
+        reported.intersection_update(set(unresolved))
         if not unresolved:
             return []
         owners = self.__dict__.get("_route_owners") or {}
         mods = self.__dict__.get("_route_handler_modules") or {}
         findings: list = []
+        fresh: list = []
         for m, p in unresolved:
             own = ", ".join(sorted(owners.get((m, p), ())))
             stem = mods.get((m, p))
@@ -9608,15 +9710,20 @@ def %(callable)s(environ, start_response):
                    own or "NONE (orphan)",
                    (" (src/%s.py)" % stem) if stem else ""))
             findings.append(detail)
+            if (m, p) in reported:
+                continue        # already journaled this round-trip — no spam
+            reported.add((m, p))
+            fresh.append(detail)
             self.loops.append({"type": "unserved-route", "task": "L0",
                                "detail": detail[:400]})
             self.emit("integrate", "engine", "", "L0:integrate",
                       "assembly gate: declared route has no resolvable "
                       "handler", detail[:300],
                       "assembly_route_gate", "FAIL", level=L_MILESTONE)
-        self._doctor_advise({"id": "L0:integrate"}, "L0:integrate", 0,
-                            "assembly_route_gate", "FAIL",
-                            {"reasons": "; ".join(findings)[:300]})
+        if fresh:
+            self._doctor_advise({"id": "L0:integrate"}, "L0:integrate", 0,
+                                "assembly_route_gate", "FAIL",
+                                {"reasons": "; ".join(fresh)[:300]})
         return findings
 
     def _assembled_suite_failures(self) -> "Optional[list]":
@@ -9733,6 +9840,12 @@ def %(callable)s(environ, start_response):
                 # Idempotent (write-only-if-changed); a no-op when the surface is
                 # unchanged. Closes the entry↔leaf drift gap (Plan Шаг 1/2).
                 self._try_synthesize_entry()
+                # S12.9 (v162): the rework may have SHRUNK the handler surface
+                # (round-1 'rework core' dropped get_ui/get_about); the
+                # re-derived entry then wires fewer routes — the unserved gate
+                # must re-run here or those 404s stay nameless until the final
+                # plan check (the gate dedupes already-reported routes).
+                self._unserved_route_gate()
                 passed, out = _run_suite()
                 if passed:
                     b_ok, b_detail = self._assembled_product_boots()
@@ -9828,13 +9941,16 @@ def %(callable)s(environ, start_response):
         # S12.6 (v161): hand the probe the S12.1 request-shape datum + the
         # constitution's env vars, so it can red config-vs-request confusion
         # BEHAVIOURALLY (a shared wrapper 400-ing 'NOTES_DB' on every route
-        # is invisible to the AST leaf gate). Best-effort: no datum = the
-        # shape section is a silent no-op inside the probe.
+        # is invisible to the AST leaf gate).
         try:
-            _shapes = [[m, p, list(f)] for (m, p), f in
-                       sorted((self._route_request_fields() or {}).items())]
+            _reqf = self._route_request_fields() or {}
         except Exception:        # noqa: BLE001 — no datum = nothing to probe
-            _shapes = []
+            _reqf = {}
+        _shapes = [[m, p, list(f)] for (m, p), f in sorted(_reqf.items())]
+        # S12.9 (v162): a probe that skips because its datum is missing must
+        # LOG the skip; a missing datum for a contracted body route whose
+        # human text names fields is a RED derivation finding — never a no-op.
+        self._request_shape_datum_gate(_reqf, c)
         try:
             _cenv = [n for n, _r in self._constitution_env_vars()]
         except Exception:        # noqa: BLE001

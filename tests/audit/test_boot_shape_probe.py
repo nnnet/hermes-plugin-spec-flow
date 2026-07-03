@@ -239,3 +239,102 @@ def test_config_starved_5xx_stays_legal(tmp_path):
         "a config-starved 5xx (RuntimeError -> handler failed -> 500) is an "
         "honest server error, never the request-shape confusion class: "
         f"{detail!r}")
+
+
+# --- S12.9 (v162): the shape probe must not be MASKED or SILENT ---------------
+# v162 (2026-07-03T19-55-37__v162__p6-micro-notes): the assembled product
+# 400-ed POST /notes naming 'NOTES_DB' (the exact S12.6 class) AND 404-ed the
+# late routes /ui and /about. The probe script is fail-fast (`fail()` raises
+# SystemExit) and the request-shape section was LAST, so the 404 on an
+# unwired route exited the probe BEFORE the shape section ever ran — the
+# trace carried ZERO occurrences of the S12.6 finding while its exact target
+# behaviour sat in the final artifact.
+
+def test_unwired_route_does_not_mask_shape_finding(tmp_path):
+    # v162 wiring: the config-laundering wrapper PLUS one declared route the
+    # entry never wired (GET /about -> 404). The shape confusion is the
+    # whole-product defect; a per-route 404 (owned by the S12.3 unserved
+    # gate) must not swallow it.
+    contract = dict(_CONTRACT)
+    contract["routes"] = [("GET", "/about")]
+    eng = _engine(tmp_path, _CORE_ENV_SUBSCRIPT)
+    eng._product_contract = lambda: dict(contract)
+    ok, detail = eng._assembled_product_boots()
+    assert ok is False
+    assert "never a request field" in detail, (
+        "v162: the 404 on the unwired GET /about masked the request-shape "
+        "finding — the probe exited fail-fast before the shape section; the "
+        f"config confusion must be named, got: {detail!r}")
+
+
+def test_missing_shape_datum_is_a_logged_skip(tmp_path):
+    # anti-silence: no request_fields rows for any body route => the probe's
+    # shape section is a no-op, but that skip must be a LOGGED event, never
+    # an invisible cap.
+    eng = _engine(tmp_path, _CORE_ENV_FALLBACK)
+    eng._goal = ("A notes service over a WSGI app (src/app.py exposes "
+                 "wsgi_app): POST /notes stores a note; GET /notes lists "
+                 "them; GET /ui serves an HTML page.")   # no brace shape
+    eng._constitution = []
+    eng._assembled_product_boots()
+    skips = [e for e in eng.events
+             if getattr(e, "gate", "") == "request_shape_probe"
+             and getattr(e, "verdict", "") == "SKIP"]
+    assert skips, (
+        "the request-shape datum has no row for POST /notes — the probe "
+        "skips the route silently; the no-silent-caps convention requires "
+        "a logged skip event (gate=request_shape_probe, verdict=SKIP)")
+    assert any("POST /notes" in str(getattr(e, "detail", ""))
+               or "POST /notes" in str(getattr(e, "action", ""))
+               for e in skips), "the skip must NAME the unshaped route"
+
+
+def test_missing_datum_with_goal_named_fields_is_red(tmp_path):
+    # anti-silence RED: the human DID shape the body ('{"text": ...}' right
+    # next to POST /notes) but the datum failed to derive (no accept-verb, a
+    # phrasing the S12.1 regex misses) — an empty datum for a contracted
+    # POST route with goal-named fields is a derivation hole, a RED finding,
+    # never a silent no-op.
+    eng = _engine(tmp_path, _CORE_ENV_FALLBACK)
+    eng._goal = ('A notes service over a WSGI app (src/app.py exposes '
+                 'wsgi_app): POST /notes: {"text": "..."} is stored; '
+                 'GET /notes lists notes; GET /ui serves an HTML page.')
+    eng._constitution = []
+    assert ("POST", "/notes") not in eng._route_request_fields(), (
+        "fixture precondition: this phrasing must MISS the S12.1 datum "
+        "regex (otherwise the red case tests nothing)")
+    eng._assembled_product_boots()
+    reds = [l for l in eng.loops if l.get("type") == "request-shape-datum"]
+    assert reds, (
+        "goal names {text} adjacent to POST /notes yet the request-shape "
+        "datum has no row — the derivation hole must be a RED finding "
+        "(loop type 'request-shape-datum'), not a silent skip")
+    assert "/notes" in reds[0]["detail"], "the finding must NAME the route"
+
+
+def test_datum_present_probe_emits_no_skip_or_red(tmp_path):
+    # GREEN edge: the normal v162 goal derives the datum — no skip event,
+    # no derivation red.
+    eng = _engine(tmp_path, _CORE_ENV_FALLBACK)
+    eng._assembled_product_boots()
+    assert not [e for e in eng.events
+                if getattr(e, "gate", "") == "request_shape_probe"
+                and getattr(e, "verdict", "") == "SKIP"]
+    assert not [l for l in eng.loops
+                if l.get("type") == "request-shape-datum"]
+
+
+def test_bodyless_prose_without_braces_skips_not_reds(tmp_path):
+    # GREEN edge: a POST route the human never shaped (no brace list near
+    # the mention) is a legitimate lenient skip — logged, but NOT a red
+    # (v151 lesson: one false positive sinks a run).
+    eng = _engine(tmp_path, _CORE_ENV_FALLBACK)
+    eng._goal = ("A notes service over a WSGI app (src/app.py exposes "
+                 "wsgi_app): POST /notes appends an empty marker note; "
+                 "GET /notes lists them; GET /ui serves an HTML page.")
+    eng._constitution = []
+    eng._assembled_product_boots()
+    assert not [l for l in eng.loops
+                if l.get("type") == "request-shape-datum"], (
+        "no brace shape near POST /notes: the human never shaped the body — "
+        "lenient skip, never a red")

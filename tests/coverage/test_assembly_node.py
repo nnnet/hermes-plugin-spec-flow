@@ -296,11 +296,13 @@ _WSGI_CONST = ["HTTP through a WSGI app (src/app.py exposes `wsgi_app`).",
 
 
 def _engine_with_ws(tmp_path, app_src, constitution, goal=None):
-    ws_root = tmp_path / "wk"
-    (ws_root / "src").mkdir(parents=True)
+    # a REAL engine: _assembled_product_boots now journals request-shape
+    # datum skips (S12.9) via emit/loops — a bare __new__ stub carries
+    # neither, so it can no longer stand in for the boot path
+    e = eng.Engine(workspace=str(tmp_path / "wk"), depth=eng.DEPTH_SPEC)
+    ws_root = pathlib.Path(e.workspace.root)
+    (ws_root / "src").mkdir(parents=True, exist_ok=True)
     (ws_root / "src" / "app.py").write_text(app_src, encoding="utf-8")
-    e = eng.Engine.__new__(eng.Engine)
-    e.workspace = type("W", (), {"enabled": True, "root": str(ws_root)})()
     e._constitution = list(constitution)
     # the contract is DERIVED from the human description (constitution + goal);
     # default to a web goal, but the skip case passes a non-web one
