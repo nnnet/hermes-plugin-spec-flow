@@ -321,6 +321,18 @@ def _node_files(ws: pathlib.Path, nid: str) -> dict:
                       for p in (ws / "specs").glob(f"{spec_stem}.v*.md")) \
         if (ws / "specs").exists() else []
     code = ws / "src" / f"{sn}.py"
+    # amend leaf: no src/<id>.py of its own — its code lands in the OWNER
+    # module (engine code_target); the edit-in-place spec names that file
+    # as "### Current `<path>`", so surface THAT file on the code tab
+    code_rel = f"workspace/src/{sn}.py" if code.exists() else None
+    if code_rel is None and spec.exists():
+        try:
+            m = re.search(r"### Current `([^`]+)`", spec.read_text(
+                encoding="utf-8", errors="replace"))
+        except OSError:
+            m = None
+        if m and (ws / m.group(1)).exists():
+            code_rel = "workspace/" + m.group(1)
     test = ws / "tests" / f"test_{sn}.py"
     contracts = sorted("workspace/" + str(p.relative_to(ws))
                        for p in (ws / "contracts").glob(f"{nid}*")) \
@@ -328,7 +340,7 @@ def _node_files(ws: pathlib.Path, nid: str) -> dict:
     return {
         "spec": f"workspace/specs/{spec_stem}.md" if spec.exists() else None,
         "versions": versions,
-        "code": f"workspace/src/{sn}.py" if code.exists() else None,
+        "code": code_rel,
         "test": f"workspace/tests/test_{sn}.py" if test.exists() else None,
         "contract": contracts[0] if contracts else None,
     }
