@@ -1559,6 +1559,15 @@ def _write_reexport(ws: Any, fn: str, owner_module: str, owner: str) -> None:
                  "paths": [f"src/{fn}.py", f"tests/test_{fn}.py"]})
 
 
+def _code_style_block() -> str:
+    """The delivery-hygiene rule workers must be TOLD — rendered from the
+    SAME engine constant the write door enforces (prompt and gate cannot
+    drift apart)."""
+    from . import run_engine as eng
+    return ("\n\nCODE STYLE (engine-enforced at the write door): "
+            + eng.RULE_CODE_STYLE)
+
+
 def _write_reply_files(ws: Any, files: dict, fn: str) -> bool:
     """Write the worker's files into the workspace (harness does the I/O in
     chat-only mode). Only the leaf's own src/tests paths are accepted, and
@@ -1579,6 +1588,14 @@ def _write_reply_files(ws: Any, files: dict, fn: str) -> bool:
                 llm_log.log({"event": "write_refused", "role": "implementer",
                              "node": fn, "path": rel,
                              "reason": "touches platform internals"})
+                continue
+            from . import run_engine as eng
+            style = eng._delivery_lint(rel, body)
+            if style:
+                # the reason reaches the reviewer/rework loop via П7 history
+                llm_log.log({"event": "write_refused", "role": "implementer",
+                             "node": fn, "path": rel,
+                             "reason": "; ".join(style)})
                 continue
             body = body if body.endswith("\n") else body + "\n"
             ws._write(rel, _ensure_path_header(body, fn), kind)
@@ -1620,6 +1637,13 @@ def _apply_diff_repair(ws: Any, ws_root: str, fn: str, reply: str) -> bool:
                          "node": fn, "path": rel,
                          "reason": "touches platform internals"})
             continue
+        from . import run_engine as eng
+        style = eng._delivery_lint(rel, body)
+        if style:
+            llm_log.log({"event": "write_refused", "role": "implementer",
+                         "node": fn, "path": rel,
+                         "reason": "; ".join(style)})
+            continue
         ws._write(rel, body if body.endswith("\n") else body + "\n", kind)
         llm_log.log({"event": "ws_write", "writer": "implementer-diff",
                      "node": fn, "paths": [rel],
@@ -1629,7 +1653,7 @@ def _apply_diff_repair(ws: Any, ws_root: str, fn: str, reply: str) -> bool:
 
 
 def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
-    system = _with_language(load_skill_md("spec-implement"))
+    system = _with_language(load_skill_md("spec-implement")) + _code_style_block()
     allowed, disallowed = load_profile_policy("implementer")
     model = _model_for("implementer")
 
@@ -1985,7 +2009,7 @@ def _review_refusals(node: Any) -> str:
 
 
 def make_reviewer() -> Callable[[dict], dict]:
-    system = _with_language(load_skill_md("spec-reviewer"))
+    system = _with_language(load_skill_md("spec-reviewer")) + _code_style_block()
     allowed, disallowed = load_profile_policy("spec-reviewer")
     model = _model_for("reviewer")
 

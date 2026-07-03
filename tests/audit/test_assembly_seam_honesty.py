@@ -455,3 +455,53 @@ def test_requirement_nodes_carry_ascii_ids(tmp_path):
     # determinism: the SAME raw name maps to the SAME id on every poll —
     # otherwise coverage bookkeeping breaks and the requirement re-attaches
     assert e._requirement_nodes(scope=None)[0]["id"] == nid
+
+
+# ── S10.12 ONE write door: delivered code is English/ASCII ───────────────────
+# v151 follow-up: hygiene rules (English identifiers/comments, no foreign
+# scripts, no absolute host paths) must live at the SINGLE write seam every
+# writer passes through — not as N per-writer checks. The rule text is ONE
+# engine constant (RULE_CODE_STYLE) rendered into worker prompts and enforced
+# by the same lint the door runs; prompt and gate can never drift apart.
+# Human PROSE (specs, notes) is data and may be any language — only code
+# files (src/*.py, tests/*.py) are linted.
+
+def test_delivery_lint_red_and_green():
+    lint = eng._delivery_lint
+    assert lint("src/получить.py", "X = 1\n"), "non-ascii file path must red"
+    assert lint("src/m.py", "def получить():\n    return 1\n"), (
+        "a non-ascii identifier becomes the product's API — must red")
+    assert lint("src/m.py", "# комментарий\nX = 1\n"), (
+        "cyrillic in a code file (comments included) must red")
+    assert lint("src/m.py", "P = '/home/user/x'\n"), (
+        "an absolute host path in delivered code must red (v149 boundary)")
+    # green edges: honest code passes, human prose is NOT linted
+    assert lint("src/m.py", "def ok():\n    return 'fine'\n") == []
+    assert lint("specs/plan.md", "русская проза от человека") == [], (
+        "prose artifacts are data — any language is legitimate")
+
+
+def test_write_door_refuses_dirty_code(tmp_path):
+    e = eng.Engine(workspace=str(tmp_path / "wk"), depth=eng.DEPTH_SPEC)
+    ws = e.workspace
+    ws.enabled = True
+    ws.root = str(tmp_path / "wk")
+    ws._write("src/m.py", "def получить():\n    return 1\n", "code")
+    assert not (pathlib.Path(ws.root) / "src" / "m.py").exists(), (
+        "dirty code must never LAND — the door refuses, not just warns")
+    assert any(str(a.get("type", "")).startswith("refused")
+               for a in ws.artifacts), "the refusal must leave a record"
+    ws._write("src/m.py", "def ok():\n    return 1\n", "code")
+    assert (pathlib.Path(ws.root) / "src" / "m.py").exists(), (
+        "clean code passes the same door untouched")
+
+
+def test_code_style_rule_reaches_worker_prompts():
+    import importlib
+    rw = importlib.import_module("harness.role_worker")
+    blk = rw._code_style_block()
+    assert eng.RULE_CODE_STYLE in blk, (
+        "workers must be TOLD the rule the door enforces (same constant)")
+    src = pathlib.Path(rw.__file__).read_text(encoding="utf-8")
+    assert src.count("_code_style_block()") >= 2, (
+        "both the implementer and the reviewer systems must carry the rule")

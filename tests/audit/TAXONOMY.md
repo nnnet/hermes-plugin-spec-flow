@@ -135,6 +135,13 @@ tester-invented `db` module with an unrelated repo's code.
   the rename journaled and sibling depends_on remapped; the id style is also
   stated to the decomposer via engine_rules (v151: a human note became node
   «красивый_вид» inside workspace file names).
+- S10.12 ONE write door for delivered code: `_delivery_lint` (English/ASCII
+  identifiers, no Cyrillic in code files, no absolute host paths, ASCII
+  file paths) runs inside BOTH workspace `_write` doors — dirty code never
+  lands, the refusal is recorded, and the writer sees the reason via the
+  write_refused history. The rule is ONE constant (RULE_CODE_STYLE) rendered
+  into the implementer and reviewer prompts — prompt and gate cannot drift.
+  Human prose artifacts (specs, notes) are data and are never linted.
 
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.

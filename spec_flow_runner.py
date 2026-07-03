@@ -110,6 +110,16 @@ class _LeafWorkspaceView:
         self.enabled = True
 
     def _write(self, rel: str, content: str, kind: str) -> str:
+        bad = _delivery_lint(rel, content)
+        if bad:
+            # the door REFUSES: dirty code never lands (RULE_CODE_STYLE)
+            try:
+                self._base.artifacts.append(
+                    {"path": rel, "type": "refused_%s" % kind,
+                     "reason": "; ".join(bad)})
+            except Exception:  # noqa: BLE001
+                pass
+            return rel
         path = Path(self.root) / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
@@ -382,6 +392,11 @@ RULE_ROUTE_OWNERSHIP = "every declared route is owned by exactly ONE leaf"
 RULE_NODE_ID_STYLE = (
     "node ids MUST be ASCII snake_case English (ids become file names: "
     "specs/<id>.md, src/<id>.py); the engine renames non-conforming ids")
+RULE_CODE_STYLE = (
+    "delivered code (src/*.py, tests/*.py) is English-only ASCII: identifier "
+    "names, comments and string literals; no Cyrillic or other foreign "
+    "scripts; no absolute host paths. The workspace write door REFUSES "
+    "non-conforming files, so such a delivery never lands")
 RULE_ATOMIC_LEAF_MODULE = (
     "an atomic leaf builds exactly ONE module: src/<snake(node_id)>.py; a "
     "concern needing several modules must become graph CHILDREN, never prose "
@@ -851,6 +866,47 @@ def _ascii_node_id(raw: str, fallback: str, taken=()) -> str:
         cand = "%s_%d" % (base, n)
         n += 1
     return cand
+
+
+_CYRILLIC_RE = re.compile(r"[Ѐ-ӿ]")
+
+
+def _delivery_lint(rel: str, body: str) -> list:
+    """ONE write-door hygiene check for delivered CODE (src/*.py, tests/*.py).
+    Enforces RULE_CODE_STYLE — the same constant workers see in their prompts,
+    so prompt and gate can never drift. Findings (each a class that already
+    cost a run): non-ASCII file path (v151 «красивый_вид» in workspace paths),
+    non-ASCII identifiers (they become the product's API), Cyrillic anywhere
+    in a code file, absolute host paths (v149 boundary class). Non-code
+    artifacts (specs, notes, contracts) are NOT linted — human prose is data
+    and may be any language. A SyntaxError is not the door's business: the
+    identifier scan is skipped and the suite owns that verdict."""
+    findings = []
+    if not str(rel).isascii():
+        findings.append("non-ascii file path %r" % rel)
+    p = str(rel).replace("\\", "/")
+    if not (p.endswith(".py") and (p.startswith("src/")
+                                   or p.startswith("tests/"))):
+        return findings
+    text = body or ""
+    if _CYRILLIC_RE.search(text):
+        findings.append("cyrillic text in code file %s (code is English-only)"
+                        % rel)
+    for m in _BOUNDARY_PATH_RE.finditer(text):
+        findings.append("absolute host path %s in %s" % (m.group(1), rel))
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return findings
+    bad = set()
+    for node in ast.walk(tree):
+        for attr in ("name", "id", "arg", "attr", "asname", "module"):
+            v = getattr(node, attr, None)
+            if isinstance(v, str) and v and not v.isascii():
+                bad.add(v)
+    findings.extend("non-ascii identifier %r in %s" % (v, rel)
+                    for v in sorted(bad))
+    return findings
 
 
 def _leaf_code_lost(body: str) -> bool:
@@ -1704,6 +1760,12 @@ class Workspace:
 
     def _write(self, rel: str, content: str, kind: str) -> str:
         if not self.enabled:
+            return rel
+        bad = _delivery_lint(rel, content)
+        if bad:
+            # the door REFUSES: dirty code never lands (RULE_CODE_STYLE)
+            self.artifacts.append({"path": rel, "type": "refused_%s" % kind,
+                                   "reason": "; ".join(bad)})
             return rel
         path = Path(self.root) / rel
         path.parent.mkdir(parents=True, exist_ok=True)
