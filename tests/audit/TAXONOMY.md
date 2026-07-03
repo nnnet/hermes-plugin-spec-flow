@@ -309,6 +309,65 @@ tester-invented `db` module with an unrelated repo's code.
   task_check_mismatch' was HONEST remediation residue (reconcile → rework
   → escalate over the S10.23 wrong-test class, red run end keeps the cause
   open); its root class is S10.23, no separate gate owed.
+- S10.27 a leaf test asserting a FOREIGN BODY SHAPE on a contracted route
+  reds AT THE LEAF, at the same seam as the status gate
+  (`test_leaf_test_body_shape_gate.py`): the contracted body MEDIUM of a
+  route is ONE datum (`_route_media_map`: `_product_contract`'s media map —
+  human wording around each METHOD-route mention, JSON literal vs page/HTML
+  words, conflict = unclassified, the window never crosses a statement —
+  plus the fixed-body routes), read by BOTH the interface-contract writer
+  (row `media` in contracts/interface.json) and `_leaf_test_status_gate`; a
+  POSITIVE membership assertion of an HTML tag marker (`'<ul' in body`,
+  `assertIn('<h1>', body)`) after calling a JSON-media route is a finding
+  NAMING the contracted shape and the HTML-owning route. Marker-level only
+  — never an HTML parser; the amend exemption stays STATUS-scope (v158: the
+  'nice to read' amend's tester wrote HTML assertions against GET /notes
+  into tests/test_core.py — GET /notes' body is frozen JSON, the HTML
+  surface belongs to GET /ui — the status gate saw only codes, the foreign
+  tests reached assembly, redded exactly two suite tests at event 139 and
+  the doctor reworked CORE, the wrong artifact, twice). Green edges: the
+  same HTML assertion in the HTML route's own test; JSON assertions on the
+  JSON route; an unclassified route is never flagged (v151 lesson).
+- S10.28 a provider reply of ANY content shape degrades, never crashes the
+  calling step (`test_provider_reply_shape.py`, real local HTTP server —
+  no monkeypatch on the LLM path): `_message_text` normalizes str /
+  content-parts list / part dicts / `reasoning` fallback at the ONE parse
+  seam, and the shape-except includes TypeError/AttributeError so a
+  residual surprise becomes a retryable 'bad response shape' attempt (v158
+  root of the OPEN `about_page:empty_delta`: the delta gate was RIGHT —
+  the leaf delivered NOTHING because a list-shaped `message.content` hit
+  `text.strip()` → AttributeError escaped both the narrow shape-except and
+  ask()'s RuntimeError-only chain except and killed the orchestra coder
+  AND tester steps, llm-log 155/160: `'list' object has no attribute
+  'strip'`; the run-end honestly kept the cause open).
+- S10.29 an ENGINE-written support module has a legitimate owner in the
+  realized tree (`test_engine_artifact_ownership.py`): the writer of
+  src/_product_logic.py is `_harvest_entry_handlers` (entry synthesis
+  relocates a monolithic entry's handlers so the resolver can wire them —
+  the `import *` synth pattern left in v124, the WRITER stayed); a
+  successful harvest now records the module in the entry-owning node's
+  `artifacts` (tree DATA the layer-1 `owned_modules` reader honours — no
+  name exemption, historical recordless runs keep their honest
+  orphan_src_file finding, pinned on v158), and `_drop_stale_harvest`
+  removes a harvest the final synthesized entry no longer references
+  (v157/v158: the zombie was re-flagged run after run).
+  v156 investigator postscript (findings 3-4, assessed v158):
+  * 'core forced into non-atomic multi-concern ownership' — the storage
+    concern is structurally solved by S10.22 (v158 plan: src/db.py is its
+    own pinned leaf, S11 module contracts held with zero ImportError); the
+    remaining accumulation of late amends on core (req_a54f9144,
+    about_page) is the DELIBERATE amend-in-place design (S4.2, B3
+    anti-duplication registry) guarded by the delta gate and S10.24 route
+    binding — forking a module per late requirement is the worse v152/v154
+    rival-module class. No new gate owed.
+  * 'integration gate accepted PASS against partial state' — covered: the
+    pre-assembly acceptance PASS (v158 event 136) is not terminal
+    authority; entry synthesis follows (138), the assembled suite is
+    re-verified (139-145) and Phase 7's assembled-suite conjunction
+    (`_assembled_suite_failures`, tests/coverage/
+    test_assembled_suite_conjunction.py) plus the root_red honest AND
+    (S3.1) decide the verdict — v158 ended NOT READY (147/149) despite
+    the early PASS. No new gate owed.
 
 ## STAGE 11 — Inter-module symbol contracts (`test_module_symbol_contract.py`)
 THE META-CLASS (v149/v150/v156/v157 lineage): a value TWO leaves must agree
