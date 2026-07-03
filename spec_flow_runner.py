@@ -8544,6 +8544,13 @@ def %(callable)s(environ, start_response):
                 "(e.g. ensure any required state — a DB schema/table — is "
                 "initialised before it is used). Keep the existing public API. "
                 "Do NOT weaken or edit the tests.\n")
+            # S11.4 (v157): the rework re-prints the FROZEN module symbol
+            # contract — the doctor's three core reworks each re-guessed the
+            # db surface; the rewriting LLM must see the engine-declared
+            # datum, and the write door enforces the same datum anyway.
+            _contract_block = self._module_contract_binding_text(module)
+            if _contract_block:
+                directive += "\n" + _contract_block + "\n"
             if "Repair directive (integrate acceptance RED)" not in base:
                 sp.write_text(base + directive, encoding="utf-8")
         except OSError:
