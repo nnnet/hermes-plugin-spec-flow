@@ -3688,6 +3688,25 @@ class Engine:
                 "node into children that own those files, or retarget the "
                 "spec (Scope/Requirements) at the leaf's own module"
                 % (", ".join("src/%s.py" % f for f in foreign), own))
+        # FOREIGN-surface spec (S10.18, v152): this leaf's own text claims a
+        # route ANOTHER node already owns in the ownership datum. v152: web_ui's
+        # spec copy-pasted the frozen JSON API routes (POST /notes, GET /notes)
+        # the core leaf owned, with contradictory HTML semantics — both modules
+        # defined post_notes/get_notes, assembly adopted core's, web_ui's became
+        # dead rival code, surfacing only at root integrate. Red EARLY, here at
+        # the card, reading ONLY the _route_owners datum. Amend nodes are exempt
+        # (code_target ⇒ _leaf_owned_routes is empty; they QUOTE the owner).
+        nid = str(node.get("id") or "")
+        reg = self.__dict__.get("_route_owners") or {}
+        for m, p in self._leaf_owned_routes(node):
+            others = sorted(x for x in reg.get((m, p), ()) if x != nid)
+            if others:
+                out.append(
+                    "route %s %s is ALREADY owned by leaf '%s' (%s) — this "
+                    "leaf's spec must not claim a foreign route: remove the "
+                    "%s %s text from this card, or re-own the route "
+                    "explicitly through decomposition"
+                    % (m, p, others[0], RULE_ROUTE_OWNERSHIP, m, p))
         return out
 
     def _leaf_route_binding(self, node: dict) -> str:

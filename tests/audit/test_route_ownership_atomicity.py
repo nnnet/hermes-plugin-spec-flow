@@ -167,6 +167,56 @@ def test_duplicate_route_ownership_is_honest_not_ready(plugin, tmp_path):
         " tick 114, doctor treatments: 0 at tick 115)")
 
 
+# ── S10.18 the card gate reds EARLY on a foreign-route spec claim ────────────
+# v152 finding #2: web_ui's spec copy-pasted the frozen JSON API routes with
+# contradictory HTML semantics — core.py and web_ui.py both defined
+# post_notes/get_notes; assembly adopted core's, web_ui's became dead rival
+# code. With S10.16+S10.17 that reds at ROOT integrate — but that is LATE.
+# The card gate must red at the LEAF, naming the owner.
+
+def test_card_gate_reds_on_foreign_route_claim(tmp_path):
+    e = _engine(tmp_path)
+    owner = {"id": "core", "title": "core notes",
+             "requirement": "serve POST /notes and GET /notes"}
+    assert e._leaf_owned_routes(owner)
+    rival = {"id": "web_ui", "title": "web ui",
+             "requirement": "render an HTML list; also serve POST /notes",
+             "acceptance": ["Given a note, When POSTed, Then HTML shows it"]}
+    finds = e._card_completeness_findings(rival)
+    assert any("core" in f and "/notes" in f for f in finds), (
+        "a leaf spec claiming a route ANOTHER node already owns must red at"
+        " the card gate NAMING the owner (v152: web_ui copy-pasted core's"
+        f" routes and shipped dead rival handlers) — got: {finds!r}")
+
+
+def test_card_gate_green_on_own_new_route(tmp_path):
+    e = _engine(tmp_path)
+    owner = {"id": "core", "title": "core notes",
+             "requirement": "serve POST /notes and GET /notes"}
+    assert e._leaf_owned_routes(owner)
+    mine = {"id": "web_ui", "title": "web ui",
+            "requirement": "render the HTML list at GET /ui",
+            "acceptance": ["Given notes, When GET /ui, Then HTML lists them"]}
+    assert e._card_completeness_findings(mine) == [], (
+        "a leaf claiming ONLY its own (sole-owner) route is legitimate — the"
+        " gate must stay silent")
+
+
+def test_card_gate_amend_node_stays_exempt(tmp_path):
+    # the S10.10/v151 class: an amend node QUOTES the owner's source as edit
+    # context — it owns nothing and needs no card; never regress this
+    e = _engine(tmp_path)
+    owner = {"id": "core", "title": "core notes",
+             "requirement": "serve POST /notes and GET /notes"}
+    assert e._leaf_owned_routes(owner)
+    amend = {"id": "beautify", "title": "make notes pretty",
+             "code_target": "src/core.py",
+             "requirement": "polish the POST /notes and GET /notes output"}
+    assert e._card_completeness_findings(amend) == [], (
+        "an amend node (code_target) quoting the owner's routes is exempt"
+        " from the foreign-surface card gate")
+
+
 def test_single_owner_plan_has_no_duplicate_event(plugin, tmp_path):
     res = _run(tmp_path, plugin, _single_owner_decomposer)
     assert res is not None
