@@ -429,7 +429,8 @@ Python symbols:
   regardless.
 
 ## STAGE 12 — Request/config surface as data (`test_request_shape_gate.py`,
-`test_rework_preserves_route_surface.py`, `test_unserved_route_fastfail.py`)
+`test_rework_preserves_route_surface.py`, `test_unserved_route_fastfail.py`,
+`test_doctor_cause_attribution.py`)
 The v159 class: what a route ACCEPTS (request body fields) and what the
 product reads from the ENVIRONMENT (config) are two different human-stated
 surfaces; when neither exists as engine data, two agents can agree on the
@@ -473,6 +474,16 @@ same wrong reading and stay green until product e2e.
   /about's 404 was honest but surfaced route-attributed only in the LAST
   plan check (tick 170), after the doctor had burnt every repair round on
   generic 'weak_implementer'.
+- S12.4 a gate finding opens a doctor cause NAMED BY ITS GATE
+  (`test_status_gate` -> `test_status`, `request_shape_gate` ->
+  `request_shape`), never shoved into an unrelated bucket
+  (`spec_flow_diagnosers._gate_cause`: the `_scope_findings` fallback derives
+  the cause id from the originating gate; only delta-flavoured gates and
+  hollow-delta texts keep `empty_delta` = 'delivered nothing'). v160 (event
+  128/129): the test-status finding «asserts membership over [200, 201]» was
+  diagnosed `empty_delta -> reject_empty` although files WERE delivered — a
+  mislabeled ledger entry the delta revalidation could never close.
+  (`test_doctor_cause_attribution.py`)
 
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.

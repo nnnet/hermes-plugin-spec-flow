@@ -31,11 +31,27 @@ def _ev(evidence: Any) -> dict:
 
 
 # --- structural detectors ----------------------------------------------------
+def _gate_cause(gate: str) -> str:
+    """S12.4 (v160): the fallback cause id DERIVES from the originating gate id
+    ('test_status_gate' -> 'test_status') so a gate finding opens a cause NAMED
+    BY ITS GATE — never shoved into an unrelated bucket. In v160 a test-status
+    violation was filed as empty_delta ('delivered nothing' — files WERE
+    delivered); the mislabeled cause never closed and flipped a green terminal."""
+    g = str(gate or "")
+    if g.endswith("_gate"):
+        g = g[: -len("_gate")]
+    return g or "empty_delta"
+
+
 def _scope_findings(node, gate, verdict, ev, ctx, helpers) -> list:
     """A late-requirement spec that re-declares existing routes/symbols and adds
     no new surface = empty delta (the v041 failure). Scope findings come from the
-    engine's _dup_surface_findings, passed in as evidence['scope_findings']."""
+    engine's _dup_surface_findings, passed in as evidence['scope_findings'].
+    Findings whose text does not name a hollow/oversized delta open a cause
+    derived from the ORIGINATING gate (S12.4), keeping the ledger attributable."""
     findings = ev.get("scope_findings") or []
+    fallback = ("empty_delta" if "delta" in str(gate or "").lower()
+                else _gate_cause(gate))
     out = []
     for f in findings:
         s = str(f)
@@ -46,7 +62,7 @@ def _scope_findings(node, gate, verdict, ev, ctx, helpers) -> list:
             out.append(Finding(cause="excess_input", detector="scope_findings",
                                evidence=s[:200]))
         else:
-            out.append(Finding(cause="empty_delta", detector="scope_findings",
+            out.append(Finding(cause=fallback, detector="scope_findings",
                                evidence=s[:200]))
     return out
 
