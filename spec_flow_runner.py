@@ -5804,10 +5804,12 @@ def %(callable)s(environ, start_response):
         # a node that exposes nothing, and never a hard red — a weak decomposer
         # that cannot card is surfaced, not blocked; the boot/suite gate stays
         # the real authority.
+        _card_fails = 0
         for _card_round in range(2):
             gaps = self._card_completeness_findings(node)
             if not gaps:
                 break
+            _card_fails += 1
             self.emit("review", "engine", "", nid,
                       "card gate: incomplete or non-atomic leaf card",
                       "; ".join(gaps)[:300], "spec_lint", "FAIL",
@@ -5837,6 +5839,19 @@ def %(callable)s(environ, start_response):
                 node["acceptance"] = cout["acceptance"]
             if cout.get("examples"):
                 node["examples"] = cout["examples"]
+        else:
+            # both rounds red — recheck the LAST fill before judging
+            gaps = self._card_completeness_findings(node)
+        # v152 (S10.15): a milestone FAIL demands an attributable resolution —
+        # when the fill rework satisfies the gate, journal the matching PASS
+        # (same 'card gate' action prefix, same node) so the run's journal
+        # closes the episode instead of leaving the FAIL hanging on a green run
+        if _card_fails and not gaps:
+            self.emit("review", "engine", "", nid,
+                      "card gate: satisfied after card fill",
+                      "acceptance criteria present; leaf card complete after "
+                      f"{_card_fails} fill round(s)", "spec_lint", "PASS",
+                      level=L_MILESTONE)
         # deterministic DECOMPOSITION-QUALITY lint BEFORE the reviewer: a LATE
         # requirement whose spec re-states an existing surface (duplicate) is
         # narrowed to its delta by a bounded author round carrying the EXACT

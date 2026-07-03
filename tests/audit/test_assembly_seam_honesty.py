@@ -674,3 +674,84 @@ def test_collapse_purge_silent_when_nothing_foreign(plugin, tmp_path):
     l0 = tmp_path / "wk" / "specs" / "l0.md"
     assert l0.is_file() and "src/app.py" in l0.read_text(encoding="utf-8"), (
         "a mention of the OWNED entry module must survive the purge intact")
+
+
+# ── S10.15 a gate FAIL gets an attributable resolution EVENT ─────────────────
+# v152: 'card gate: incomplete or non-atomic leaf card' FAILed at milestone
+# level for core and web_ui; the card-fill rework then satisfied the gate, but
+# the engine never journaled a matching PASS — the journal invariant honestly
+# flagged unresolved_milestone_fail ×4 on a genuinely-green run. Both sides
+# fix: the engine emits a milestone PASS (same 'card gate' action prefix) when
+# the gate passes AFTER a fail, and the invariant accepts exactly that event
+# (same prefix + same task + PASS) as closure — never the mere absence of a
+# later failure.
+
+def test_card_gate_pass_after_rework_is_journaled(plugin, tmp_path):
+    from harness import auto_implementer
+    res = eng.run_project(dict(WEB_PROJECT),
+                          workspace=str(tmp_path / "wk"), depth="product",
+                          tools=plugin.tools, contracts_dir=str(eng.CONTRACTS),
+                          agents={"decomposer": _rejected_plan_decomposer,
+                                  "implementer": auto_implementer.implement})
+    assert res is not None
+    evs = [vars(e) for e in res.events]
+    fails = [i for i, e in enumerate(evs)
+             if str(e.get("action", "")).startswith("card gate")
+             and e.get("verdict") == "FAIL"]
+    assert fails, "sanity: the collapse core leaf starts card-less → FAIL"
+    node = str(evs[fails[0]].get("task", "")).split(":", 1)[0]
+    resolved = [e for e in evs[fails[0] + 1:]
+                if str(e.get("task", "")).split(":", 1)[0] == node
+                and str(e.get("action", "")).startswith("card gate")
+                and e.get("verdict") == "PASS"
+                and e.get("level") == 1]
+    assert resolved, (
+        "the card gate passed after the fill rework but the journal shows no"
+        " matching PASS — the FAIL is unattributable (v152"
+        " unresolved_milestone_fail ×4 on a green run)")
+
+
+def _ji():
+    import importlib
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+    return importlib.import_module("journal_invariants")
+
+
+def _trace(tmp_path, events):
+    run = tmp_path / "run"
+    run.mkdir(exist_ok=True)
+    (run / "trace.jsonl").write_text(
+        "".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
+    return run
+
+
+_TERMINAL = {"task": "product", "phase": "product", "action": "final",
+             "detail": "", "verdict": "READY", "level": 1}
+_CARD_FAIL = {"task": "core", "phase": "review",
+              "action": "card gate: incomplete or non-atomic leaf card",
+              "detail": "no acceptance", "verdict": "FAIL", "level": 1}
+
+
+def test_fail_closure_accepts_same_prefix_pass(tmp_path):
+    ji = _ji()
+    pass_ev = {"task": "core", "phase": "review",
+               "action": "card gate: satisfied after card fill",
+               "detail": "acceptance present", "verdict": "PASS", "level": 1}
+    run = _trace(tmp_path, [_CARD_FAIL, pass_ev, _TERMINAL])
+    kinds = {f.kind for f in ji.audit(run)}
+    assert "unresolved_milestone_fail" not in kinds, (
+        "a milestone PASS of the SAME gate prefix on the SAME task is the"
+        f" attributable resolution — got: {kinds}")
+
+
+def test_fail_closure_still_red_without_explicit_pass(tmp_path):
+    ji = _ji()
+    # absence of a later failure is NOT resolution; neither is a PASS of the
+    # same gate on a DIFFERENT task
+    other = {"task": "web_ui", "phase": "review",
+             "action": "card gate: satisfied after card fill",
+             "detail": "", "verdict": "PASS", "level": 1}
+    run = _trace(tmp_path, [_CARD_FAIL, other, _TERMINAL])
+    kinds = {f.kind for f in ji.audit(run)}
+    assert "unresolved_milestone_fail" in kinds, (
+        "a PASS on another task must NOT close this task's FAIL")

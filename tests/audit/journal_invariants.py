@@ -226,8 +226,20 @@ def check_late_requirement_ownership(events: list[dict], journal: str) -> list[F
     return findings
 
 
+def _gate_prefix(event: dict) -> str:
+    """The gate identity of an event's action: text before ':' (or the whole
+    action), lower-cased — 'card gate: incomplete …' -> 'card gate'."""
+    return str(event.get("action", "")).split(":", 1)[0].strip().lower()
+
+
 def check_fail_closure(events: list[dict], journal: str) -> list[Finding]:
-    """A milestone FAIL must be remedied later OR the run must end NOT READY."""
+    """A milestone FAIL must be remedied later OR the run must end NOT READY.
+
+    Resolution is an EXPLICIT event, never the mere absence of a later
+    failure (S10.15): either a remedy/rework/reconcile/repair event for the
+    same node, or a later milestone PASS of the SAME gate prefix on the SAME
+    node (the engine's 'card gate: satisfied after card fill' shape).
+    """
     product_events = [e for e in events if e.get("phase") == "product"]
     terminal = product_events[-1].get("verdict") if product_events else None
     if terminal == "NOT READY":
@@ -237,8 +249,18 @@ def check_fail_closure(events: list[dict], journal: str) -> list[Finding]:
         if event.get("level") != 1 or event.get("verdict") != "FAIL":
             continue
         node = _base_task(event)
+        prefix = _gate_prefix(event)
         remedied = any(
-            _base_task(later) == node and _REMEDY_MARKER.search(_text(later))
+            _base_task(later) == node
+            and (
+                _REMEDY_MARKER.search(_text(later))
+                or (
+                    str(later.get("verdict", "")).upper() == "PASS"
+                    and later.get("level") == 1
+                    and prefix
+                    and _gate_prefix(later) == prefix
+                )
+            )
             for later in events[index + 1:]
         )
         if not remedied:
