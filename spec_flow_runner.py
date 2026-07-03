@@ -3562,6 +3562,15 @@ class Engine:
         (Phase 1), the leaf handler gate (Phase 2) and the plan-ownership report
         (Phase 6) — derived ONCE, deterministically, never guessed. Returns a
         list of ``(method, path)``; empty for a non-HTTP leaf."""
+        # The datum mirrors the node's CURRENT text/shape (S10.16): drop this
+        # node's stale rows FIRST, so a reworked spec (foreign route removed)
+        # or a node that later gained children falls OUT of _route_owners
+        # instead of sticking as a phantom duplicate forever.
+        nid = str(node.get("id") or "")
+        reg = self.__dict__.setdefault("_route_owners", {})
+        if nid:
+            for _own_set in list(reg.values()):
+                _own_set.discard(nid)
         # An amend node (code_target set) EDITS an existing owner module; it owns
         # no route of its own. Its spec MENTIONS the owner's route (e.g. "/ui") to
         # describe the edit, but mentioning a route is not owning it — attributing
@@ -3569,6 +3578,13 @@ class Engine:
         # owner's handler, and the anti-fork lint reject it as a duplicate (v145
         # красивый_вид: routed to amend web_ui, then RED for "restating" /ui).
         if node.get("code_target"):
+            return []
+        # S10.16 (v152): ownership means "this LEAF BUILDS the route" — only a
+        # childless leaf may enter the datum. A branch/root text names routes by
+        # construction (it states the whole product): v152 recorded L0 as an
+        # owner of all three routes, turning every route into a phantom
+        # duplicate in the plan-ownership report.
+        if node.get("children"):
             return []
         try:
             routes = self._declared_route_set(self._product_contract() or {})
@@ -3586,9 +3602,7 @@ class Engine:
         # record the datum ONCE: the plan-ownership report reads THIS map,
         # never spec prose (v151: amend specs quote the owner's source as
         # edit context, so a text grep saw every route in every spec)
-        nid = str(node.get("id") or "")
         if owned and nid:
-            reg = self.__dict__.setdefault("_route_owners", {})
             for r in owned:
                 reg.setdefault(r, set()).add(nid)
         return owned
