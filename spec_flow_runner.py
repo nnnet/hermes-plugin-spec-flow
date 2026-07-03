@@ -1435,6 +1435,49 @@ def _rewrite_exact_status_asserts(text: str, test_rel: str,
     return text, notes, unfixed
 
 
+def _strip_junk_payload_dicts(text: str, test_rel: str,
+                              fixes: list) -> "tuple":
+    """S12.13 (v163): mechanically EMPTY a junk payload literal sent by a
+    direct canonical-handler call to a route whose contracted request shape
+    is EMPTY — ``get_about({"irrelevant": 1}, {})`` becomes
+    ``get_about({}, {})``.
+
+    Why: v163 — 'tests/test_core.py sends payload field(s) 'irrelevant' to
+    `GET /about` outside the contracted request shape []' was the ONLY red
+    over a fully green product. An empty contracted shape leaves exactly ONE
+    correct payload ({}), so the repair carries zero ambiguity — the S12.7
+    smeared-status class one gate over; round-tripping it through model
+    rework is what fed the eternal open cause.
+    What: pure text surgery on the dict-node spans (the S12.7 pattern; no
+    re-formatting of anything else). ``fixes`` is
+    [(dict_node, (method, path), junk_fields), ...] where the caller already
+    verified the call shape is canonical (direct handler call, dict literal
+    as the first positional arg, all keys string constants, contracted shape
+    EMPTY). A node whose source span cannot be resolved lands in ``unfixed``
+    so the caller reds it with the classic finding instead.
+    Test: tests/audit/test_request_shape_autofix.py."""
+    starts = [0]
+    for ln in text.splitlines(keepends=True):
+        starts.append(starts[-1] + len(ln))
+    notes, unfixed, repl = [], [], []
+    for dnode, route, extra in fixes:
+        try:
+            a = starts[dnode.lineno - 1] + dnode.col_offset
+            b = starts[dnode.end_lineno - 1] + dnode.end_col_offset
+            repl.append((a, b, "{}"))
+            notes.append("%s:%d: sends junk field(s) %s to `%s %s` whose "
+                         "contracted request shape is EMPTY — payload "
+                         "emptied to {}"
+                         % (test_rel, dnode.lineno,
+                            ", ".join(map(repr, extra)),
+                            route[0], route[1]))
+        except Exception:  # noqa: BLE001 — an unfixable node stays a finding
+            unfixed.append((dnode, route, extra))
+    for a, b, new in sorted(repl, reverse=True):
+        text = text[:a] + new + text[b:]
+    return text, notes, unfixed
+
+
 def _route_fixed_body(method: str, path: str) -> "Optional[dict]":
     """The ONE contracted response body for a route that carries a FIXED body
     — currently only the liveness route: GET /health(z) answers exactly
@@ -5373,7 +5416,15 @@ class Engine:
         # (b) LEAF TEST: a payload sent to a shaped route must stay inside
         # the contract — the tester following the same wrong reading is
         # exactly how v159 stayed green until product e2e
-        ttree = _parse(test_rel) if test_rel else None
+        autofixes: list = []     # S12.13: (dict_node, route, junk_fields)
+        ttree, ttext = None, ""
+        if test_rel:
+            try:
+                ttext = (Path(self.workspace.root) / test_rel).read_text(
+                    encoding="utf-8", errors="replace")
+                ttree = ast.parse(ttext)
+            except (OSError, SyntaxError, ValueError, TypeError):
+                ttree = None
         if ttree is not None:
             for call in ast.walk(ttree):
                 if not isinstance(call, ast.Call):
@@ -5411,13 +5462,53 @@ class Engine:
                         if isinstance(k, ast.Constant)
                         and isinstance(k.value, str)}
                 extra = sorted(keys - set(shaped[route]))
-                if extra:
-                    findings.append((test_rel, (
-                        "%s sends payload field(s) %s to `%s %s` outside the "
-                        "contracted request shape %r — the test must send "
-                        "ONLY contracted fields"
-                        % (test_rel, ", ".join(map(repr, extra)),
-                           route[0], route[1], sorted(shaped[route])))))
+                if not extra:
+                    continue
+                # S12.13 (v163): an EMPTY contracted shape leaves exactly ONE
+                # correct payload ({}) — a junk field in a CANONICAL call
+                # (direct handler call, dict literal as the first positional
+                # arg, every key a string constant) is repaired mechanically,
+                # the S12.7 class one gate over. A junk field on a NON-empty
+                # contract is ambiguous (junk? typo of a contracted field?)
+                # and every other shape is non-trivial — both stay the
+                # honest red finding.
+                if (not quiet and not shaped[route]
+                        and handler_route.get(fname) is not None
+                        and call.args and payload_arg is call.args[0]
+                        and len(keys) == len(payload_arg.keys)):
+                    autofixes.append((payload_arg, route, extra))
+                    continue
+                findings.append((test_rel, (
+                    "%s sends payload field(s) %s to `%s %s` outside the "
+                    "contracted request shape %r — the test must send "
+                    "ONLY contracted fields"
+                    % (test_rel, ", ".join(map(repr, extra)),
+                       route[0], route[1], sorted(shaped[route])))))
+        if autofixes:
+            # S12.13: apply the mechanical repair and JOURNAL it — the run's
+            # trace must show the engine edited the artifact; an unfixable
+            # node falls back to the classic red finding (never dropped)
+            new_text, notes, unfixed = _strip_junk_payload_dicts(
+                ttext, test_rel, autofixes)
+            if notes:
+                (Path(self.workspace.root) / test_rel).write_text(
+                    new_text, encoding="utf-8")
+                _fix_addr = self._artifact_owner_nid(test_rel, nid)
+                self.loops.append({"type": "request-shape-autofix",
+                                   "task": _fix_addr,
+                                   "detail": "; ".join(notes)[:400]})
+                self.emit("review", "engine", "", _fix_addr,
+                          "request-shape autofix: junk payload emptied on a "
+                          "route whose contracted request shape is EMPTY",
+                          "; ".join(notes)[:300], "request_shape_autofix",
+                          "ENFORCED", level=L_MILESTONE)
+            for _d, _route, _extra in unfixed:
+                findings.append((test_rel, (
+                    "%s sends payload field(s) %s to `%s %s` outside the "
+                    "contracted request shape %r — the test must send "
+                    "ONLY contracted fields"
+                    % (test_rel, ", ".join(map(repr, _extra)),
+                       _route[0], _route[1], sorted(shaped[_route])))))
         if not findings:
             return True
         # S12.12 (v163): address every finding to the node that OWNS its
