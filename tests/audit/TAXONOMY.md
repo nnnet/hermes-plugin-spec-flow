@@ -484,6 +484,19 @@ same wrong reading and stay green until product e2e.
   diagnosed `empty_delta -> reject_empty` although files WERE delivered — a
   mislabeled ledger entry the delta revalidation could never close.
   (`test_doctor_cause_attribution.py`)
+- S12.5 an open doctor cause CLOSES ATTRIBUTABLY when its node reaches DONE
+  and the OPENING gate re-runs clean on the CURRENT artifacts — the S10.15
+  class (attributable resolution) applied to the doctor ledger. The gate FAIL
+  registers a side-effect-free recheck (`_register_gate_recheck`, quiet gate
+  re-run); root-gate evaluation (`_prune_stale_causes`) re-derives every open
+  cause of a DONE node with it: clean -> resolved event naming the gate
+  («cause resolved: <gate> re-ran clean»); still red -> the cause stays open
+  and holds the root red; causes on non-DONE nodes untouched. NEVER a blind
+  auto-close — the verdict is the gate's own re-run. v160 (events 130-138 /
+  145): rework fixed the assert, the node reached DONE through
+  contract_check + review_pass + verification, yet the (mislabeled, S12.4)
+  cause stayed open forever and single-handedly flipped a fully green
+  product to NOT READY. (`test_doctor_cause_attribution.py`)
 
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.

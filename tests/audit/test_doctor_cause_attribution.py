@@ -98,3 +98,98 @@ def test_dup_surface_text_keeps_empty_delta_on_any_gate():
                      "no new route"]},
                  context=Context(node="delete_note", gate="spec_review"))
     assert any(f.cause == "empty_delta" for f in out)
+
+
+# --- S12.5: causes close attributably when the opening gate re-runs clean -----
+
+_SMEARED = """\
+    def _call(method, path):
+        return 201
+
+
+    def test_post_created():
+        code = _call("POST", "/notes")
+        assert code in (200, 201)
+"""
+
+_EXACT = """\
+    def _call(method, path):
+        return 201
+
+
+    def test_post_created():
+        code = _call("POST", "/notes")
+        assert code == 201
+"""
+
+_NID = "notes_api"
+_TEST_REL = "tests/test_notes_api.py"
+
+
+def _engine(tmp_path):
+    eng = sfr.Engine(workspace=str(tmp_path / "wk"), depth=sfr.DEPTH_SPEC,
+                     doctor_project={"doctor": {"enabled": True}})
+    eng._product_contract = lambda: dict(_CONTRACT)
+    return eng
+
+
+def _write_test(eng, body: str) -> None:
+    p = pathlib.Path(eng.workspace.root) / _TEST_REL
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(textwrap.dedent(body), encoding="utf-8")
+
+
+def _open_cause_via_gate(eng) -> None:
+    node = {"id": _NID, "title": "Notes API",
+            "requirement": "own POST /notes and GET /notes"}
+    _write_test(eng, _SMEARED)
+    ok = eng._leaf_test_status_gate(node, _NID, 1, _TEST_REL)
+    assert ok is False
+    opened = eng._doctor_open_causes()
+    assert opened, "the gate FAIL must open a doctor cause"
+    assert any("test_status" in c for _n, c in opened), (
+        f"S12.4: the cause must be named by its gate, got {opened}")
+
+
+def _mark(eng, status: str) -> None:
+    eng.tasks[_NID] = sfr.Task(id=_NID, title="Notes API", kind="impl",
+                               profile="", skill="", status=status)
+
+
+def test_fixed_artifact_on_done_node_closes_cause_attributably(tmp_path):
+    eng = _engine(tmp_path)
+    _open_cause_via_gate(eng)
+    _write_test(eng, _EXACT)            # rework fixed the assert
+    _mark(eng, "done")                  # node reached DONE through its gates
+    eng._prune_stale_causes()           # root-gate evaluation re-derives
+    assert eng._doctor_open_causes() == [], (
+        "v160: the node passed the very gate that opened the cause — a still-"
+        "open ledger entry lies about the product and flips a green terminal")
+    res = [lp for lp in eng.loops if lp.get("type") == "doctor"
+           and lp.get("outcome") == "resolved"]
+    assert res and "test_status_gate" in str(res[-1].get("detail", "")), (
+        "the close must be ATTRIBUTABLE: an event naming the gate that "
+        f"re-ran clean, got {res}")
+
+
+def test_unfixed_artifact_keeps_cause_open(tmp_path):
+    # GREEN twin: no blind auto-close — the gate still fails on the artifact
+    eng = _engine(tmp_path)
+    _open_cause_via_gate(eng)
+    _mark(eng, "done")                  # DONE claimed, artifact still smeared
+    eng._prune_stale_causes()
+    assert eng._doctor_open_causes(), (
+        "the opening gate still fails on the current artifact — the cause "
+        "must stay open and hold the root red")
+
+
+def test_causes_on_non_done_nodes_untouched(tmp_path):
+    # GREEN 2: re-derivation only applies to nodes that reached DONE
+    eng = _engine(tmp_path)
+    _open_cause_via_gate(eng)
+    _write_test(eng, _EXACT)
+    _mark(eng, "todo")                  # node never completed
+    eng._prune_stale_causes()
+    assert eng._doctor_open_causes(), (
+        "a cause on a node that never reached DONE is still live work — "
+        "completion re-derivation must not touch it")

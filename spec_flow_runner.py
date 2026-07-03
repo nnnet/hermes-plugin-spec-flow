@@ -3185,6 +3185,10 @@ class Engine:
             act = self._doctor.treat(diag, state)
             cause = diag.primary.cause if diag.primary else "(none)"
             state["last_cause"] = cause          # for the closing PASS on this gate
+            # S12.5: remember WHICH gate opened this cause so completion can
+            # re-derive it against the CURRENT artifacts (attributable close)
+            if cause and cause != "(none)":
+                state.setdefault("open", {})[cause] = gate
             _DOCTOR_LOG.info("advise ACTION node=%s cause=%s remedy=%s rung=%s",
                              nid, cause, act.kind,
                              getattr(act.record, "rung", None))
@@ -3212,12 +3216,14 @@ class Engine:
             cause = state.get("last_cause")
             if not cause or cause == "(none)":
                 return
-            self.emit("review", "doctor", "", nid, f"resolved {cause}", "",
+            self.emit("review", "doctor", "", nid, f"resolved {cause}",
+                      f"cause resolved: {gate}",
                       gate=f"doctor:{cause}", verdict="PASS", level=L_MILESTONE)
             self.loops.append({"type": "doctor", "task": nid, "cause": cause,
                                "remedy": "(closed)", "outcome": "resolved",
                                "detail": f"{gate} passed"})
             state["last_cause"] = None
+            (state.get("open") or {}).pop(cause, None)
         except Exception as exc:  # noqa: BLE001
             # P4: a failure while CLOSING a cause leaves last_cause set —
             # it may falsely block completion, so it must be attributable
@@ -3317,6 +3323,34 @@ class Engine:
                     boots = False
                 if boots:
                     self._doctor_resolve({}, nid, "revalidate(boot)")
+            else:
+                # S12.5 (v160): a cause opened by a re-runnable leaf gate on a
+                # node that later reached DONE is RE-DERIVED on the CURRENT
+                # artifacts — the opening gate re-running clean closes it with
+                # an attributable event; still red keeps it open (and the root
+                # honestly red). Never a blind auto-close: the verdict is the
+                # gate's own re-run, nothing else.
+                gate = str((st.get("open") or {}).get(cause) or "")
+                fn = (st.get("recheck") or {}).get(gate)
+                task = (getattr(self, "tasks", None) or {}).get(nid)
+                if not (gate and callable(fn)
+                        and str(getattr(task, "status", "")) == "done"):
+                    continue
+                try:
+                    clean = bool(fn())
+                except Exception:  # noqa: BLE001 — a broken recheck must keep
+                    clean = False  # the cause open, never silently close it
+                if clean:
+                    self._doctor_resolve({}, nid, f"{gate} re-ran clean")
+
+    def _register_gate_recheck(self, nid: str, gate: str, fn) -> None:
+        """S12.5: store a side-effect-free re-run of the gate that just opened
+        a doctor cause on this node. Completion (_prune_stale_causes) re-derives
+        the open cause with it: gate passes on current artifacts -> attributable
+        close; still fails -> the cause stays open and holds the root red."""
+        st = (getattr(self, "_doctor_states", None) or {}).get(nid)
+        if isinstance(st, dict):
+            st.setdefault("recheck", {})[gate] = fn
 
     def _remedy_reconcile_check(self, entry: str, escalate: bool = False) -> bool:
         """Executable reconcile_check (Ф6): the integrate gate found the assembled
@@ -4669,7 +4703,8 @@ class Engine:
         return False
 
     def _leaf_test_status_gate(self, node: dict, nid: str, depth: int,
-                               test_rel: "Optional[str]") -> bool:
+                               test_rel: "Optional[str]",
+                               quiet: bool = False) -> bool:
         """Deterministic, model-independent: the leaf's TEST must assert the
         CONTRACTED success status of every route this leaf owns (the same
         `_route_success_status` the binding printed for the coder). v149: the
@@ -4899,6 +4934,8 @@ class Engine:
                         last_route = (meths[0], paths[0])
         if not findings:
             return True
+        if quiet:                    # S12.5 re-derivation: verdict only,
+            return False             # no events / loops / doctor side effects
         self.loops.append({"type": "test-status-mismatch", "task": nid,
                            "detail": "; ".join(findings)[:400]})
         self.emit("review", "engine", "", nid,
@@ -4907,11 +4944,16 @@ class Engine:
                   "test_status_gate", "FAIL", level=L_MILESTONE)
         self._doctor_advise(node, nid, depth, "test_status_gate", "FAIL",
                             {"scope_findings": findings})
+        self._register_gate_recheck(
+            nid, "test_status_gate",
+            lambda: self._leaf_test_status_gate(node, nid, depth, test_rel,
+                                                quiet=True))
         return False
 
     def _leaf_request_shape_gate(self, node: dict, nid: str, depth: int,
                                  code_rel: "Optional[str]",
-                                 test_rel: "Optional[str]") -> bool:
+                                 test_rel: "Optional[str]",
+                                 quiet: bool = False) -> bool:
         """S12.1 (v159), deterministic, model-independent: the REQUEST shape
         of a route is engine data — a handler's required-field checks must be
         a SUBSET of the contracted request fields, and a leaf test must not
@@ -5065,6 +5107,8 @@ class Engine:
                            route[0], route[1], sorted(shaped[route])))
         if not findings:
             return True
+        if quiet:                    # S12.5 re-derivation: verdict only,
+            return False             # no events / loops / doctor side effects
         self.loops.append({"type": "request-shape-mismatch", "task": nid,
                            "detail": "; ".join(findings)[:400]})
         self.emit("review", "engine", "", nid,
@@ -5074,6 +5118,10 @@ class Engine:
                   level=L_MILESTONE)
         self._doctor_advise(node, nid, depth, "request_shape_gate", "FAIL",
                             {"scope_findings": findings})
+        self._register_gate_recheck(
+            nid, "request_shape_gate",
+            lambda: self._leaf_request_shape_gate(node, nid, depth, code_rel,
+                                                  test_rel, quiet=True))
         return False
 
     def _plan_ownership_report(self) -> list:
