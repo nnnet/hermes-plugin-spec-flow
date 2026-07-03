@@ -1,0 +1,36 @@
+tests/coverage/test_plan_ownership_report.py
+  s_a7f45290e91181::t_5b6c9d4bcd33ff 5-9,28-36,40,42,49-52,57-76,78-79
+tests/audit/TAXONOMY.md
+  s_a7f45290e91181::t_ec7423c721952f 124-137
+spec_flow_runner.py
+  s_a7f45290e91181::t_2cedeaa99cad1e 3524-3531
+  s_a7f45290e91181::t_9b0c5ea34c197f 3941-3951,3956-3958,3962
+  s_a7f45290e91181::t_fedfd85bf3e0bf 6290-6312
+  s_a7f45290e91181::t_867d74e90fb5fd 5332-5334
+  s_a7f45290e91181::t_1284444bfca3ea 2439-2444,2448-2454,2456
+  s_a7f45290e91181::t_9915226d4bcc7a 834-874
+  s_a7f45290e91181::t_82041c84b72b83 382-384
+  s_a7f45290e91181::t_94fe8fbed63df3 5468
+tests/audit/test_assembly_seam_honesty.py
+  s_a7f45290e91181::t_812384138b55dd 363-457
+tests/harness/llm_decomposer.py
+  s_a7f45290e91181::t_ddb2bfa3924695 111
+  s_a7f45290e91181::t_bbd3145b520374 150
+  s_a7f45290e91181::t_ce6cba4bcfa76d 369
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "e109d83e5c26e6c068d8290e4b61a2f0f8219e4b",
+  "prompts": {},
+  "sessions": {
+    "s_a7f45290e91181": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "babc3939-4d3b-4fd6-be01-62e1daf43fde",
+        "model": "claude-fable-5"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
