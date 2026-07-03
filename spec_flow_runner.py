@@ -5283,7 +5283,62 @@ def %(callable)s(environ, start_response):
                 'Business logic only."""\n' + body + "\n", encoding="utf-8")
         except (OSError, ValueError):
             return False
+        # S10.29: the harvest module is ENGINE-delivered code — record it as
+        # an artifact of the node owning the declared entry (the assembly
+        # leaf), or every later audit flags an ownerless zombie on disk
+        # (v157/v158 layer-1 orphan_src_file, run after run).
+        self._record_engine_artifact("src/_product_logic.py", entry)
         return True
+
+    def _record_engine_artifact(self, rel: str, entry: str) -> None:
+        """Attach an engine-written support file to the tree node owning the
+        declared entry, so the exported tree carries its ownership as DATA.
+        Why: v157/v158 — src/_product_logic.py (written by the entry-synthesis
+        harvest) had no owner node; the layer-1 ownership audit flagged the
+        zombie every run because ownership lived nowhere.
+        What: walks the project tree for the node whose code_target is the
+        entry (fallback: the root) and appends `rel` to its `artifacts` list
+        (idempotent); the layer-1 reader (`owned_modules`) honours the field.
+        Test: tests/audit/test_engine_artifact_ownership.py."""
+        try:
+            tree = (getattr(self, "_project_meta", None) or {}).get("tree")
+        except Exception:        # noqa: BLE001 — no tree = nowhere to record
+            return
+        if not isinstance(tree, dict):
+            return
+        owner = None
+        stack = [tree]
+        while stack:
+            n = stack.pop()
+            if not isinstance(n, dict):
+                continue
+            if entry and str(n.get("code_target") or "") == entry:
+                owner = n
+                break
+            stack.extend(n.get("children") or [])
+        owner = owner if owner is not None else tree
+        arts = owner.setdefault("artifacts", [])
+        if rel not in arts:
+            arts.append(rel)
+
+    def _drop_stale_harvest(self, entry_code: str) -> bool:
+        """Remove a harvest module the synthesized entry no longer references.
+        Why: S10.29 — an earlier in-run cycle may have harvested handlers that
+        a LATER pass resolves from real leaves; the leftover
+        src/_product_logic.py is dead weight nothing imports, a zombie on
+        disk. What: unlinks it iff `_product_logic` never appears in the final
+        entry code; a referenced harvest stays. Returns True iff removed.
+        Test: tests/audit/test_engine_artifact_ownership.py."""
+        if "_product_logic" in (entry_code or ""):
+            return False
+        try:
+            p = Path(self.workspace.root) / "src" / "_product_logic.py"
+            if p.is_file():
+                p.unlink()
+                return True
+        except OSError:
+            pass
+        return False
 
     def _neutralize_rival_entries(self, entry: str,
                                   keep: "Optional[set]" = None) -> int:
@@ -5611,6 +5666,13 @@ def %(callable)s(environ, start_response):
         # poisoned, even when this synth call leaves the entry unchanged below.
         try:
             self._strip_self_imports("src/_product_logic.py")
+        except Exception:               # noqa: BLE001 — guard is best-effort
+            pass
+        # S10.29 hygiene: a harvest module this (final) entry code does not
+        # reference is dead weight from an earlier in-run cycle — remove the
+        # zombie instead of shipping an ownerless file.
+        try:
+            self._drop_stale_harvest(code)
         except Exception:               # noqa: BLE001 — guard is best-effort
             pass
         try:

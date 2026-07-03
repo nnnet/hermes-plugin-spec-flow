@@ -84,7 +84,12 @@ def snake(node_id: str) -> str:
 
 
 def owned_modules(tree: dict) -> set[str]:
-    """Module file names (basename) owned by some node or declared entry."""
+    """Module file names (basename) owned by some node or declared entry.
+
+    S10.29: a node's ``artifacts`` list (engine-written support files the node
+    ADOPTED, e.g. the entry-synthesis harvest module) counts as ownership too —
+    ownership stays tree DATA, never a hardcoded name exemption, so a run whose
+    tree carries no record (v157/v158) keeps its honest orphan finding."""
     owned: set[str] = set()
     for node in walk_nodes(tree):
         node_id = node.get("id")
@@ -93,6 +98,8 @@ def owned_modules(tree: dict) -> set[str]:
         target = node.get("code_target")
         if target:
             owned.add(Path(target).name)
+        for art in node.get("artifacts") or []:
+            owned.add(Path(str(art)).name)
     return owned
 
 
