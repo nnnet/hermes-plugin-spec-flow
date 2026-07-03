@@ -3987,11 +3987,31 @@ class Engine:
         Records FAIL + loop + doctor cause so the recovery reworks the TEST
         with the exact expected value — no LLM opinion involved. Lenient by
         design: no owned routes, no test file, or no recognisable assertions
-        = no-op."""
+        = no-op.
+
+        S10.23 (v156): the ENTRY leaf (code_target == the declared entry)
+        tests the WHOLE assembled surface — it legitimately exercises every
+        declared route, so it is held to the contracted status of EACH one
+        (declared + adopted). The blanket code_target exemption made this
+        gate a no-op for it: tests/test_app.py asserting 200 for POST /notes
+        (contract: 201) reached assembly, where the doctor read
+        'assert 201 == 200', blamed the CORE module and reworked the wrong
+        artifact three times. Feature amends (code_target != entry) keep the
+        exemption unless the engine bound them a route."""
         if not (test_rel and getattr(self.workspace, "root", None)):
             return True
         owned = {(m.upper(), p): _route_success_status(m)
                  for m, p in self._leaf_owned_routes(node)}
+        try:
+            _contract = self._product_contract() or {}
+        except Exception:        # noqa: BLE001 — no contract = nothing to add
+            _contract = {}
+        _entry = str(_contract.get("entry") or "")
+        if _entry and str(node.get("code_target") or "") == _entry:
+            for m, p in self._declared_route_set(_contract):
+                owned.setdefault((m.upper(), p), _route_success_status(m))
+            for m, p in self._adopted_route_tables():
+                owned.setdefault((m.upper(), p), _route_success_status(m))
         if not owned:
             return True
         try:
