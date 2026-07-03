@@ -755,3 +755,88 @@ def test_fail_closure_still_red_without_explicit_pass(tmp_path):
     kinds = {f.kind for f in ji.audit(run)}
     assert "unresolved_milestone_fail" in kinds, (
         "a PASS on another task must NOT close this task's FAIL")
+
+
+# ── S10.20 dropped-module hygiene is DURABLE, not one-shot ───────────────────
+# v154: event #11 'collapse purged dropped-module references — retargeted at
+# src/core.py in: specs/l0.md', yet the FINAL workspace/specs/l0.md still
+# ordered src/db.py (REQ-L0-5 + module list) and specs/product_entry.md
+# (written LATER than the purge) named it too — later spec WRITES
+# re-materialized dropped-module prose from unsanitized node data. The engine
+# must keep the dropped-module set for the run and retarget EVERY subsequent
+# spec write the same way (same helper, one door).
+
+def _relint_after_collapse_decomposer(ctx):
+    # depth-0 rework = the traceability-lint fix round for the ROOT, which
+    # runs AFTER the collapse purge — it re-authors the level spec from data
+    # that still names the dropped module (the v154 REQ-L0-5 shape)
+    if ctx.get("rework") and ctx["depth"] == 0:
+        return {"spec_markdown": (
+            "## Requirements\n"
+            "- REQ-L0-1: notes persist via src/db.py (`db.connect`)\n"
+            "## Acceptance\n"
+            "- AC-L0-1: POST then GET round-trips a note\n")}
+    if ctx["depth"] == 0:
+        # AC without REQ -> deterministic lint FAIL -> the rework above
+        return {"atomic": False, "metrics": dict(_BIG),
+                "spec_markdown": ("## Scope\nIn:\n"
+                                  "- src/db.py: sqlite storage\n"
+                                  "- src/app.py: wsgi_app dispatch\n"
+                                  "## Acceptance\n- AC-L0-1: a note POSTed to"
+                                  " /notes round-trips\n"),
+                "children": [{"id": "db_persistence",
+                              "title": "sqlite storage layer"},
+                             {"id": "wsgi_handler",
+                              "title": "WSGI route handlers"}]}
+    return {"metrics": dict(_SMALL),
+            "acceptance": ["Given a note, When POSTed to /notes, Then GET"
+                           " /notes returns it"]}
+
+
+def test_spec_written_after_collapse_carries_no_dropped_module(plugin,
+                                                               tmp_path):
+    from harness import auto_implementer
+    res = eng.run_project(dict(WEB_PROJECT),
+                          workspace=str(tmp_path / "wk"), depth="product",
+                          tools=plugin.tools, contracts_dir=str(eng.CONTRACTS),
+                          agents={"decomposer": _relint_after_collapse_decomposer,
+                                  "implementer": auto_implementer.implement})
+    assert res is not None
+    dump = "\n".join(repr(ev) for ev in res.events)
+    assert "small product" in dump, "the floor must collapse this run"
+    for spec in sorted((tmp_path / "wk" / "specs").glob("*.md")):
+        text = spec.read_text(encoding="utf-8")
+        assert "src/db.py" not in text, (
+            f"{spec.name} was written AFTER the collapse purge yet still"
+            " names the dropped module (v154: l0.md REQ-L0-5 +"
+            " product_entry.md re-materialized src/db.py) — dropped-module"
+            " hygiene must be durable for the whole run")
+
+
+def test_late_spec_write_seam_retargets_only_dropped(tmp_path):
+    # unit red/green at the ONE write door: after the purge records the
+    # dropped set, a LATER spec write naming the dropped module is retargeted;
+    # modules never dropped stay untouched
+    e = eng.Engine(workspace=str(tmp_path / "wk"), depth=eng.DEPTH_SPEC)
+    e.workspace.open()
+    e._product_contract = lambda: {"entry": "src/app.py",
+                                   "boot": {"json_roundtrip": "/notes"},
+                                   "routes": []}
+    e._node_registry = {"L0": "root"}
+    root = {"id": "L0", "title": "root",
+            "spec_markdown": "In:\n- src/db.py: storage\n- src/app.py: entry"}
+    e._purge_dropped_module_refs(root, "core")
+    assert "src/db.py" not in root["spec_markdown"]
+    e.workspace.spec("late_node", "late", 1, "leaf", "", "L0", [],
+                     node={"id": "late_node",
+                           "spec_markdown": ("reuse src/db.py storage;"
+                                             " src/web_ui.py renders /ui;"
+                                             " entry stays src/app.py")})
+    text = (tmp_path / "wk" / "specs" / "late_node.md").read_text(
+        encoding="utf-8")
+    assert "src/db.py" not in text, (
+        "a spec written AFTER the purge must not re-materialize the dropped"
+        f" module — got: {text!r}")
+    assert "src/web_ui.py" in text and "src/app.py" in text, (
+        "modules that were never dropped must stay untouched — the durable"
+        " purge retargets ONLY the recorded dropped set")

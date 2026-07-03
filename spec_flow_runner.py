@@ -1767,6 +1767,14 @@ class Workspace:
             self.artifacts.append({"path": rel, "type": "refused_%s" % kind,
                                    "reason": "; ".join(bad)})
             return rel
+        # S10.20 (v154): dropped-module hygiene is DURABLE — once the collapse
+        # records a dropped module set, EVERY later spec write is retargeted
+        # through the same rule at this one door (v154: product_entry.md and a
+        # lint-reworked l0.md re-materialized src/db.py AFTER the purge).
+        if kind == "spec":
+            fix = getattr(self, "spec_sanitizer", None)
+            if callable(fix):
+                content = fix(content)
         path = Path(self.root) / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
@@ -6650,7 +6658,15 @@ def %(callable)s(environ, start_response):
         rule as ``_collapsed_core_spec`` — a src file reference no node owns
         is rewritten at the surviving core module — to the root node's pending
         markdown and to every written spec. Returns the list of purged spec
-        targets (empty when nothing foreign was referenced)."""
+        targets (empty when nothing foreign was referenced).
+
+        S10.20 (v154): the purge is DURABLE, not one-shot — the retargeted
+        stems are recorded in ``self._dropped_modules`` and a sanitizer using
+        the SAME rule is installed on the spec write door, so a spec written
+        LATER from unsanitized data (v154: a lint-reworked l0.md ordered
+        src/db.py again; product_entry.md named it too) cannot re-materialize
+        a dropped module. Node prose fields (requirement/plan) are sanitized
+        alongside spec_markdown."""
         try:
             entry = str((self._product_contract() or {}).get("entry") or "")
         except Exception:        # noqa: BLE001 — no contract = no entry to allow
@@ -6659,18 +6675,28 @@ def %(callable)s(environ, start_response):
         if entry:
             known.add(_snake(Path(entry).stem))
         pat = re.compile(r"src/([A-Za-z0-9_]+)\.py")
+        dropped: set = self.__dict__.setdefault("_dropped_modules", set())
 
         def _retarget(m: "re.Match") -> str:
-            return (m.group(0) if _snake(m.group(1)) in known
-                    else f"src/{own}.py")
+            stem = _snake(m.group(1))
+            if stem in known:
+                return m.group(0)
+            dropped.add(stem)
+            return f"src/{own}.py"
 
         purged: list = []
-        old = str(node.get("spec_markdown") or "")
-        if old:
+        for key in ("spec_markdown", "requirement"):
+            old = str(node.get(key) or "")
+            if not old:
+                continue
             new = pat.sub(_retarget, old)
             if new != old:
-                node["spec_markdown"] = new
-                purged.append(f"specs/{_snake(node.get('id') or '')}.md")
+                node[key] = new
+                if f"specs/{_snake(node.get('id') or '')}.md" not in purged:
+                    purged.append(f"specs/{_snake(node.get('id') or '')}.md")
+        if isinstance(node.get("plan"), list):
+            node["plan"] = [pat.sub(_retarget, str(ln))
+                            for ln in node["plan"]]
         ws = self.workspace
         root = getattr(ws, "root", None)
         if getattr(ws, "enabled", False) and root:
@@ -6684,6 +6710,16 @@ def %(callable)s(environ, start_response):
                     # the ONE write door (specs are prose — never code-linted)
                     ws._write(f"specs/{p.name}", new, "spec")
                     purged.append(f"specs/{p.name}")
+        # install the durable door sanitizer: retargets ONLY the recorded
+        # dropped stems, so a module that was never dropped (a later legit
+        # leaf like src/web_ui.py) stays untouched. The closure reads the
+        # shared set, so stems dropped by a later collapse are covered too.
+        if dropped and not callable(getattr(ws, "spec_sanitizer", None)):
+            ws.spec_sanitizer = (
+                lambda text: pat.sub(
+                    lambda m: (f"src/{own}.py"
+                               if _snake(m.group(1)) in dropped
+                               else m.group(0)), text))
         return purged
 
     def _visit(self, node: dict, depth: int, contract_ctx: Optional[dict], phase: str,
