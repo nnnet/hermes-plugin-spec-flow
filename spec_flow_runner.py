@@ -2453,6 +2453,61 @@ for _spec in (cfg.get("extra_routes") or []):
     if _st == 404:
         fail("%s %s -> 404 (declared route never wired in the entry)"
              % (_method, _path))
+# S12.6 (v161): CONFIG-vs-REQUEST confusion judged by BEHAVIOUR, code-shape-
+# independent. The v159 class re-landed in a SHARED dispatch wrapper (any
+# KeyError -> 400 "missing required field") over os.environ['NOTES_DB'] reads
+# — a shape the AST leaf gate (`_leaf_request_shape_gate`) never sees. Probe
+# every contracted route with its CONTRACTED example payload (the S12.1
+# `request_fields` datum; GET/DELETE = no body) with the constitution's env
+# vars ABSENT: a 4xx naming a required field OUTSIDE the contracted shape is
+# a deterministic RED. A config-starved 5xx stays legal (an honest server
+# error); a 4xx naming a CONTRACTED field cannot occur — the probe sends
+# every contracted field — so it is deliberately not judged.
+import re as _re
+_shapes = cfg.get("request_shapes") or []
+_cfg_envs = list(cfg.get("config_env_vars") or [])
+if _shapes:
+    _saved = {v: os.environ.pop(v) for v in _cfg_envs if v in os.environ}
+    try:
+        for _sp in _shapes:
+            try:
+                _m = str(_sp[0]).upper()
+                _p, _fields = str(_sp[1]), [str(f) for f in (_sp[2] or [])]
+            except Exception:
+                continue
+            _payload = ({f: "probe" for f in _fields}
+                        if _m not in ("GET", "DELETE", "HEAD") else None)
+            try:
+                _st, _raw = call(_m, _p, _payload)
+            except Exception:
+                continue        # a config-starved crash is the 5xx class
+            if not (400 <= _st < 500):
+                continue
+            _text = (_raw or b"").decode("utf-8", "replace")
+            try:                # judge the MESSAGE, not the JSON envelope keys
+                _doc = json.loads(_text)
+                _msg = (" ".join(str(v) for v in _doc.values())
+                        if isinstance(_doc, dict) else _text)
+            except Exception:
+                _msg = _text
+            if not _re.search(r"required|missing|field", _msg, _re.I):
+                continue        # not a field-demand rejection (404/405/...)
+            _named = set(_re.findall(
+                r"['\"]([A-Za-z_][A-Za-z0-9_]*)['\"]", _msg))
+            _named |= set(_re.findall(
+                r"field[:\s]+['\"]?([A-Za-z_][A-Za-z0-9_]*)", _msg, _re.I))
+            _outside = sorted(t for t in _named if t not in _fields)
+            if not _outside:
+                continue        # names only contracted fields — not judged
+            _t = next((t for t in _outside if t in _cfg_envs), _outside[0])
+            _extra = ((" — %s is an environment variable (constitution), "
+                       "never a request field" % _t)
+                      if _t in _cfg_envs else "")
+            fail("%s %s -> %d naming required field %r outside the "
+                 "contracted request shape %r%s"
+                 % (_m, _p, _st, _t, _fields, _extra))
+    finally:
+        os.environ.update(_saved)
 print("BOOTGATE_OK")
 '''
 
@@ -9654,13 +9709,29 @@ def %(callable)s(environ, start_response):
             if (p.rstrip("/") or "/") not in covered \
                     and [m, p] not in extra:
                 extra.append([m, p])
+        # S12.6 (v161): hand the probe the S12.1 request-shape datum + the
+        # constitution's env vars, so it can red config-vs-request confusion
+        # BEHAVIOURALLY (a shared wrapper 400-ing 'NOTES_DB' on every route
+        # is invisible to the AST leaf gate). Best-effort: no datum = the
+        # shape section is a silent no-op inside the probe.
+        try:
+            _shapes = [[m, p, list(f)] for (m, p), f in
+                       sorted((self._route_request_fields() or {}).items())]
+        except Exception:        # noqa: BLE001 — no datum = nothing to probe
+            _shapes = []
+        try:
+            _cenv = [n for n, _r in self._constitution_env_vars()]
+        except Exception:        # noqa: BLE001
+            _cenv = []
         probe_cfg = json.dumps({
             "callable": c["callable"],
             "entry_stem": Path(c["entry"]).stem,
             "ok_route": boot.get("ok_route", ""),
             "html_route": boot.get("html_route", ""),
             "json_roundtrip": boot.get("json_roundtrip", ""),
-            "extra_routes": extra})
+            "extra_routes": extra,
+            "request_shapes": _shapes,
+            "config_env_vars": _cenv})
         try:
             # -I (isolated) + a scrubbed env — same sterile-oracle boundary as
             # the capability probe and the hermetic suite: the probe prepends
