@@ -2574,6 +2574,64 @@ if _shapes:
     finally:
         os.environ.update(_saved)
 
+# S12.15 (v164): media conformance is BEHAVIOURAL — a contracted route's live
+# 2xx response must match its media datum (v164: GET /about answered a JSON
+# dict while contracts/interface.json contracted text/html; the handler side
+# had no behavioural media check, so the swap sailed through the boot-gate).
+# text/html -> HTML marker present; application/json -> json.loads succeeds.
+# A mismatch reds naming the route, its OWNER LEAF and BOTH medias. Lenient:
+# no media datum = untouched; a non-2xx is owned by the other sections.
+_shape_by_route = {}
+for _sp in (cfg.get("request_shapes") or []):
+    try:
+        _shape_by_route[(str(_sp[0]).upper(), str(_sp[1]))] = [
+            str(f) for f in (_sp[2] or [])]
+    except Exception:
+        pass
+_MIME = {"json": "application/json", "html": "text/html"}
+for _mr in (cfg.get("route_media") or []):
+    try:
+        _m, _p, _md = str(_mr[0]).upper(), str(_mr[1]), str(_mr[2])
+        _owner = str(_mr[3]) if len(_mr) > 3 else ""
+    except Exception:
+        continue
+    _want = _MIME.get(_md)
+    if _want is None:
+        continue                # unknown/uncontracted medium — never judged
+    _payload = None
+    if _m not in ("GET", "DELETE", "HEAD"):
+        _payload = {f: "probe" for f in _shape_by_route.get((_m, _p), [])}
+    try:
+        _st, _raw = call(_m, _p, _payload)
+    except Exception:
+        continue                # a crash is owned by the other sections
+    if not (200 <= _st < 300):
+        continue                # a wrong status is owned by the other sections
+    _text = (_raw or b"").decode("utf-8", "replace")
+    try:
+        _doc = json.loads(_text)
+        _is_json_doc = isinstance(_doc, (dict, list))
+    except Exception:
+        _is_json_doc = False
+        _doc = None
+    _owner_sfx = (" (owner leaf: %s)" % _owner) if _owner else ""
+    if _want == "application/json":
+        try:
+            json.loads(_text)
+            continue            # parses as JSON — conforms
+        except Exception:
+            pass
+        _served = "text/html" if "<" in _text else "text/plain"
+        fail("%s %s serves %s but its contracted media is application/json%s"
+             % (_m, _p, _served, _owner_sfx))
+    # _want == "text/html"
+    if _is_json_doc:
+        fail("%s %s serves application/json but its contracted media is "
+             "text/html%s" % (_m, _p, _owner_sfx))
+    if "<" not in _text:
+        fail("%s %s serves text/plain but its contracted media is "
+             "text/html%s" % (_m, _p, _owner_sfx))
+
 if ok_route:
     st, _ = call("GET", ok_route)
     if st != 200:
@@ -3787,7 +3845,23 @@ class Engine:
                     r"\b(GET|POST|PUT|DELETE|PATCH)\s+(/[A-Za-z0-9_./{}-]*)",
                     str(txt)):
                 vp = mm.group(2).rstrip(".,;:)")
-                win = tl[max(0, mm.start() - 90):mm.end() + 90]
+                lo = max(0, mm.start() - 90)
+                win = tl[lo:mm.end() + 90]
+                # enforce the statement boundary (';' / newline) the window
+                # claims: a brace vote leaking from the NEIGHBOURING clause
+                # contracted GET /health as json ("... responds {id}; GET
+                # /health 200") and the S12.15 media probe then false-red a
+                # plain-text health the human never shaped.
+                rel = mm.start() - lo
+                cut = max(win.rfind(";", 0, rel), win.rfind("\n", 0, rel))
+                if cut >= 0:
+                    win = win[cut + 1:]
+                    rel -= cut + 1
+                rel_end = rel + (mm.end() - mm.start())
+                after = [x for x in (win.find(";", rel_end),
+                                     win.find("\n", rel_end)) if x >= 0]
+                if after:
+                    win = win[:min(after)]
                 v = votes.setdefault(vp, [False, False])
                 if re.search(r"\b(html|page|browser|form|renders|rendered)\b",
                              win):
@@ -10253,6 +10327,28 @@ def %(callable)s(environ, start_response):
             _cenv = [n for n, _r in self._constitution_env_vars()]
         except Exception:        # noqa: BLE001
             _cenv = []
+        # S12.15 (v164): hand the probe the contracted media datum + owner
+        # leaves so it can red a route serving the WRONG body medium
+        # behaviourally (GET /about answered JSON while its contracted media
+        # is text/html — no code-shape gate sees the handler side). Judged
+        # rows are ONLY the contract-declared media (human wording) — the
+        # engine's fixed-body defaults (`_route_media_map` setdefaults
+        # GET /health to json) are NOT judged here: a promoted rival serving
+        # a plain-text health the human never shaped would false-red (the
+        # v151 one-false-positive lesson); the synthesized router serves the
+        # fixed body anyway and `test_health_body_single_source` pins it.
+        _mmap = dict(c.get("media") or {})
+        _rowners = self.__dict__.get("_route_owners") or {}
+        _media_rows: list = []
+        try:
+            for _m, _p in sorted(self._declared_route_set(c)):
+                _md = _mmap.get(_p)
+                if _md in ("json", "html"):
+                    _media_rows.append(
+                        [_m, _p, _md,
+                         ", ".join(sorted(_rowners.get((_m, _p), ())))])
+        except Exception:        # noqa: BLE001
+            _media_rows = []
         probe_cfg = json.dumps({
             "callable": c["callable"],
             "entry_stem": Path(c["entry"]).stem,
@@ -10261,7 +10357,8 @@ def %(callable)s(environ, start_response):
             "json_roundtrip": boot.get("json_roundtrip", ""),
             "extra_routes": extra,
             "request_shapes": _shapes,
-            "config_env_vars": _cenv})
+            "config_env_vars": _cenv,
+            "route_media": _media_rows})
         try:
             # -I (isolated) + a scrubbed env — same sterile-oracle boundary as
             # the capability probe and the hermetic suite: the probe prepends

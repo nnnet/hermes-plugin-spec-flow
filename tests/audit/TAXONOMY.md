@@ -663,6 +663,24 @@ same wrong reading and stay green until product e2e.
   handlers' NOTES_DB config starvation into a client error on every route;
   the S12.6 probe red-ed the behaviour but the source was engine-owned HTTP
   glue, not model code. (`test_router_exception_honesty.py`)
+- S12.15 media conformance is BEHAVIOURAL: the boot-gate probe
+  (`_ROOT_BOOT_PROBE`, the S12.6 seam) checks every contracted route's live
+  2xx response against its contract-declared media (text/html -> HTML
+  marker; application/json -> json.loads succeeds); a mismatch is a
+  deterministic RED naming the route, its OWNER LEAF and BOTH medias.
+  Lenient edges: no media datum = untouched; non-2xx statuses are owned by
+  the other probe sections; the engine's fixed-body defaults
+  (`_route_media_map` setdefaults GET /health to json) are NOT judged —
+  only the human-worded contract media rows are (a promoted rival serving a
+  plain-text health the human never shaped must not false-red, the v151
+  lesson). Root fix alongside: the media-derivation window in
+  `_product_contract` now honours the statement boundary it always claimed
+  (';'/newline) — a brace vote leaking from the neighbouring clause had
+  contracted GET /health as json ("... responds {id}; GET /health 200").
+  v164: GET /about answered 200 JSON while contracts/interface.json said
+  text/html; every media reader was code-shape or test-side, so the rework
+  that swapped the HTML page for a JSON dict sailed through the boot-gate
+  and only the leaf suite red-ed downstream. (`test_boot_media_probe.py`)
 
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
