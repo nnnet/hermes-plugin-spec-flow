@@ -391,11 +391,20 @@ def test_client_input_error_is_400_never_500(tmp_path):
     # The deterministic router GUARANTEES a client input error surfaces as 4xx,
     # never a 5xx, independent of handler quality. Two classes of the same fault:
     #   (a) a write (POST/PUT/PATCH) with an EMPTY body, and
-    #   (b) a well-formed body MISSING a required field, where a weak handler does
-    #       `payload["text"]` and raises KeyError.
+    #   (b) a well-formed body MISSING a CONTRACTED required field — validated
+    #       by the router itself against the S12.1 request-shape datum BEFORE
+    #       the handler runs (a weak `payload["text"]` handler never decides).
     # Before this guarantee a weak handler turned (a)/(b) into a 500 the doctor
     # could not heal (live v141: test_empty_body_on_post_400 assert 500 == 400).
+    # S12.14 (v164): (b) is engine validation from the contracted shape, NOT a
+    # blanket `except KeyError -> 400` — that branch laundered a handler's
+    # config KeyError (os.environ['NOTES_DB']) into fabricated request
+    # validation (tests/audit/test_router_exception_honesty.py).
     eng = _engine(tmp_path)
+    # the real run always carries the goal: the S12.1 datum derives the
+    # contracted shape ['text'] for POST /notes from it
+    eng._goal = ('Notes over a WSGI app: POST /notes accepts '
+                 '{"text": "..."} and stores it; GET /notes lists notes.')
     _seed_src(eng.workspace.root)
     src_dir = pathlib.Path(eng.workspace.root) / "src"
     # replace the well-behaved seed with a WEAK handler that does not validate.

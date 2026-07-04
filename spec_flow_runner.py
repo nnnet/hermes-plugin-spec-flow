@@ -5919,6 +5919,19 @@ class Engine:
         if ok_route and ("GET", ok_route) in unresolved_set:
             rows.append('    (%r, %r): ("health", None),' % ("GET", ok_route))
         routes_block = "\n".join(rows)
+        # S12.14 (v164): the router's ONLY "missing required field" source is
+        # its own validation against the CONTRACTED request shape (the S12.1
+        # datum) — so a 400 can only ever name a contracted field. The old
+        # `except KeyError -> 400` branch laundered a handler's config
+        # KeyError (os.environ['NOTES_DB']) into fabricated request
+        # validation on every route.
+        try:
+            _reqf = self._route_request_fields() or {}
+        except Exception:        # noqa: BLE001 — no datum = no validation rows
+            _reqf = {}
+        required_block = "\n".join(
+            '    (%r, %r): %r,' % (m, p, list(f))
+            for (m, p), f in sorted(_reqf.items()) if f)
         # Re-export each wired handler under its ORIGINAL name so a generated
         # test can `from <entry> import <handler>` (live v134: test_app.py did
         # `from app import post_notes` but the entry bound only the _hN aliases
@@ -5970,6 +5983,13 @@ _ROUTES = {
 %(routes)s
 }
 
+# contracted REQUEST-BODY fields per route (engine datum, S12.1) — the ONLY
+# source of a "missing required field" 400, so only a CONTRACTED field can
+# ever be named (never a config env var, S12.14)
+_REQUIRED = {
+%(required)s
+}
+
 
 def _send(start_response, code, body):
     if isinstance(body, (dict, list)):
@@ -6015,6 +6035,13 @@ def %(callable)s(environ, start_response):
             return _send(start_response, 400, {"error": "invalid json"})
     elif method in ("POST", "PUT", "PATCH"):    # a write with no body is a client
         return _send(start_response, 400, {"error": "empty request body"})
+    # engine-owned request validation against the CONTRACTED shape (S12.1):
+    # the only place the router may claim a missing required field (S12.14)
+    if isinstance(payload, dict):
+        for _f in (_REQUIRED.get((method, path)) or ()):
+            if _f not in payload:
+                return _send(start_response, 400,
+                             {"error": "missing required field: '%%s'" %% _f})
     try:
         if abi == "health":
             status, body = 200, %(health_body)s
@@ -6024,16 +6051,21 @@ def %(callable)s(environ, start_response):
             status, body = fn(payload)
         else:
             status, body = fn()
-    except KeyError as exc:                      # missing required field -> client 400
-        return _send(start_response, 400, {"error": "missing required field: %%s" %% exc})
-    except Exception as exc:                    # a leaf bug -> clean 500, no crash
-        return _send(start_response, 500, {"error": "handler failed: %%s" %% exc})
+    except Exception as exc:
+        # S12.14 (v164): an exception ESCAPING a handler is an HONEST 500
+        # naming the exception — the old `except KeyError -> 400` branch
+        # laundered a config KeyError (os.environ['NOTES_DB']) into
+        # fabricated request validation. An explicit (400, {...}) RETURNED
+        # by a handler still passes through above untouched.
+        return _send(start_response, 500,
+                     {"error": "internal: %%s: %%s" %% (type(exc).__name__, exc)})
     return _send(start_response, status, body)
 
 
 %(aliases)s
 '''
         return tmpl % {"imports": imports_block, "routes": routes_block,
+                       "required": required_block,
                        "callable": callable_name, "aliases": aliases_block,
                        # the inline liveness body reads the SAME single-source
                        # datum the interface contract and the binding print

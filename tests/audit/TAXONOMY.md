@@ -648,6 +648,22 @@ same wrong reading and stay green until product e2e.
   holding a fully correct live product NOT READY.
   (`test_request_shape_autofix.py`)
 
+- S12.14 the ENGINE'S OWN router is never a launderer: a 400 "missing
+  required field" comes ONLY from the router's own validation against the
+  CONTRACTED request shape (the S12.1 `_route_request_fields` datum baked
+  into the synthesized entry as `_REQUIRED`) — so it can only ever name a
+  contracted field; an exception ESCAPING a handler (a config KeyError from
+  `os.environ['NOTES_DB']` included) is an honest
+  500 {"error": "internal: KeyError: 'NOTES_DB'"} naming the exception,
+  NEVER fabricated request validation. Malformed-JSON/empty-write 400s and
+  a handler's own explicit (400, {...}) return stay untouched. v164: the
+  v159/v161 class landed a THIRD time and the laundering wrapper was the
+  engine's own `_synthesize_entry_code` template all along — its
+  `except KeyError -> 400 "missing required field: %s"` branch turned the
+  handlers' NOTES_DB config starvation into a client error on every route;
+  the S12.6 probe red-ed the behaviour but the source was engine-owned HTTP
+  glue, not model code. (`test_router_exception_honesty.py`)
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.
