@@ -758,6 +758,60 @@ implementation commit turned them green.
   media mismatch carrying BOTH medias; v149's status guess (a scenario
   asserting a status the interface never declares) reds naming the status.
 
+## STAGE 15 — Decomposer emits IR (`test_decomposer_emits_ir.py`)
+Node E1 of the spec-IR rearchitecture (plan 2026-07-04T00-45; Stage 14 is
+reserved by the scenario-runner node B1, developed in parallel). Until now
+the decomposer handed the engine PROSE (requirement / title / card text) and
+the engine re-derived interface facts by grepping it — every S10.19 prose
+path was a guess deferred to assembly. E1 makes the decomposer's output
+carry a MACHINE part: `"ir"`, a spec-flow IR v1 document (`spec_ir.py`)
+with per-proposed-node files, a real OpenAPI 3.1 fragment for the routes
+the node will OWN (method/path/status/media/request required fields),
+symbols (exposes/consumes), env, and the tiny closed G-W-T scenarios. The
+ENGINE validates the machine part with `spec_ir.validate_ir` at the exact
+seam where the output is received (`_expand_node` →
+`_accept_decomposer_ir`), against the MERGED document of every fragment
+accepted so far, BEFORE any assembly starts.
+Ratchet evidence (RED before code): `test_decomposer_emits_ir.py` was
+committed against an engine without `_accept_decomposer_ir` and a prompt
+without the machine part, PROVEN RED — 9 failed, 1 passed (the
+GREEN-direction legacy case) — before the implementation commit.
+- S15.1 MISSING MACHINE PART IS A NAMED REFUSAL: an IR-capable decomposer
+  (`emits_ir` capability, carried through every wrapper) whose output has
+  no `"ir"` gets a milestone FAIL on gate `decomposer_ir` naming the node,
+  a recorded `decomposer-ir-refused` loop, and ONE bounded re-ask whose
+  context carries the exact errors (`ir_errors`) — the same retry chain
+  bad JSON already drives inside the worker (llm_backend model fallback).
+  Never a silent fallback to prose-only. GREEN direction: a legacy /
+  simulated decomposer that never declared the capability keeps the
+  historical contract untouched — no refusal, no retry, no new events.
+- S15.2 INVALID IR IS ATTRIBUTABLE (P4): the refusal errors are plain
+  strings naming the node id and the offending value (unknown key, a route
+  claimed by a node WITH children — spec_ir's closed world). A refused
+  fragment never enters the engine's IR registry, so a later consumer can
+  never read a value that failed validation.
+- S15.3 ONE OWNER PER (METHOD, PATH) ACROSS CALLS: the seam validates the
+  MERGED document, so a second decomposer call claiming a route an earlier
+  fragment owns reds AT THE SEAM naming both owners (first-owner-wins in
+  the registry) — the v154 rival-handler class caught at proposal time
+  instead of assembly time. Consumed-but-not-yet-exposed symbols are NOT
+  refused mid-growth (the tree is still being proposed); the full-tree
+  closed-world check (`_write_ir`, S13) still reds a phantom that never
+  materialises.
+- S15.4 PROSE IS NO LONGER THE CARRIER: when the decomposer supplied a
+  fragment for a node, `_leaf_owned_routes` reads the fragment's openapi
+  paths — the prose claim text is not consulted — and journals
+  `interface_source: ir`; without a fragment the S10.19 derivation stays
+  as the fallback and journals `interface_source: prose-derived`. Request
+  required fields and body media declared in accepted fragments win over
+  prose-derived guesses in `_route_request_fields` / `_route_media_map`.
+- S15.5 THE DECOMPOSER IS ASKED FOR VALUES, THE ENGINE NEVER GUESSES THEM
+  (Phase A open question #1): the prompt orders concrete example values in
+  scenario `when.body` for routes with required request fields; a scenario
+  the model still left without a body is accepted as an honest
+  INCOMPLETENESS finding (spec_ir reports it; the accept event carries the
+  tally) — the engine never injects an invented body.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.
