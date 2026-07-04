@@ -50,7 +50,7 @@ graph:
   - {id: B3, needs: [B1],             parallel: "",        status: "[ ]", files: [spec_flow_runner.py, tests/harness/]}
   - {id: C1, needs: [A3, A4],         parallel: "",        status: "[~]", files: [spec_skeletons.py, spec_flow_runner.py]}
   - {id: D1, needs: [B1, C1],         parallel: "",        status: "[ ]", files: [spec_flow_doctor.py, spec_flow_remedies.py]}
-  - {id: E1, needs: [A4],             parallel: "after-a", status: "[~]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py]}
+  - {id: E1, needs: [A4],             parallel: "after-a", status: "[x]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py]}
   - {id: F1, needs: [B3, C1, D1, E1], parallel: "",        status: "[ ]", files: [tests/scenarios/, tests/lib/]}
 ```
 
@@ -154,14 +154,18 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
 - приёмка: полная перепись файла невозможна по построению;
   модель-независимость через минимум степеней свободы
 
-### [~] E1 `decomposer-emits-ir` — декомпозер выдаёт IR, не прозу
+### [x] E1 `decomposer-emits-ir` — декомпозер выдаёт IR, не прозу
 - выход: описание → IR со схемной валидацией на выходе декомпозера;
   существующие план-гейты работают поверх IR
 - приёмка: прозаическая спека больше не является носителем интерфейса;
   невалидный IR = именованный отказ до любой сборки
-- заметки: вопрос Фазы A №1 — примерные значения тела запроса пишет
-  декомпозер (или HITL-сценарий) в `when.body`; формы без значений
-  остаются пробелом; worktree-агент запущен 2026-07-04
+- заметки: ГОТОВ — коммит 948efc1, влит 2a4d18d (788 зелёных); JSON
+  декомпозера несёт обязательный ключ "ir" (spec-flow ir v1), валидация
+  на шве _expand_node + один переспрос IR_RETRY с точными ошибками;
+  отказ = веха decomposer_ir FAIL; журнал interface_source: ir |
+  prose-derived; факты IR главнее прозы в _leaf_owned_routes /
+  _route_request_fields / _route_media_map (проза — фолбэк без IR).
+  Вопрос Фазы A №1 закрыт: значения тела пишет декомпозер в when.body
 
 ### [ ] F1 `universality-battery` — батарея случайных спек
 - выход: генератор случайных маленьких спек разных доменов; конвейер
