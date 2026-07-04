@@ -46,7 +46,7 @@ graph:
   - {id: A3, needs: [A1],             parallel: "",        status: "[x]", files: [spec_ir.py, spec_flow_runner.py]}
   - {id: A4, needs: [A1, A2, A3],     parallel: "",        status: "[x]", files: [spec_ir.py]}
   - {id: B1, needs: [A2, A3],         parallel: "after-a", status: "[x]", files: [spec_scenarios.py, spec_flow_runner.py]}
-  - {id: B2, needs: [A1, A3],         parallel: "after-a", status: "[\!]", files: [spec_openapi.py, tests/tools/]}
+  - {id: B2, needs: [A1, A3],         parallel: "after-a", status: "[!]", files: [spec_openapi.py, tests/tools/]}
   - {id: B3, needs: [B1],             parallel: "",        status: "[~]", files: [spec_flow_runner.py, tests/harness/]}
   - {id: C1, needs: [A3, A4],         parallel: "",        status: "[~]", files: [spec_skeletons.py, spec_flow_runner.py]}
   - {id: D1, needs: [B1, C1],         parallel: "",        status: "[ ]", files: [spec_flow_doctor.py, spec_flow_remedies.py]}
@@ -123,7 +123,7 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
   (reason), scenario_gate, scenario_red/scenario_green (TDD-петля
   поздней инъекции). Вопросы Фазы A №3 и №4 закрыты
 
-### [\!] B2 `contract-oracle` — Specmatic + Schemathesis поверх OpenAPI из IR
+### [!] B2 `contract-oracle` — Specmatic + Schemathesis поверх OpenAPI из IR
 - выход: компиляция полного OpenAPI-документа из ir.json (слияние
   фрагментов узлов + ответы ошибок роутера общей секцией); контрактные
   тесты (Specmatic) + property-фаззинг (Schemathesis) как внешние оракулы
