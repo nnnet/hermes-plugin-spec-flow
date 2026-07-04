@@ -932,6 +932,65 @@ pytest collection: `ModuleNotFoundError: No module named 'spec_openapi'`,
   without pip-install rights or java — there the plan node is marked
   `[!]` with the precise human-needed list.
 
+## STAGE 18 — Conformance tests compiled from the IR (`test_ir_compiled_tests.py`)
+Phase B node B3 (`retire-llm-tester`) of the spec-IR rearchitecture (plan
+2026-07-04T00-45; Stage 17 is reserved by the parallel C1 skeleton-compiler
+node). Until now the leaf's `tests/test_<module>.py` was AUTHORED BY AN LLM
+tester over the same facts the IR already carries — every interface assert
+was a re-guess. v149 ("the tester guessed a status") and v150 ("success on a
+foreign route", smeared `assertIn(code, (200, 201))`) are one class: tests
+inventing interface facts. `spec_conformance.compile_leaf_tests(ir, node_id)`
+makes the ENGINE the author: a deterministic pytest file derived ONLY from
+the node's IR entry — one test per contracted (route, status, media) with the
+request built from the openapi required fields valued by the node's scenario
+bodies, plus scenario-derived multi-step tests (given.env overlay, given.state
+replay, then judged). The LLM tester is retired from interface coverage;
+optional domain edge-cases beyond the interface stay out of scope.
+Ratchet evidence (RED before code): `test_ir_compiled_tests.py` was committed
+against a not-yet-existing `spec_conformance`, an engine without
+`_compile_ir_leaf_tests` / `_reassert_ir_leaf_tests` and a harness without
+the tester-retirement seams, PROVEN RED — pytest collection:
+`ModuleNotFoundError: No module named 'spec_conformance'`, 1 error — before
+the implementation commit turned it green.
+- S18.1 ONLY CONTRACTED DATA CAN APPEAR: every route, status, media and
+  request value in the compiled file traces to an IR datum — the compiler
+  has no other input. Known-answer cases: the file for a node contains ONLY
+  that node's contracted routes (the v150 foreign-route success is dead for
+  IR leaves); the POST request value is the scenario's recorded body datum.
+- S18.2 FOREIGN DATA IS REFUSED AT COMPILE: an IR that fails
+  `spec_ir.validate_ir` (the v149 scenario asserting an undeclared status)
+  raises `ValueError` naming the offending value BEFORE any file content
+  exists — an undeclared status is impossible by construction, not filtered
+  postfactum. An unknown node id refuses the same way. Mid-growth
+  "consumed but not yet exposed" findings stay non-fatal (the S15.3 seam
+  rule; the full-tree closed world still owns phantoms).
+- S18.3 EXACT STATUS ASSERTS: a compiled test asserts `== <contracted>`;
+  a membership set of statuses cannot appear in the output (AST-pinned) —
+  the S12.7 smear class has no author anymore.
+- S18.4 A MISSING DATUM IS A VISIBLE SKIP: a bodied route whose required
+  fields no scenario values, a bodied route with no recorded request shape,
+  a non-success status no scenario yields, and a scenario stepping onto a
+  route owned by another node all compile to `pytest.mark.skip` whose reason
+  NAMES the gap (route, fields, owner) — an honest gap, never an invented
+  value and never a silent drop (S13.1 discipline carried downstream).
+- S18.5 THE ENGINE IS THE AUTHOR, THE TESTER IS RETIRED (wired): in the
+  leaf pipeline a leaf with an accepted IR fragment gets
+  `tests/test_<module>.py` WRITTEN by the engine before the worker runs
+  (journal `leaf_tests_source: ir-compiled`; the import module name is the
+  engine's `_module_for` datum, overriding the model-proposed stem); the
+  worker context carries `tests_precompiled`, the orchestra drops the tester
+  step through `_active_team` (journaled `orchestra_step_skipped`), the
+  write door refuses worker writes and diff repairs aimed at the compiled
+  file, the file is seeded into an isolated worktree, and after the worker
+  returns the engine RE-ASSERTS the compiled content over any rewrite
+  (`ir_tests_authority` ENFORCED) — enforcement is code, not prompt hope.
+  A compiler refusal falls back to the LLM path carrying the refusal reason.
+  GREEN direction: a leaf without an IR fragment keeps the historical path
+  byte-for-byte and journals `leaf_tests_source: llm`.
+- S18.6 EXISTING GATES HOLD, NEVER WEAKENED: the S10.6/S12.7 status gate and
+  the S12.1 request-shape gate run unchanged over compiled files and pass
+  trivially — the compiled asserts ARE the contracted datums the gates read.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.
