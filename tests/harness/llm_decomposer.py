@@ -75,9 +75,44 @@ its coder AND its tester both read): also return
 - "signature" (optional): the public callable/route the leaf exposes.
 Keep the card SPECIFIC to this one leaf's concern, never the whole product.
 
+MACHINE PART (required, every answer): also return "ir" — the machine
+interface of THIS node, format "spec-flow ir v1". The engine validates it
+immediately; prose never carries the interface.
+"ir": {{"format": "spec-flow ir v1", "nodes": {{"<this node id>": {{...}}}}}}
+- atomic=true — the node entry declares its COMPLETE closed interface:
+  "files": the src file(s) this leaf builds;
+  "openapi": a REAL OpenAPI 3.1 fragment for the routes THIS node will OWN
+  (build itself): paths -> lowercase method -> requestBody (content
+  application/json schema with "required" field names and
+  "additionalProperties": false) -> responses keyed by the contracted
+  status with the content media type;
+  "symbols": {{"exposes": [{{"name", "args"}}], "consumes": [{{"from",
+  "name", "args"}}]}} — what it defines and what it imports from others;
+  "env": [{{"name", "rule"}}] for config it reads;
+  "scenarios": [{{"requirement", "when": {{"method", "path", "body"}},
+  "then": {{"status", "media", "body_check"}}}}] — one per acceptance line.
+- every scenario on a route with required request fields MUST carry a
+  CONCRETE example value object in when.body (author real values — e.g.
+  {{"text": "hi"}}; the engine never invents them; a bodyless scenario
+  stays an honest gap finding).
+- atomic=false — the node entry is ONLY {{"children": ["<child ids>"]}};
+  a node with children owns NO routes (closed world).
+- declare ONLY what this node itself builds; a route or symbol another
+  node owns is consumed ("depends_on" / symbols.consumes), NEVER re-declared
+  — two owners of one route is a refused answer.
+
 Return ONLY a JSON object, no prose, no markdown fence:
-{{"atomic": true, "metrics": {{...}}, "acceptance": ["..."], "examples": ["..."], "children": [{{"id": "...", "title": "..."}}], "depends_on": ["..."], "spike": {{...}}}}
+{{"atomic": true, "metrics": {{...}}, "acceptance": ["..."], "examples": ["..."], "children": [{{"id": "...", "title": "..."}}], "depends_on": ["..."], "spike": {{...}}, "ir": {{"format": "spec-flow ir v1", "nodes": {{...}}}}}}
 """
+
+# E1 (S15.1): the engine refused the previous machine part and re-asks with
+# the exact attributable errors — correct the "ir" object, keep the rest.
+IR_RETRY = """
+
+PREVIOUS ANSWER REFUSED — the machine part "ir" failed validation:
+{errors}
+Return the SAME JSON object shape with a CORRECTED "ir" that fixes every
+error above. Do not drop the machine part."""
 
 # Root-only shaping: applies to the FIRST decomposition (depth 0). Stated
 # per-call before, the model dutifully re-created research/NFR children at
@@ -374,6 +409,11 @@ def decompose(ctx: dict) -> dict:
         prompt += LEAF_RULE.format(depth=ctx["depth"], leaf_depth=_leaf_depth(),
                                    leaf_max_loc=er["leaf_max_loc"],
                                    leaf_max_tasks=er["leaf_max_tasks"])
+    # E1 (S15.1): the engine refused the previous machine part — re-ask with
+    # the exact errors so the llm_backend chain can correct the "ir" object.
+    if ctx.get("ir_errors"):
+        prompt += IR_RETRY.format(
+            errors="\n".join("- %s" % e for e in ctx["ir_errors"]))
     nid = ctx["node"]["id"]
     # D2: a configured decomposer team runs the drafter→critic→reconciler
     # orchestra; with NO team (the default) it is the single agent, unchanged.
@@ -387,7 +427,8 @@ def decompose(ctx: dict) -> dict:
         out = _solicit(prompt, nid, ctx["depth"])
     # keep only the keys the engine understands (incl. the atomicity judgment)
     keep = {k: out[k] for k in ("atomic", "metrics", "children", "spike",
-                                "clarify", "acceptance", "examples", "signature")
+                                "clarify", "acceptance", "examples",
+                                "signature", "ir")
             if k in out}
     if ctx["depth"] >= _leaf_depth():
         keep.pop("children", None)          # convergence is enforced, not hoped for
@@ -409,3 +450,9 @@ def decompose(ctx: dict) -> dict:
                         verdict="leaf" if not children else "branch",
                         children=children)
     return keep
+
+
+# E1 (S15.1): the seam requires the machine part from THIS worker — the
+# capability travels with the function through every wrapper (cost meter,
+# run budget) so a missing "ir" is a NAMED refusal, never silent prose.
+decompose.emits_ir = True
