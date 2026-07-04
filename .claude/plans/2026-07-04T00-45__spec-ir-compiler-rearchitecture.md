@@ -48,8 +48,8 @@ graph:
   - {id: B1, needs: [A2, A3],         parallel: "after-a", status: "[x]", files: [spec_scenarios.py, spec_flow_runner.py]}
   - {id: B2, needs: [A1, A3],         parallel: "after-a", status: "[!]", files: [spec_openapi.py, tests/tools/]}
   - {id: B3, needs: [B1],             parallel: "",        status: "[~]", files: [spec_flow_runner.py, tests/harness/]}
-  - {id: C1, needs: [A3, A4],         parallel: "",        status: "[~]", files: [spec_skeletons.py, spec_flow_runner.py]}
-  - {id: D1, needs: [B1, C1],         parallel: "",        status: "[ ]", files: [spec_flow_doctor.py, spec_flow_remedies.py]}
+  - {id: C1, needs: [A3, A4],         parallel: "",        status: "[x]", files: [spec_skeletons.py, spec_flow_runner.py]}
+  - {id: D1, needs: [B1, C1],         parallel: "",        status: "[~]", files: [spec_flow_doctor.py, spec_flow_remedies.py]}
   - {id: E1, needs: [A4],             parallel: "after-a", status: "[x]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py]}
   - {id: B4, needs: [],               parallel: "",        status: "[ ]", files: [spec_flow_runner.py]}
   - {id: F1, needs: [B3, C1, D1, E1], parallel: "",        status: "[ ]", files: [tests/scenarios/, tests/lib/]}
@@ -151,13 +151,19 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
 - заметки: worktree-агент запущен 2026-07-04 после влития B1/E1; зона
   пересекается с C1 в раннере — записанный порядок влития C1 → B3
 
-### [~] C1 `skeleton-compiler` — каркас модуля пишет движок
+### [x] C1 `skeleton-compiler` — каркас модуля пишет движок
 - выход: из IR — сигнатуры, таблица маршрутов, список разрешённых
   импортов; модель заполняет ТОЛЬКО тела функций
 - приёмка: дверь записи отвергает правку каркаса; красный кейс —
   попытка модели переписать сигнатуру
-- заметки: стартовал после влития B1 (2026-07-04); порядок влития
-  раннерных правок: E1 → C1
+- заметки: ГОТОВ — коммиты c657896 (S17 красные) + 58d7839, влит
+  (829 зелёных, +26 тестов); spec_skeletons.py: compile_skeleton
+  (детерминированный, байт-в-байт от того же IR) + skeleton_conformance
+  (AST); дверь _delivery_lint с параметром skeletons отвергает переписи
+  сигнатур/лишние импорты (класс v157 умирает на двери)/неконтрактные
+  функции; каркас в промпт исполнителя (_skeleton_block); точка входа
+  движка каркасом не покрывается (урок v164); правило якорей — только
+  целостность движкового текста (защита от ложного красного v151)
 
 ### [ ] D1 `counterexample-repair` — лечение переспросом одной функции
 - выход: контрпример (вход/ожидалось/получилось) → переспрос ОДНОЙ
