@@ -4543,21 +4543,37 @@ class Engine:
     def _module_route_binding_text(self, stem: str) -> str:
         """S12.2: the ROUTE contract block of a module — every product route
         whose owner leaf lands in ``src/<stem>.py``, with its canonical
-        handler and owner leaf. Printed into the module-rework directive
+        handler, owner leaf and — S12.16 (v164) — its contracted body MEDIA
+        from the same datum the interface contract prints
+        (``_route_media_map``). Printed into the module-rework directive
         (the S11.4 twin for routes: the rewriting LLM sees the frozen
         surface instead of re-guessing it) while the write door enforces the
-        same datum regardless. Empty when the module owns no route.
-        Test: tests/audit/test_rework_preserves_route_surface.py."""
+        same datum regardless. v164: the directive carried route + handler +
+        owner but no media, and the core rework swapped get_about's HTML
+        page for a JSON dict while interface.json said text/html. Empty when
+        the module owns no route; a route with no media datum gets no media
+        line (the engine never invents a medium).
+        Tests: tests/audit/test_rework_preserves_route_surface.py,
+        tests/audit/test_rework_media_binding.py."""
         mods = self.__dict__.get("_route_handler_modules") or {}
         owners = self.__dict__.get("_route_owners") or {}
         rows = [(m, p) for (m, p), s in sorted(mods.items()) if s == stem]
         if not rows:
             return ""
+        try:
+            media = self._route_media_map() or {}
+        except Exception:        # noqa: BLE001 — no datum = no media line
+            media = {}
+        _MEDIA_SFX = {
+            "html": (" — contracted response media: text/html (return an "
+                     "HTML page string, never a JSON dict)"),
+            "json": " — contracted response media: application/json"}
         lines = "\n".join(
-            "- `%s %s` -> `def %s(payload, query)`%s"
+            "- `%s %s` -> `def %s(payload, query)`%s%s"
             % (m, p, _canonical_handler_symbol(m, p),
                (" (owner leaf: %s)" % ", ".join(sorted(owners.get((m, p), ()))))
-               if owners.get((m, p)) else "")
+               if owners.get((m, p)) else "",
+               _MEDIA_SFX.get(media.get(p), ""))
             for m, p in rows)
         return ("## Route -> handler contract for src/%s.py "
                 "(engine-declared)\n"

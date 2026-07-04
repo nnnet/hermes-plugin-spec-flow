@@ -681,6 +681,18 @@ same wrong reading and stay green until product e2e.
   text/html; every media reader was code-shape or test-side, so the rework
   that swapped the HTML page for a JSON dict sailed through the boot-gate
   and only the leaf suite red-ed downstream. (`test_boot_media_probe.py`)
+- S12.16 the module-rework directive carries the CONTRACTED MEDIA of every
+  route it re-prints — the S11.4/S12.2 frozen-surface reprint pattern
+  extended to the body medium: `_module_route_binding_text` appends the
+  media line from the SAME datum the interface contract prints
+  (`_route_media_map`; text/html routes additionally spell out "an HTML
+  page string, never a JSON dict"); a route with no media datum gets no
+  media line (the engine never invents a medium). v164: the "rework core
+  (acceptance blamed it)" directive re-printed GET /about's handler and
+  owner leaf but no medium, and the rewriting model swapped the HTML page
+  for {"name": "notes-service", "version": "1.0"} while
+  contracts/interface.json contracted text/html the whole time — the exact
+  v159 re-guess class, one datum over. (`test_rework_media_binding.py`)
 
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
