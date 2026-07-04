@@ -8310,6 +8310,13 @@ def %(callable)s(environ, start_response):
                       level=L_MILESTONE)
         node.setdefault("children", []).append(extra)
         child_ids.append(extra["id"])
+        # S14.5 (node B1): a late binding GREW the realized route set after
+        # the plan-time IR dump — re-dump ir.json so the workspace copy is
+        # current, and journal the RED half of the TDD loop (the new
+        # scenarios cannot be green before the rework)
+        if self._maybe_redump_ir("route set grew (late requirement %s)"
+                                 % extra["id"]):
+            self._scenario_red_probe(str(extra["id"]))
 
     def _dedup_children(self, node: dict, nid: str, title: str,
                         ancestors: tuple) -> None:
@@ -10045,18 +10052,22 @@ def %(callable)s(environ, start_response):
         except OSError:
             pass
 
-    def _write_ir(self) -> None:
-        """Dump the merged machine IR to ir.json (Phase A, spec-IR, S13.1).
+    def _write_ir(self, reason: str = "plan realized") -> None:
+        """Dump the merged machine IR to ir.json (spec-IR, S13.1/S14.5).
 
         Why: every drift class S10.9-S12.16 is two artifacts disagreeing on
         a value that never existed as data; the IR (spec_ir.build_ir) merges
         every engine-declared datum — route ownership, status, media,
         request shape, module symbol contracts, env vars, pins — into ONE
         closed structure per node so Phases B/C can compile from it.
-        What: ONE write through the workspace door at plan time plus ONE
-        `ir_written` journal event carrying node count and validation
-        tallies. Read-only over the datums — no gate behaviour changes.
-        Test: tests/audit/test_ir_scenarios_schema.py."""
+        What: a write through the workspace door plus an `ir_written`
+        journal event carrying node count, validation tallies and the
+        REASON for this dump (S14.5: the workspace copy stays current — a
+        late-bound route triggers a re-dump via _maybe_redump_ir). Also
+        snapshots the realized route set for the growth check. Read-only
+        over the datums — no gate behaviour changes.
+        Test: tests/audit/test_ir_scenarios_schema.py,
+        tests/audit/test_scenario_engine_wiring.py."""
         try:
             try:
                 from . import spec_ir  # type: ignore
@@ -10068,13 +10079,15 @@ def %(callable)s(environ, start_response):
                 "ir.json",
                 json.dumps(ir, indent=2, sort_keys=True) + "\n",
                 "contract")
+            self._ir_dumped_routes = self._ir_route_set()
             self.emit(
                 "decompose", "engine", "",
                 str(getattr(self, "_root_id", "") or "L0"),
                 "machine IR written (ir.json)",
-                "nodes: %d; closed-world errors: %d; incomplete: %d"
+                "nodes: %d; closed-world errors: %d; incomplete: %d; "
+                "reason: %s"
                 % (len(ir.get("nodes") or {}), len(rep["errors"]),
-                   len(rep["incomplete"])),
+                   len(rep["incomplete"]), reason),
                 "ir_written", "", level=L_MILESTONE)
         except Exception as exc:  # noqa: BLE001 — attributable, non-fatal
             self.emit(
@@ -10082,6 +10095,155 @@ def %(callable)s(environ, start_response):
                 str(getattr(self, "_root_id", "") or "L0"),
                 "machine IR dump failed", str(exc)[:300],
                 "ir_written", "SKIP", level=L_MILESTONE)
+
+    def _ir_route_set(self) -> set:
+        """The realized route set: every (METHOD, path) any node owns."""
+        reg = self.__dict__.get("_route_owners") or {}
+        return {(str(m or "GET").upper(), str(p)) for (m, p) in reg}
+
+    def _maybe_redump_ir(self, reason: str) -> bool:
+        """Re-dump ir.json when the realized route set GREW (S14.5).
+
+        Why: Phase A dumped the IR once at plan time; a late-injected
+        requirement that binds a new route left the workspace copy stale
+        (open question #4). What: compares the current route set against
+        the snapshot taken by the last _write_ir; a superset triggers a
+        fresh dump with the caller's reason (no-op before the first dump —
+        in-visit injections land inside the initial dump already).
+        Test: tests/audit/test_scenario_engine_wiring.py."""
+        prev = self.__dict__.get("_ir_dumped_routes")
+        if prev is None:
+            return False
+        grown = self._ir_route_set() - prev
+        if not grown:
+            return False
+        self._write_ir(reason=reason)
+        return True
+
+    def _run_ir_scenarios(self) -> "Optional[dict]":
+        """Execute the IR scenarios (spec_scenarios) hermetically (S14.5).
+
+        Why: the scenario runner is THE interface oracle (node B1); the
+        verdict must come from a sterile subprocess over the workspace, not
+        from the engine process (P6). What: spawns `python3 -I
+        spec_scenarios.py ir.json <ws.root>` and parses the one
+        SCENARIO_RESULT line; None when there is nothing to judge (no
+        ir.json — non-web products never dump scenarios) or the runner
+        itself could not run (reported by the caller, never silently
+        green). Test: tests/audit/test_scenario_engine_wiring.py."""
+        ws = self.workspace
+        if not (ws.enabled and ws.root):
+            return None
+        ir_path = Path(ws.root) / "ir.json"
+        if not ir_path.is_file():
+            return None
+        script = Path(__file__).resolve().parent / "spec_scenarios.py"
+        try:
+            proc = subprocess.run(
+                ["python3", "-I", str(script), str(ir_path), str(ws.root)],
+                capture_output=True, text=True, timeout=180,
+                cwd=str(ws.root), env=_hermetic_probe_env())
+        except Exception as exc:  # noqa: BLE001 — attributable, not green
+            return {"ok": False, "passed": 0, "incomplete": [],
+                    "failures": [], "refused":
+                    ["scenario runner could not run: %s" % exc]}
+        for line in (proc.stdout or "").splitlines():
+            if line.startswith("SCENARIO_RESULT "):
+                try:
+                    return json.loads(line[len("SCENARIO_RESULT "):])
+                except Exception:  # noqa: BLE001 — fall through to error
+                    break
+        return {"ok": False, "passed": 0, "incomplete": [], "failures": [],
+                "refused": ["scenario runner emitted no verdict (rc=%s): %s"
+                            % (proc.returncode,
+                               ((proc.stdout or "") +
+                                (proc.stderr or ""))[-280:])]}
+
+    def _ir_scenario_gate(self) -> "tuple":
+        """The scenario oracle at final verification (S14.5, node B1).
+
+        Why: honest conjunction (P7) — a green suite plus a green boot is
+        still not READY while a G-W-T scenario of the IR is violated by the
+        RUNNING product. What: syncs ir.json (growth re-dump), runs the
+        scenarios, routes every failure to its OWNER node (scenario-fail
+        loop + scenario_gate FAIL event + doctor), surfaces incompleteness
+        findings as GAP events (a gap is a finding, never a fabricated red,
+        S14.3), flips pending late-injection nodes to scenario_green when
+        the run is clean. Returns (ok, detail).
+        Test: tests/audit/test_scenario_engine_wiring.py."""
+        self._maybe_redump_ir("pre-verify route sync")
+        res = self._run_ir_scenarios()
+        if res is None:
+            return True, "no IR scenarios to judge"
+        for gap in res.get("incomplete") or []:
+            self.emit("integrate", "engine", "", str(gap.get("node") or ""),
+                      "scenario gap: %s" % gap.get("step", ""),
+                      str(gap.get("missing") or "")[:300],
+                      "scenario_gate", "GAP", level=L_MILESTONE)
+        troubles = list(res.get("refused") or [])
+        for f in res.get("failures") or []:
+            nid = str(f.get("node") or "L0")
+            detail = ("scenario %s: step %s: expected %s, got %s"
+                      % (f.get("requirement"), f.get("step"),
+                         f.get("expected"), f.get("got")))
+            troubles.append(detail)
+            self.emit("integrate", "verifier", "spec-integrate", nid,
+                      "IR scenario violated (the interface oracle)",
+                      detail[:400], "scenario_gate", "FAIL",
+                      level=L_MILESTONE)
+            self.loops.append({"type": "scenario-fail", "task": nid,
+                               "detail": detail[:400]})
+            self._doctor_advise({"id": nid}, nid, 0, "scenario_gate",
+                                "FAIL", {"reasons": detail[:300]})
+        for msg in res.get("refused") or []:
+            self.emit("integrate", "verifier", "spec-integrate",
+                      str(getattr(self, "_root_id", "") or "L0"),
+                      "IR refused by the scenario runner (invalid IR is "
+                      "never executed)", str(msg)[:400],
+                      "scenario_gate", "FAIL", level=L_MILESTONE)
+        if troubles:
+            return False, "; ".join(troubles)[:2000]
+        for nid in sorted(self.__dict__.get("_scenario_pending_green")
+                          or ()):
+            self.emit("integrate", "verifier", "spec-integrate", str(nid),
+                      "late-injected scenarios now green (TDD loop closed)",
+                      "red at landing, green after the rework",
+                      "scenario_green", "PASS", level=L_MILESTONE)
+        self._scenario_pending_green = set()
+        return True, "scenarios green: %d judged" % int(res.get("passed")
+                                                        or 0)
+
+    def _scenario_red_probe(self, nid: str) -> None:
+        """Journal the RED half of the late-injection TDD loop (S14.5).
+
+        Why: a late requirement's scenarios enter the IR and MUST be red
+        before the rework — expressible in the journal, not narrative.
+        What: runs the oracle over the current workspace; any failure or
+        refusal (nothing serves the new route yet, entry may not even
+        exist) emits scenario_red for the landing node and remembers it so
+        the gate can flip it to scenario_green after the rework.
+        Test: tests/audit/test_scenario_engine_wiring.py."""
+        res = self._run_ir_scenarios()
+        red = res is None or not res.get("ok")
+        if red:
+            got = ""
+            if res is not None:
+                got = "; ".join(
+                    [str(f.get("got") or "") for f in
+                     (res.get("failures") or [])[:3]] +
+                    [str(m) for m in (res.get("refused") or [])[:2]])
+            self.emit("decompose", "engine", "", str(nid),
+                      "late-injected scenarios are RED before the rework",
+                      got[:300] or "nothing serves the new route yet",
+                      "scenario_red", "FAIL", level=L_MILESTONE)
+            pend = self.__dict__.setdefault("_scenario_pending_green",
+                                            set())
+            pend.add(str(nid))
+        else:
+            self.emit("decompose", "engine", "", str(nid),
+                      "late-injected scenarios already green",
+                      "the running product already serves the requirement",
+                      "scenario_green", "PASS", level=L_MILESTONE)
 
     def _unserved_route_gate(self) -> list:
         """S12.3 (v159): a DECLARED route with NO resolvable handler fails
@@ -10238,6 +10400,15 @@ def %(callable)s(environ, start_response):
             if not boot_ok:
                 passed = False
                 out += "\n\n=== ROOT BOOT-GATE (assembled product) ===\n" + boot_detail + "\n"
+        # S14.5 (node B1): the IR scenarios are THE interface oracle — a
+        # green suite plus a green boot is still NOT READY while a G-W-T
+        # scenario is violated by the running product (honest conjunction).
+        if passed:
+            sc_ok, sc_detail = self._ir_scenario_gate()
+            if not sc_ok:
+                passed = False
+                out += ("\n\n=== IR SCENARIO GATE (G-W-T oracle) ===\n"
+                        + sc_detail + "\n")
         root_id = getattr(self, "_root_id", "L0")
         reason = ""
         if not passed:
@@ -10281,6 +10452,12 @@ def %(callable)s(environ, start_response):
                     if not b_ok:
                         passed = False
                         out += "\n=== BOOT-GATE (post-repair) ===\n" + b_detail
+                if passed:
+                    sc_ok, sc_detail = self._ir_scenario_gate()
+                    if not sc_ok:
+                        passed = False
+                        out += ("\n=== IR SCENARIO GATE (post-repair) ===\n"
+                                + sc_detail)
                 if passed:
                     # healed: drop the integrate-fail we recorded, mark green
                     self.loops = [lp for lp in self.loops
