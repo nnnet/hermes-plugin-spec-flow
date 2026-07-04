@@ -46,7 +46,7 @@ graph:
   - {id: A3, needs: [A1],             parallel: "",        status: "[x]"}
   - {id: A4, needs: [A1, A2, A3],     parallel: "",        status: "[x]"}
   - {id: B1, needs: [A2, A3],         parallel: "after-a", status: "[~]"}
-  - {id: B2, needs: [A1, A3],         parallel: "after-a", status: "[~]"}
+  - {id: B2, needs: [A1, A3],         parallel: "after-a", status: "[!]"}
   - {id: B3, needs: [B1],             parallel: "",        status: "[ ]"}
   - {id: C1, needs: [A3, A4],         parallel: "",        status: "[ ]"}
   - {id: D1, needs: [B1, C1],         parallel: "",        status: "[ ]"}
@@ -109,7 +109,7 @@ graph:
 - заметки: сюда закрываются открытые вопросы Фазы A №3 (значения env)
   и №4 (момент записи ir.json); worktree-агент запущен 2026-07-04
 
-### [~] B2 `contract-oracle` — Specmatic + Schemathesis поверх OpenAPI из IR
+### [!] B2 `contract-oracle` — Specmatic + Schemathesis поверх OpenAPI из IR
 - выход: компиляция полного OpenAPI-документа из ir.json (слияние
   фрагментов узлов + ответы ошибок роутера общей секцией); контрактные
   тесты (Specmatic) + property-фаззинг (Schemathesis) как внешние оракулы
@@ -119,6 +119,17 @@ graph:
   `[!]` с точным списком что нужно от человека
 - заметки: вопрос Фазы A №2 — ответы ошибок роутера (400/404/405)
   инжектировать при компиляции; worktree-агент запущен 2026-07-04
+- сделано 2026-07-04: `spec_openapi.py` (compile_openapi + lint_openapi,
+  stdlib) — S16.1-S16.4 зелёные; харнесы `tests/tools/run_schemathesis.py`
+  и `tests/tools/run_specmatic.py` (S16.5); Schemathesis 4.22.3 поставлен
+  (`pip install --user`) и прогнан один раз по документу из крафтового IR
+  против мини-WSGI — ест документ без правок, 3/3 операции протестированы;
+  честная находка оракула: 405 роутера без заголовка `Allow` (RFC 9110)
+- `[!]` нужно от человека (только Specmatic): 1) JRE — `apt install
+  default-jre-headless` (java отсутствует на хосте); 2) скачать
+  specmatic.jar с https://specmatic.io в `tests/tools/specmatic.jar`
+  (pip-канала нет); дальше `python3 tests/tools/run_specmatic.py
+  <openapi.json> <base-url>` — команда и probe уже под тестами
 
 ### [ ] B3 `retire-llm-tester` — снятие ЛЛМ-тестера с интерфейса
 - выход: тесты соответствия генерирует движок из IR; за ЛЛМ — только
