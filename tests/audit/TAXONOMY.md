@@ -932,6 +932,62 @@ pytest collection: `ModuleNotFoundError: No module named 'spec_openapi'`,
   without pip-install rights or java — there the plan node is marked
   `[!]` with the precise human-needed list.
 
+## STAGE 17 — Skeleton compiler: the ENGINE writes the module skeleton
+(`test_skeleton_compiler.py`, `test_skeleton_write_door.py`)
+
+Node C1 of the spec-IR rearchitecture (plan 2026-07-04T00-45). Stage 13
+made the interface DATA; Stage 17 removes the model's freedom to restate
+it: the module skeleton — signatures, allowed imports, env access points,
+per-function contract anchors — is COMPILED from the node's IR entry by
+the engine (`spec_skeletons.compile_skeleton`), the model fills ONLY the
+function bodies, and the ONE write door judges every delivery against the
+skeleton (`spec_skeletons.skeleton_conformance`).
+
+Ratchet evidence (RED before code): both test files were committed against
+a not-yet-existing `spec_skeletons` module and an unwired engine, PROVEN
+RED — pytest collection fails with `ModuleNotFoundError: No module named
+'spec_skeletons'` (2 errors) — before any implementation commit.
+
+- S17.1 SKELETON IS A COMPILER OUTPUT, NEVER A MODEL GUESS: handler defs
+  come from openapi `x-spec-flow-handler` plus the platform
+  `(payload, query)` ABI; exposed-symbol defs from `symbols.exposes`;
+  the import line-up from `symbols.consumes` ONLY; env access points from
+  the declared `env` entries with their rules; each def carries a single
+  `raise NotImplementedError` placeholder under an
+  `AICODE-NOTE: skeleton-contract <symbol> ...` anchor naming method,
+  path, contracted status and request fields. Deterministic: the same IR
+  compiles to a byte-identical skeleton; a node with no IR interface
+  (branch, unknown id) compiles to NO skeleton.
+- S17.2 CONFORMANCE IS CLOSED-WORLD AND ATTRIBUTABLE (P4): a delivery is
+  refused when it renames a contracted function or changes its argument
+  list (the v143 rename class), imports a module outside
+  `symbols.consumes` + stdlib (the v157 phantom-import class dies AT THE
+  DOOR instead of at boot), defines a public function/route the IR never
+  contracted (closed world), or presents engine skeleton text with the
+  anchors stripped/tampered (a skeleton edit). Every finding names the
+  node and the offending symbol. GREEN direction: the honest bodies-only
+  delivery passes with ZERO findings; private `_helpers` and stdlib
+  imports are the implementation's own business; a FRESH conforming module
+  that carries no engine text is judged on the data checks alone — the
+  anchor rule is engine-text integrity, not a comment tax (the v151
+  false-positive lesson: `test_dynamic_collapse_bindings_share_contract`'s
+  conforming deterministic implementer must keep landing); a SyntaxError
+  is the suite's verdict, not the door's (the S10.12 convention).
+- S17.3 ONE DOOR, EXISTING REFUSAL SEMANTICS: the check runs inside
+  `_delivery_lint` for every registered code file — a refused delivery
+  never lands and leaves the standard `refused_code` artifact with the
+  findings as the reason. Files with NO registered skeleton keep today's
+  path untouched (fallback, no behavior change); the product entry module
+  stays engine-synthesized (the v164 template-revision lesson), never
+  skeletoned.
+- S17.4 REGISTRATION STAYS CURRENT: the engine compiles and registers the
+  skeleton at leaf time (`_ir_skeleton_for`) and hands it to the coder via
+  ictx + the worker prompt block (both chat and claude paths). A late
+  requirement that grows the module's route surface DROPS the stale
+  per-node registration on the IR re-dump — otherwise the honest rework
+  that ADDS the late handler would be refused as "uncontracted" (a
+  self-made deadlock); the S12.2 erasure gate owns the co-owned surface.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.
