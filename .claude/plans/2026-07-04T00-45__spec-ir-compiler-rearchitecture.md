@@ -41,18 +41,27 @@ v163 работал целиком, v164 снова сломан. Диагноз
 
 ```yaml
 graph:
-  - {id: A1, needs: [],               parallel: "",        status: "[x]"}
-  - {id: A2, needs: [A1],             parallel: "",        status: "[x]"}
-  - {id: A3, needs: [A1],             parallel: "",        status: "[x]"}
-  - {id: A4, needs: [A1, A2, A3],     parallel: "",        status: "[x]"}
-  - {id: B1, needs: [A2, A3],         parallel: "after-a", status: "[~]"}
-  - {id: B2, needs: [A1, A3],         parallel: "after-a", status: "[~]"}
-  - {id: B3, needs: [B1],             parallel: "",        status: "[ ]"}
-  - {id: C1, needs: [A3, A4],         parallel: "",        status: "[ ]"}
-  - {id: D1, needs: [B1, C1],         parallel: "",        status: "[ ]"}
-  - {id: E1, needs: [A4],             parallel: "after-a", status: "[~]"}
-  - {id: F1, needs: [B3, C1, D1, E1], parallel: "",        status: "[ ]"}
+  - {id: A1, needs: [],               parallel: "",        status: "[x]", files: [spec_ir.py]}
+  - {id: A2, needs: [A1],             parallel: "",        status: "[x]", files: [spec_ir.py]}
+  - {id: A3, needs: [A1],             parallel: "",        status: "[x]", files: [spec_ir.py, spec_flow_runner.py]}
+  - {id: A4, needs: [A1, A2, A3],     parallel: "",        status: "[x]", files: [spec_ir.py]}
+  - {id: B1, needs: [A2, A3],         parallel: "after-a", status: "[~]", files: [spec_scenarios.py, spec_flow_runner.py]}
+  - {id: B2, needs: [A1, A3],         parallel: "after-a", status: "[~]", files: [spec_openapi.py, tests/tools/]}
+  - {id: B3, needs: [B1],             parallel: "",        status: "[ ]", files: [spec_flow_runner.py, tests/harness/]}
+  - {id: C1, needs: [A3, A4],         parallel: "",        status: "[ ]", files: [spec_skeletons.py, spec_flow_runner.py]}
+  - {id: D1, needs: [B1, C1],         parallel: "",        status: "[ ]", files: [spec_flow_doctor.py, spec_flow_remedies.py]}
+  - {id: E1, needs: [A4],             parallel: "after-a", status: "[~]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py]}
+  - {id: F1, needs: [B3, C1, D1, E1], parallel: "",        status: "[ ]", files: [tests/scenarios/, tests/lib/]}
 ```
+
+Зоны (`files`) — что узел МЕНЯЕТ; пересечение зон = последовательность
+или осознанный worktree+merge с записанным порядком влития. Сейчас
+пересечение на spec_flow_runner.py: B1∥E1 идут worktree'ами (правки
+в разных функциях: верификация vs приём декомпозиции), порядок влития
+B1 → E1; C1 отложен до влития B1 — его зона (синтез каркасов) граничит
+с раннерными правками B1, а бюджет сессии подписки — общий на всех
+агентов (2026-07-04 три параллельных агента упёрлись в лимит, сброс
+16:40 — причина ждать с четвёртым).
 
 Статусы: `[ ]` ожидает | `[~]` в работе | `[!]` требует человека |
 `[x]` готов | `[-]` отменён.
