@@ -694,6 +694,70 @@ same wrong reading and stay green until product e2e.
   contracts/interface.json contracted text/html the whole time — the exact
   v159 re-guess class, one datum over. (`test_rework_media_binding.py`)
 
+## STAGE 13 — Spec-IR: one machine interface per node (`test_ir_closed_world.py`,
+`test_ir_openapi_conformance.py`, `test_ir_scenarios_schema.py`)
+Phase A of the spec-IR rearchitecture (plan 2026-07-04T00-45). Every drift
+class S10.9-S12.16 is ONE shape: two artifacts disagreeing on a value that
+never existed as data. Instead of catching each pairwise drift with its own
+gate, the IR merges the already-recorded datums — route ownership
+(`_route_owners`), success status (`_route_success_status`), media
+(`_route_media_map`), request shape (`_route_request_fields`), fixed bodies
+(`_route_fixed_body`), module symbol contracts (S11 `_module_contracts` /
+`_module_importers`), env vars (`_constitution_env_vars`), pinned paths
+(`_constitution_pinned_paths`), product entry (`_product_contract`) — into
+ONE closed structure per node (`spec_ir.build_ir`), and a validator
+(`spec_ir.validate_ir`) refuses anything the interface does not declare.
+Ratchet evidence (RED before code): all three test files were committed
+against a not-yet-existing `spec_ir` and PROVEN RED — `pytest` collection:
+`ModuleNotFoundError: No module named 'spec_ir'`, 3 errors — before the
+implementation commit turned them green.
+- S13.1 THE BUILDER NEVER INVENTS: `build_ir(engine)` assembles the IR
+  purely from recorded datums; a datum the engine never recorded (no media
+  for a route, no request-body values) leaves the IR field ABSENT and
+  `validate_ir` reports it as an INCOMPLETENESS finding — an honest gap,
+  never a guessed default (the v151 no-false-positive discipline applied to
+  construction). The engine dumps `ir.json` into the workspace ONCE at plan
+  time — right after the realized tree lands — with one journal event
+  `ir_written` (greppable in trace.jsonl), so every run carries the
+  artifact. Phase A only writes it; compiling specs/skeletons/tests FROM it
+  is Phases B/C.
+- S13.2 CLOSED WORLD: everything not declared is an error, and every error
+  is a PLAIN STRING naming the node id and the offending value (P4). The
+  named rules: an unknown key anywhere (IR, node entry, symbols, env,
+  scenario, our openapi fragment levels — `x-*` specification extensions
+  stay legal per the OpenAPI standard itself); a scenario touching a route
+  absent from every node's openapi; a symbol consumed but exposed by no
+  node; an env var used in a scenario but declared by no node; two nodes
+  owning the same (method, path) — including a drifted ownership DATUM,
+  never silently deduplicated; a route owned by a node with children
+  (S10.16: ownership means "this LEAF builds it"). GREEN direction: a fully
+  consistent IR and the normal branch-owns-nothing tree shape validate with
+  ZERO errors.
+- S13.3 REAL OpenAPI 3.1: the per-node interface fragment is a genuine
+  OpenAPI 3.1 document (`openapi: "3.1.0"`, `info`, `paths`) so
+  off-the-shelf contract tools (Specmatic / Schemathesis, Phase B) consume
+  it unmodified: requestBody schema with `required` fields and
+  `additionalProperties: false` from the S12.1 shape datum; responses keyed
+  by `_route_success_status` with content media from `_route_media_map`;
+  the ONE contracted fixed body as a JSON Schema `const`; the canonical
+  handler as `x-spec-flow-handler`.
+- S13.4 SCENARIOS FIRST-CLASS: the G-W-T that stayed prose in cards since
+  v150 becomes engine data — NOT full Gherkin (a parser would be its own
+  failure source) but a tiny closed schema the engine owns: given {env,
+  state: [prior when-steps]} / when {method, path, body} / then {status,
+  media, body_check = exactly one of equals|contains|json_subset}.
+  Scenarios group by requirement id; the builder derives them from the SAME
+  datums the openapi fragment reads (boot `json_roundtrip` becomes the
+  GET's given.state carrying the prior POST), so scenario and interface
+  cannot disagree by construction; a scenario's then.status/then.media must
+  match the owning openapi response — cross-checked at validation.
+- S13.5 PAST FAILURE CLASSES ARE IR ERRORS (named known-answer cases):
+  v157's phantom `from db import store_note` (symbol consumed, exposed by
+  no node) reds naming node and symbol; v164's media drift (/about serving
+  a JSON dict against contracted text/html) reds as a scenario/openapi
+  media mismatch carrying BOTH medias; v149's status guess (a scenario
+  asserting a status the interface never declares) reds naming the status.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.
