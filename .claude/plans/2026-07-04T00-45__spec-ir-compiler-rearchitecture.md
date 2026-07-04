@@ -47,7 +47,7 @@ graph:
   - {id: A4, needs: [A1, A2, A3],     parallel: "",        status: "[x]", files: [spec_ir.py]}
   - {id: B1, needs: [A2, A3],         parallel: "after-a", status: "[x]", files: [spec_scenarios.py, spec_flow_runner.py]}
   - {id: B2, needs: [A1, A3],         parallel: "after-a", status: "[~]", files: [spec_openapi.py, tests/tools/]}
-  - {id: B3, needs: [B1],             parallel: "",        status: "[ ]", files: [spec_flow_runner.py, tests/harness/]}
+  - {id: B3, needs: [B1],             parallel: "",        status: "[~]", files: [spec_flow_runner.py, tests/harness/]}
   - {id: C1, needs: [A3, A4],         parallel: "",        status: "[~]", files: [spec_skeletons.py, spec_flow_runner.py]}
   - {id: D1, needs: [B1, C1],         parallel: "",        status: "[ ]", files: [spec_flow_doctor.py, spec_flow_remedies.py]}
   - {id: E1, needs: [A4],             parallel: "after-a", status: "[x]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py]}
@@ -133,11 +133,13 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
 - заметки: вопрос Фазы A №2 — ответы ошибок роутера (400/404/405)
   инжектировать при компиляции; worktree-агент запущен 2026-07-04
 
-### [ ] B3 `retire-llm-tester` — снятие ЛЛМ-тестера с интерфейса
+### [~] B3 `retire-llm-tester` — снятие ЛЛМ-тестера с интерфейса
 - выход: тесты соответствия генерирует движок из IR; за ЛЛМ — только
   доменные краевые случаи сверх интерфейса (опционально)
 - приёмка: класс «тестер угадал» устранён по построению; никаких
   vanity-тестов; p6 гоняется только после этого узла
+- заметки: worktree-агент запущен 2026-07-04 после влития B1/E1; зона
+  пересекается с C1 в раннере — записанный порядок влития C1 → B3
 
 ### [~] C1 `skeleton-compiler` — каркас модуля пишет движок
 - выход: из IR — сигнатуры, таблица маршрутов, список разрешённых
