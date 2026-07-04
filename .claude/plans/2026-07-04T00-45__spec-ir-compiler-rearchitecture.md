@@ -46,11 +46,12 @@ graph:
   - {id: A3, needs: [A1],             parallel: "",        status: "[x]", files: [spec_ir.py, spec_flow_runner.py]}
   - {id: A4, needs: [A1, A2, A3],     parallel: "",        status: "[x]", files: [spec_ir.py]}
   - {id: B1, needs: [A2, A3],         parallel: "after-a", status: "[x]", files: [spec_scenarios.py, spec_flow_runner.py]}
-  - {id: B2, needs: [A1, A3],         parallel: "after-a", status: "[~]", files: [spec_openapi.py, tests/tools/]}
+  - {id: B2, needs: [A1, A3],         parallel: "after-a", status: "[\!]", files: [spec_openapi.py, tests/tools/]}
   - {id: B3, needs: [B1],             parallel: "",        status: "[~]", files: [spec_flow_runner.py, tests/harness/]}
   - {id: C1, needs: [A3, A4],         parallel: "",        status: "[~]", files: [spec_skeletons.py, spec_flow_runner.py]}
   - {id: D1, needs: [B1, C1],         parallel: "",        status: "[ ]", files: [spec_flow_doctor.py, spec_flow_remedies.py]}
   - {id: E1, needs: [A4],             parallel: "after-a", status: "[x]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py]}
+  - {id: B4, needs: [],               parallel: "",        status: "[ ]", files: [spec_flow_runner.py]}
   - {id: F1, needs: [B3, C1, D1, E1], parallel: "",        status: "[ ]", files: [tests/scenarios/, tests/lib/]}
 ```
 
@@ -122,7 +123,7 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
   (reason), scenario_gate, scenario_red/scenario_green (TDD-петля
   поздней инъекции). Вопросы Фазы A №3 и №4 закрыты
 
-### [~] B2 `contract-oracle` — Specmatic + Schemathesis поверх OpenAPI из IR
+### [\!] B2 `contract-oracle` — Specmatic + Schemathesis поверх OpenAPI из IR
 - выход: компиляция полного OpenAPI-документа из ir.json (слияние
   фрагментов узлов + ответы ошибок роутера общей секцией); контрактные
   тесты (Specmatic) + property-фаззинг (Schemathesis) как внешние оракулы
@@ -130,8 +131,17 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
   раннер остаётся только для многошаговых сценариев; при недоступности
   инструментов (java/pip) — документ+гейты готовы, интеграция помечается
   `[!]` с точным списком что нужно от человека
-- заметки: вопрос Фазы A №2 — ответы ошибок роутера (400/404/405)
-  инжектировать при компиляции; worktree-агент запущен 2026-07-04
+- заметки: СДЕЛАНО кроме Specmatic — коммит 7aa111e, влит (803 зелёных):
+  spec_openapi.py (compile_openapi: ошибки роутера $ref-ами из components
+  строго по коду _synthesize_entry_code, 400 только где есть обязательные
+  поля; DuplicateRouteError; пробелы в x-spec-flow-gaps, media не
+  угадывается; lint_openapi); tests/tools/run_schemathesis.py +
+  run_specmatic.py. Schemathesis 4.22.3 поставлен, съел документ без
+  правок (25 случаев, 3/3 операции). Вопрос Фазы A №2 закрыт.
+  ТРЕБУЕТ ЧЕЛОВЕКА (для Specmatic): 1) apt install default-jre-headless;
+  2) скачать specmatic.jar с specmatic.io в tests/tools/;
+  3) python3 tests/tools/run_specmatic.py <openapi.json> <base-url>.
+  Попутная честная находка оракула → узел B4
 
 ### [~] B3 `retire-llm-tester` — снятие ЛЛМ-тестера с интерфейса
 - выход: тесты соответствия генерирует движок из IR; за ЛЛМ — только
@@ -168,6 +178,15 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
   prose-derived; факты IR главнее прозы в _leaf_owned_routes /
   _route_request_fields / _route_media_map (проза — фолбэк без IR).
   Вопрос Фазы A №1 закрыт: значения тела пишет декомпозер в when.body
+
+### [ ] B4 `router-allow-header` — 405 роутера без заголовка Allow
+- выход: синтезированный роутер (_synthesize_entry_code) шлёт Allow с
+  перечнем контрактных методов пути при 405 (RFC 9110); зеркало в
+  spec_openapi (описание 405 упоминает Allow)
+- приёмка: находка Schemathesis воспроизводится красным кейсом до фикса
+  и зелёным после; ступень по храповику
+- заметки: рождён честной находкой Schemathesis при демонстрации B2;
+  зона — раннер, занят C1/B3 → стартует после их влития
 
 ### [ ] F1 `universality-battery` — батарея случайных спек
 - выход: генератор случайных маленьких спек разных доменов; конвейер
