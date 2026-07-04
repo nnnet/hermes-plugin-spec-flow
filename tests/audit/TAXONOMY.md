@@ -758,6 +758,70 @@ implementation commit turned them green.
   media mismatch carrying BOTH medias; v149's status guess (a scenario
   asserting a status the interface never declares) reds naming the status.
 
+## STAGE 14 — Scenario runner: THE interface oracle
+(`test_scenario_runner_oracle.py`, `test_scenario_engine_wiring.py`)
+
+Node B1 of the spec-IR rearchitecture (plan 2026-07-04T00-45). Phase A made
+the G-W-T scenarios DATA; Stage 14 makes them the JUDGEMENT: `spec_scenarios.
+run_scenarios(ir, wsgi_app|entry_path)` executes every IR scenario end-to-end
+through the WSGI surface as a black box — given.env applied, given.state
+replayed, when performed, then judged (status, media, body_check equals|
+contains|json_subset) — and the engine consults it at final verification.
+Static IR consistency (Stage 13) plus a green suite is still not evidence the
+RUNNING product honours the interface; the runner closes exactly that gap.
+
+Ratchet evidence (RED before code): both test files were committed against a
+not-yet-existing `spec_scenarios` and unwired engine, PROVEN RED — oracle
+file fails pytest collection (`ModuleNotFoundError: No module named
+'spec_scenarios'`), wiring file 5 failed (missing `_ir_scenario_gate`, no
+re-dump, no scenario_red/scenario_green events) — before the implementation
+commit.
+
+- S14.1 THE RUNNER IS THE ORACLE, FAILURES ATTRIBUTABLE (P4): every failure
+  names the scenario's requirement id, the OWNING node, the step, and
+  expected vs got as plain JSON-safe strings. Named red case: v164's media
+  drift caught BEHAVIOURALLY — the LIVE GET /about answers application/json
+  while then.media contracts text/html; Stage 13 reds the IR-level
+  disagreement, the runner reds the running product even over an internally
+  consistent IR. given.state is REPLAYED: a product that drops state
+  (POST-then-GET returns nothing) reds on the json_subset check. GREEN
+  direction: a conforming app and a stateful roundtrip pass with zero
+  failures and a positive passed count.
+- S14.2 AN INVALID IR IS REFUSED, NEVER RUN (v149): a scenario asserting a
+  status the interface never declares is already an IR VALIDATION error
+  (S13.5); the runner refuses to execute — no request is ever issued (a spy
+  app records ZERO calls). Refusing beats "helpfully" running an IR whose
+  meaning is broken. GREEN direction: a valid IR is never refused.
+- S14.3 NEVER A GUESSED VALUE: a when.body ABSENT while the route's
+  requestBody schema has required fields is a NAMED incompleteness finding
+  (requirement, node, step, the unvalued fields); the scenario is NOT
+  executed and NOT counted as passed. No random generation, no defaults —
+  a gap is a finding, not a fabricated red and not a silent green. GREEN
+  direction: a valued body is executed and judged normally.
+- S14.4 ENGINE-OWNED ENV VALUE FACTORY (closes Phase A open question #3):
+  deterministic, derived from the IR env entry — a var whose RULE mentions
+  a path/file/db gets a fresh temp path UNDER the run workspace; same var
+  name -> same value within one run; a NEW run gets a FRESH path (a shared
+  value would be cross-run memory, the rejected cache crutch). Behaviour
+  comes from the rule text, never from product-specific name literals.
+  given.env values are applied to the live process environment and reach
+  the app (an app ignoring them reds behaviourally). GREEN direction: a
+  non-filesystem rule yields a deterministic non-path token.
+- S14.5 THE GATE IS WIRED (final verification + late-injection TDD): the
+  engine's `_ir_scenario_gate` runs the scenarios in a hermetic subprocess
+  alongside the boot probe inside `_verify_tests`; ANY scenario violation
+  makes the verdict NOT READY (P7) with the finding ROUTED to the owner
+  node (a `scenario-fail` loop entry + `scenario_gate` FAIL event carrying
+  the node id, doctor advised). ir.json is RE-DUMPED whenever the realized
+  route set GROWS (the v156 late-binding seam) so the workspace copy is
+  always current, and `ir_written` fires again with a reason field (closes
+  Phase A open question #4). A late injection is a TDD loop EXPRESSIBLE IN
+  THE JOURNAL: the landing is journalled `scenario_red` (nothing serves the
+  new route yet) and the rework flips the SAME node to `scenario_green` —
+  red-then-green is evidence, not narrative. GREEN direction: a pure
+  refinement that binds no route triggers no re-dump; a conforming product
+  passes the gate with no scenario-fail loops.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.
