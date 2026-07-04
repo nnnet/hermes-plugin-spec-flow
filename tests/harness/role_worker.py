@@ -1173,6 +1173,32 @@ def _interfaces_block(ctx: dict) -> str:
     return "".join(parts)
 
 
+def _skeleton_block(ctx: dict) -> str:
+    """C1 (S17.4): hand the ENGINE-compiled module skeleton to the coder.
+
+    Why: the skeleton — signatures, imports, route surface, contract
+    anchors — is compiled from the spec IR by the engine; every surface the
+    model is free to restate is a surface it can drift (v143/v157 classes).
+    What: a prompt block carrying the skeleton VERBATIM with the
+    bodies-only instruction; empty when the engine handed no skeleton
+    (fallback leaves keep today's prompt unchanged).
+    Test: tests/audit/test_skeleton_write_door.py
+    (test_skeleton_reaches_worker_prompts)."""
+    skel = ctx.get("skeleton")
+    if not skel:
+        return ""
+    return ("\n\nENGINE SKELETON — this module skeleton is compiled from the"
+            " approved spec IR and is ENGINE-OWNED. Start from it VERBATIM"
+            " and fill ONLY the function bodies (replace each"
+            " `raise NotImplementedError` with the real implementation)."
+            " Do NOT rename a function, do NOT change an argument list, do"
+            " NOT add public functions or routes, do NOT import anything"
+            " beyond the skeleton's imports plus the standard library, and"
+            " KEEP the AICODE-NOTE anchor comments. The platform write door"
+            " REFUSES a delivery that edits the skeleton:\n"
+            "```python\n" + str(skel).rstrip() + "\n```")
+
+
 _ARCHITECT_TASK = """You are the ARCHITECT sub-role of the implementer team for
 ONE leaf of a Spec-Driven Development run.
 
@@ -1204,7 +1230,8 @@ def _orchestra_run(ctx: dict, ws_root: str, nid: str, fn: str, *,
     spec_body = _inline_file(ws_root, ctx.get("spec", ""))
     base_prompt = _IMPLEMENT_CHAT_TASK.format(
         title=ctx["title"], id=nid, spec=ctx.get("spec", ""),
-        spec_body=spec_body, fn=fn) + _interfaces_block(ctx) + _card_block(ctx)
+        spec_body=spec_body, fn=fn) + _interfaces_block(ctx) \
+        + _card_block(ctx) + _skeleton_block(ctx)
     handoff: dict[str, Any] = {"architect_plan": "", "test_output": ""}
     passed, test_out, wrote = False, "(no files written)", False
     baseline = 0
@@ -1738,6 +1765,7 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         prompt = _IMPLEMENT_TASK.format(title=ctx["title"], id=nid,
                                         spec=ctx["spec"], fn=fn) \
             + _interfaces_block(ctx) + _card_block(ctx) \
+            + _skeleton_block(ctx) \
             + memory.recall_block_for("implementer", ctx["title"]) \
             + _ASK_RULE
         note = channel.poll_note() if channel is not None else None
@@ -1772,7 +1800,7 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         spec_body = _inline_file(ws_root, ctx["spec"])
         prompt = _IMPLEMENT_CHAT_TASK.format(
             title=ctx["title"], id=nid, spec=ctx["spec"],
-            spec_body=spec_body, fn=fn) + _ASK_RULE
+            spec_body=spec_body, fn=fn) + _skeleton_block(ctx) + _ASK_RULE
         from . import pytest_verifier, repo_map
         protected = sorted(pytest_verifier.protected_files())
         rmap = repo_map.build_map(ws_root, exclude=set(protected))

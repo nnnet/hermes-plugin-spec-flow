@@ -208,6 +208,20 @@ def test_stripped_anchor_is_a_finding():
         "must red: %r" % fnd)
 
 
+def test_fresh_conforming_module_without_engine_text_is_green():
+    # BOTH-DIRECTIONS convention (v151 lesson): the anchor rule is
+    # engine-text INTEGRITY, not a comment tax — a module written fresh
+    # with the exact contracted surface and no engine text must land on
+    # the data checks alone (the deterministic conforming implementer in
+    # test_module_symbol_contract writes exactly such modules)
+    code = ("from db import init_db, store_note\n\n\n"
+            "def post_notes(payload, query):\n"
+            '    return 201, {"id": 1}\n\n\n'
+            "def get_notes(payload, query):\n"
+            '    return 200, {"items": []}\n')
+    assert _findings(code) == []
+
+
 def test_bodies_only_delivery_is_green():
     code = _bodies_only(_skel())
     assert _findings(code) == [], (

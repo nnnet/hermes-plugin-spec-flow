@@ -853,11 +853,16 @@ RED — pytest collection fails with `ModuleNotFoundError: No module named
   list (the v143 rename class), imports a module outside
   `symbols.consumes` + stdlib (the v157 phantom-import class dies AT THE
   DOOR instead of at boot), defines a public function/route the IR never
-  contracted (closed world), or strips a skeleton anchor. Every finding
-  names the node and the offending symbol. GREEN direction: the honest
-  bodies-only delivery passes with ZERO findings; private `_helpers` and
-  stdlib imports are the implementation's own business; a SyntaxError is
-  the suite's verdict, not the door's (the S10.12 convention).
+  contracted (closed world), or presents engine skeleton text with the
+  anchors stripped/tampered (a skeleton edit). Every finding names the
+  node and the offending symbol. GREEN direction: the honest bodies-only
+  delivery passes with ZERO findings; private `_helpers` and stdlib
+  imports are the implementation's own business; a FRESH conforming module
+  that carries no engine text is judged on the data checks alone — the
+  anchor rule is engine-text integrity, not a comment tax (the v151
+  false-positive lesson: `test_dynamic_collapse_bindings_share_contract`'s
+  conforming deterministic implementer must keep landing); a SyntaxError
+  is the suite's verdict, not the door's (the S10.12 convention).
 - S17.3 ONE DOOR, EXISTING REFUSAL SEMANTICS: the check runs inside
   `_delivery_lint` for every registered code file — a refused delivery
   never lands and leaves the standard `refused_code` artifact with the

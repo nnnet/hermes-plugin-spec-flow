@@ -114,7 +114,8 @@ class _LeafWorkspaceView:
                              contracts=getattr(self, "module_contracts",
                                                None),
                              route_handlers=getattr(
-                                 self, "route_handler_contracts", None))
+                                 self, "route_handler_contracts", None),
+                             skeletons=getattr(self, "ir_skeletons", None))
         if bad:
             # the door REFUSES: dirty code never lands (RULE_CODE_STYLE)
             try:
@@ -1125,8 +1126,32 @@ def _route_handler_erasure(rel: str, tree: "ast.AST",
             for name in sorted(set(want) - defined)]
 
 
+def _skeleton_violations(rel: str, body: str, skeletons) -> list:
+    """S17.3 (node C1): judge a delivered code file against the ENGINE
+    skeleton compiled from its leaf's IR entry.
+
+    Why: signatures, imports and route surface are engine-owned data — a
+    delivery free to restate them is a delivery free to drift (v143 rename,
+    v157 phantom import). The check runs at the ONE write door so no writer
+    can bypass it.
+    What: ``skeletons`` is the workspace registration
+    ``{rel: {"ir": <ir dict>, "node": <node id>}}`` maintained by
+    ``Engine._ir_skeleton_for``; unregistered files pass untouched
+    (fallback — leaves without an IR interface keep today's path).
+    Test: tests/audit/test_skeleton_write_door.py."""
+    ent = (skeletons or {}).get(str(rel).replace("\\", "/"))
+    if not isinstance(ent, dict):
+        return []
+    try:
+        from . import spec_skeletons  # type: ignore
+    except ImportError:
+        import spec_skeletons  # type: ignore
+    return spec_skeletons.skeleton_conformance(
+        ent.get("ir") or {}, str(ent.get("node") or ""), body or "")
+
+
 def _delivery_lint(rel: str, body: str, root=None, contracts=None,
-                   route_handlers=None) -> list:
+                   route_handlers=None, skeletons=None) -> list:
     """ONE write-door hygiene check for delivered CODE (src/*.py, tests/*.py).
     Enforces RULE_CODE_STYLE — the same constant workers see in their prompts,
     so prompt and gate can never drift. Findings (each a class that already
@@ -1171,6 +1196,9 @@ def _delivery_lint(rel: str, body: str, root=None, contracts=None,
     findings.extend(_module_contract_violations(rel, tree, contracts))
     # S12.2: the module ROUTE surface gate — an erasing rework never lands
     findings.extend(_route_handler_erasure(rel, tree, route_handlers))
+    # S17.3 (node C1): the engine-compiled skeleton is the contract — a
+    # delivery that rewrites signatures/imports/route surface never lands
+    findings.extend(_skeleton_violations(p, body, skeletons))
     return findings
 
 
@@ -2141,7 +2169,8 @@ class Workspace:
                              contracts=getattr(self, "module_contracts",
                                                None),
                              route_handlers=getattr(
-                                 self, "route_handler_contracts", None))
+                                 self, "route_handler_contracts", None),
+                             skeletons=getattr(self, "ir_skeletons", None))
         if bad:
             # the door REFUSES: dirty code never lands (RULE_CODE_STYLE)
             self.artifacts.append({"path": rel, "type": "refused_%s" % kind,
@@ -9423,6 +9452,12 @@ def %(callable)s(environ, start_response):
                     ictx["acceptance"] = node.get("acceptance")
                 if node.get("examples"):
                     ictx["examples"] = node.get("examples")
+                # C1 (S17.4): a leaf with an IR interface gets the ENGINE
+                # skeleton — the model fills ONLY the bodies and the write
+                # door refuses a skeleton edit. '' = today's path untouched.
+                _skel = self._ir_skeleton_for(nid, f"src/{code_fn}.py")
+                if _skel:
+                    ictx["skeleton"] = _skel
                 try:
                     self._invoke_implementer(ictx, nid, code_fn)
                 except NotImplementedError:
@@ -10080,6 +10115,7 @@ def %(callable)s(environ, start_response):
                 json.dumps(ir, indent=2, sort_keys=True) + "\n",
                 "contract")
             self._ir_dumped_routes = self._ir_route_set()
+            self._refresh_ir_skeletons(ir)
             self.emit(
                 "decompose", "engine", "",
                 str(getattr(self, "_root_id", "") or "L0"),
@@ -10100,6 +10136,93 @@ def %(callable)s(environ, start_response):
         """The realized route set: every (METHOD, path) any node owns."""
         reg = self.__dict__.get("_route_owners") or {}
         return {(str(m or "GET").upper(), str(p)) for (m, p) in reg}
+
+    def _ir_skeleton_for(self, nid: str, code_rel: str) -> str:
+        """C1 (S17.4): compile the ENGINE-owned module skeleton for a leaf
+        from its IR entry and register the write-door conformance view.
+
+        Why: an engine-written skeleton leaves the model ZERO freedom over
+        signatures, imports and route surface — the v143/v157 drift classes
+        die by construction instead of post-hoc audit.
+        What: builds a fresh IR over the engine datums, compiles the node's
+        skeleton (spec_skeletons.compile_skeleton) and registers
+        ``workspace.ir_skeletons[code_rel]`` so _delivery_lint can refuse a
+        skeleton edit. Returns '' — meaning "today's path, untouched" —
+        for the product entry (engine-synthesized router, the v164 template
+        lesson), for a module surface listed by more than one node (the
+        S12.2 erasure gate owns co-owned files) and for leaves without an
+        IR interface. A compile failure is an attributable SKIP, never a
+        crash: the leaf falls back to the free-form path.
+        Test: tests/audit/test_skeleton_write_door.py."""
+        try:
+            try:
+                from . import spec_ir, spec_skeletons  # type: ignore
+            except ImportError:  # flat layout: repo root on sys.path
+                import spec_ir  # type: ignore
+                import spec_skeletons  # type: ignore
+            ir = spec_ir.build_ir(self)
+            rel = str(code_rel).replace("\\", "/")
+            entry = str((ir.get("product") or {}).get("entry") or "")
+            if entry and entry == rel:
+                return ""
+            others = [k for k, v in (ir.get("nodes") or {}).items()
+                      if k != str(nid) and rel in (v.get("files") or [])]
+            if others:
+                return ""
+            skel = spec_skeletons.compile_skeleton(ir, str(nid))
+            if not skel:
+                return ""
+            reg = getattr(self.workspace, "ir_skeletons", None)
+            if reg is None:
+                reg = {}
+                self.workspace.ir_skeletons = reg
+            reg[rel] = {"ir": ir, "node": str(nid)}
+            self.emit("implement", "engine", "", str(nid),
+                      "engine skeleton compiled from the IR — the coder "
+                      "fills ONLY the bodies",
+                      "file: %s" % rel, "skeleton_compiled", "",
+                      level=L_DETAIL)
+            return skel
+        except Exception as exc:  # noqa: BLE001 — fallback is today's path
+            self.emit("implement", "engine", "", str(nid),
+                      "skeleton compile failed — the leaf falls back to "
+                      "the free-form path", str(exc)[:300],
+                      "skeleton_compiled", "SKIP", level=L_DETAIL)
+            return ""
+
+    def _refresh_ir_skeletons(self, ir: dict) -> None:
+        """C1 (S17.4): keep the write-door skeleton registrations CURRENT
+        on every IR dump.
+
+        Why: a late requirement that binds a new route INTO an already
+        skeletoned module (v156 seam) makes the per-node skeleton stale —
+        the honest rework that ADDS the late handler would be refused as
+        "uncontracted", a self-made deadlock.
+        What: for every registered file, compares the handlers the module
+        must serve (the S12.2 ``_route_handler_modules`` datum) against the
+        registered node's contracted surface; a grown surface DROPS the
+        registration (the erasure gate owns co-owned files), otherwise the
+        IR snapshot is replaced with the fresh one.
+        Test: tests/audit/test_skeleton_write_door.py
+        (test_route_growth_drops_the_stale_registration)."""
+        reg = getattr(self.workspace, "ir_skeletons", None)
+        if not reg:
+            return
+        try:
+            from . import spec_skeletons  # type: ignore
+        except ImportError:
+            import spec_skeletons  # type: ignore
+        mods = self.__dict__.get("_route_handler_modules") or {}
+        for rel in list(reg):
+            nid = str((reg.get(rel) or {}).get("node") or "")
+            stem = Path(str(rel)).stem
+            must_serve = {_canonical_handler_symbol(m, p)
+                          for (m, p), s in mods.items() if str(s) == stem}
+            surface = set(spec_skeletons.contract_surface(ir, nid))
+            if must_serve - surface:
+                del reg[rel]
+            else:
+                reg[rel]["ir"] = ir
 
     def _maybe_redump_ir(self, reason: str) -> bool:
         """Re-dump ir.json when the realized route set GREW (S14.5).
