@@ -4184,6 +4184,9 @@ class Engine:
                     media.setdefault(p, "json")
         except Exception:        # noqa: BLE001 — datum stays best-effort
             pass
+        # E1 (S15.5): media declared in accepted decomposer IR fragments WIN
+        # over the prose-derived map — the IR is validated data, not a guess
+        media.update(self._decomposer_ir_route_facts()[1])
         return media
 
     # accept-verbs that anchor a REQUEST-BODY brace list to its route mention
@@ -4238,6 +4241,9 @@ class Engine:
                     out.setdefault(((m or "GET").upper(), p), [])
         except Exception:        # noqa: BLE001 — no contract = no routes
             pass
+        # E1 (S15.5): required fields declared in accepted decomposer IR
+        # fragments WIN over the prose-derived shape (validated data first)
+        out.update(self._decomposer_ir_route_facts()[0])
         return out
 
     def _request_shape_datum_gate(self, reqf: dict, contract: dict) -> None:
@@ -4389,7 +4395,59 @@ class Engine:
     _INHERITED_CONTEXT_LINE = re.compile(
         r"traces.?to|^\s*[-*#>\s]*\**goal\s*:", re.IGNORECASE)
 
-    def _leaf_owned_routes(self, node: dict) -> list:
+    def _log_interface_source(self, nid: str, source: str) -> None:
+        """E1 (S15.4): journal ONCE per node where its interface facts came
+        from — `interface_source: ir` (decomposer-supplied machine part) or
+        `interface_source: prose-derived` (the S10.19 fallback grep).
+        Why: when both paths exist, an unrecorded choice is invisible drift.
+        Test: tests/audit/test_decomposer_emits_ir.py."""
+        seen = self.__dict__.setdefault("_iface_source_logged", set())
+        if not nid or nid in seen:
+            return
+        seen.add(nid)
+        self.emit("decompose", "engine", "", nid,
+                  "route ownership derived",
+                  "interface_source: %s" % source, level=L_DETAIL)
+
+    def _decomposer_ir_route_facts(self) -> tuple:
+        """E1 (S15.5): (request_fields, media) facts read from the accepted
+        decomposer IR fragments. IR wins over prose-derived guesses; a fact
+        the fragments never declared stays absent (never invented).
+        What: request_fields is {(METHOD, path): [required fields]} from the
+        fragment's requestBody schema; media is {path: 'json'|'html'} from
+        the success responses' content types.
+        Test: tests/audit/test_decomposer_emits_ir.py."""
+        reqf: dict = {}
+        media: dict = {}
+        tokens = {"application/json": "json", "text/html": "html"}
+        for frag in (self.__dict__.get("_decomposer_ir_nodes") or {}).values():
+            paths = ((frag or {}).get("openapi") or {}).get("paths") or {}
+            for path, ops in (paths.items() if isinstance(paths, dict)
+                              else ()):
+                if not isinstance(ops, dict):
+                    continue
+                for m, op in ops.items():
+                    if str(m).lower() not in ("get", "post", "put",
+                                              "delete", "patch") or \
+                            not isinstance(op, dict):
+                        continue
+                    content = (((op.get("requestBody") or {}).get("content")
+                                or {}).get("application/json") or {})
+                    fields = (content.get("schema") or {}).get("required")
+                    if isinstance(fields, list):
+                        reqf[(str(m).upper(), str(path))] = [
+                            str(f) for f in fields]
+                    for resp in (op.get("responses") or {}).values():
+                        if not isinstance(resp, dict):
+                            continue
+                        for mt in (resp.get("content") or {}):
+                            tok = tokens.get(str(mt))
+                            if tok:
+                                media[str(path)] = tok
+        return reqf, media
+
+    def _leaf_owned_routes(self, node: dict,
+                           log_source: bool = True) -> list:
         """The DECLARED routes THIS leaf owns. The single source of route
         ownership, shared by the route -> handler binding (Phase 1), the leaf
         handler gate (Phase 2) and the plan-ownership report (Phase 6) —
@@ -4458,7 +4516,21 @@ class Engine:
         if not routes:
             return []
         declared = node.get("exposes") or []
-        if declared:
+        ir_frag = (self.__dict__.get("_decomposer_ir_nodes") or {}).get(nid)
+        ir_paths = ((ir_frag or {}).get("openapi") or {}).get("paths") or {}
+        if ir_paths:
+            # E1 (S15.4): the decomposer supplied a validated machine part —
+            # its openapi fragment IS the ownership source; the prose claim
+            # text is not consulted (prose stops carrying the interface).
+            claimed = {(str(m).upper(), str(p))
+                       for p, ops in ir_paths.items()
+                       if isinstance(ops, dict) for m in ops
+                       if str(m).lower() in
+                       ("get", "post", "put", "delete", "patch")}
+            owned = [(m, p) for m, p in routes if (m, p) in claimed]
+            if owned and log_source:
+                self._log_interface_source(nid, "ir")
+        elif declared:
             # S10.19a: typed edges are the SINGLE source when present — the
             # decomposer's declared surface, never prose. A declared claim of
             # a foreign route is a REAL duplicate (kept for S10.17/S10.18).
@@ -4481,6 +4553,8 @@ class Engine:
                 if re.search(r"(?<![\w/])" + re.escape(stem) + r"(?![\w])",
                              text):
                     owned.append((m, p))
+            if owned and log_source:
+                self._log_interface_source(nid, "prose-derived")
             # S10.19c: a prose-matched route ALREADY recorded to another leaf
             # is a DEPENDENCY, not a claim (first-owner-wins — deterministic
             # by the datum). v154: 'reusing the existing … /notes logic' made
@@ -5006,7 +5080,10 @@ class Engine:
         """
         if not (code_rel and getattr(self.workspace, "root", None)):
             return True
-        owned = self._leaf_owned_routes(node)
+        # S12.5: a quiet recheck is verdict-only — mute the one-shot
+        # interface_source journal line (E1/S15.4) so the seen-set stays
+        # clean and a later non-quiet derivation still records it
+        owned = self._leaf_owned_routes(node, log_source=not quiet)
         if not owned:
             return True
         defined: "dict[str, list]" = {}
@@ -6766,6 +6843,9 @@ def %(callable)s(environ, start_response):
                     f"run-call budget exhausted: {self._agent_calls} > "
                     f"{self._run_call_budget} (role {role})")
             return fn(*a, **k)
+        # E1 (S15.1): the IR capability declared by the worker must survive
+        # the budget wrapper so the seam can require the machine part
+        _proxy.emits_ir = getattr(fn, "emits_ir", False)
         return _proxy
 
     def run(self, project: dict) -> RunResult:
@@ -7428,6 +7508,78 @@ def %(callable)s(environ, start_response):
                 }
         return ctx
 
+    def _accept_decomposer_ir(self, node: dict, out: Optional[dict]) -> list:
+        """E1 (S15.1-S15.3): validate the decomposer's MACHINE part at the
+        seam where its output is received, BEFORE any assembly starts.
+
+        Why: prose stops being the carrier of the interface — every S10.19
+        prose-grep was a guess deferred to assembly; a machine part refused
+        HERE is attributable to the exact decomposer call that produced it.
+        What: `out["ir"]` (spec-flow IR v1, `spec_ir.py`) is validated with
+        `spec_ir.validate_ir` against the MERGED document of every fragment
+        accepted so far (one owner per (method, path) across calls — the
+        v154 rival-handler class at proposal time). Consumed-but-not-yet-
+        exposed symbols are NOT refused mid-growth (the tree is still being
+        proposed; the full-tree check in `_write_ir` stays the closed-world
+        backstop). A refused fragment never enters the registry and is
+        stripped from `out` so nothing downstream reads an invalid value.
+        Returns [] on accept (or when no IR was supplied by a legacy
+        decomposer); a non-empty list of attributable errors on refusal.
+        Test: tests/audit/test_decomposer_emits_ir.py."""
+        nid = str((node or {}).get("id") or "")
+        frag = (out or {}).get("ir")
+        if frag is None:
+            required = getattr(
+                self.agents.get("decomposer"), "emits_ir", False)
+            if not required:
+                return []          # legacy/simulated decomposer: prose path
+            errors = ["node %s: decomposer output has no machine part 'ir' "
+                      "(spec-flow ir v1 was asked for)" % nid]
+        else:
+            try:
+                from . import spec_ir  # type: ignore
+            except ImportError:  # flat layout: repo root on sys.path
+                import spec_ir  # type: ignore
+            errors = []
+            nodes = frag.get("nodes") if isinstance(frag, dict) else None
+            if not isinstance(nodes, dict) or not nodes:
+                errors = ["node %s: machine part 'ir' carries no nodes "
+                          "mapping (got %r)" % (nid, frag if not
+                          isinstance(frag, dict) else sorted(frag))]
+            else:
+                reg = self.__dict__.setdefault("_decomposer_ir_nodes", {})
+                merged = dict(reg)
+                merged.update(nodes)
+                rep = spec_ir.validate_ir(
+                    {"format": spec_ir.IR_FORMAT, "product": {},
+                     "nodes": merged})
+                # mid-growth: a symbol consumed from a node not proposed yet
+                # is pending, not phantom — the full-tree check reds it later
+                errors = [x for x in rep["errors"]
+                          if "is exposed by no node" not in x]
+                if str(frag.get("format")) != spec_ir.IR_FORMAT:
+                    errors.insert(0, "node %s: ir.format %r is not %r"
+                                  % (nid, frag.get("format"),
+                                     spec_ir.IR_FORMAT))
+                if not errors:
+                    reg.update(nodes)
+                    self.emit(
+                        "decompose", "engine", "", nid,
+                        "decomposer IR: machine part accepted",
+                        "nodes: %d; incomplete: %d"
+                        % (len(nodes), len(rep["incomplete"])),
+                        "decomposer_ir", "PASS", level=L_MILESTONE)
+                    return []
+        if out is not None:
+            out.pop("ir", None)    # a refused fragment must not ride along
+        self.emit("decompose", "engine", "", nid,
+                  "decomposer IR: machine part refused",
+                  "; ".join(errors)[:300], "decomposer_ir", "FAIL",
+                  level=L_MILESTONE)
+        self.loops.append({"type": "decomposer-ir-refused", "task": nid,
+                           "detail": "; ".join(errors)[:300]})
+        return errors
+
     def _expand_node(self, node: dict, depth: int, parent: Optional[str],
                      ancestors: tuple = ()) -> dict:
         """A node arrived without metrics — the DECOMPOSER AGENT builds this
@@ -7448,6 +7600,10 @@ def %(callable)s(environ, start_response):
             saved = self._decomp_index.get(node["id"])
             if saved:
                 node.update(saved)
+                # E1: a machine part persisted with this level re-enters the
+                # engine's IR registry (same validation, same events)
+                if isinstance(saved.get("ir"), dict):
+                    self._accept_decomposer_ir(node, saved)
                 self.emit("decompose", "spec-decomposer", "spec-flow-decompose",
                           node["id"],
                           "resume: restored this level from the run journal "
@@ -7462,6 +7618,19 @@ def %(callable)s(environ, start_response):
                 "the tree does not converge to leaves")
         out = self.agents["decomposer"](
             self._decomposer_ctx(node, depth, parent, ancestors))
+        # E1 (S15.1): the machine part is validated at the SEAM, before any
+        # assembly; a refusal drives ONE bounded re-ask carrying the exact
+        # errors — the same retry chain bad JSON already drives inside the
+        # worker (llm_backend model fallback). A second refusal stays a
+        # recorded red (never a SILENT fallback to prose-only).
+        ir_errors = self._accept_decomposer_ir(node, out)
+        if ir_errors:
+            self._decompose_calls += 1
+            retry_ctx = self._decomposer_ctx(node, depth, parent, ancestors)
+            retry_ctx["ir_errors"] = ir_errors
+            retry = self.agents["decomposer"](retry_ctx)
+            if not self._accept_decomposer_ir(node, retry):
+                out = retry
         # mutate the node IN PLACE so the realized metrics/children attach to the
         # live tree — this is how project["tree"] ends up holding the full tree
         # the decomposer built (needed for the reports in llm mode).
