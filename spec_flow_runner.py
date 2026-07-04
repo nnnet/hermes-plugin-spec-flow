@@ -7112,6 +7112,9 @@ def %(callable)s(environ, start_response):
         # so reports can render the tree the plugin actually built — in llm mode
         # the case carried no `tree`, this is where it becomes inspectable.
         project["tree"] = root
+        # Phase A (spec-IR, S13.1): the realized plan just landed — dump the
+        # merged machine IR once so every run carries the artifact.
+        self._write_ir()
 
         # B2 mechanism 3 — BACKSTOP emit: the engine now synthesizes an
         # assembly leaf (see _assembly_node, injected at the depth-0 placement
@@ -10041,6 +10044,44 @@ def %(callable)s(environ, start_response):
                 encoding="utf-8")
         except OSError:
             pass
+
+    def _write_ir(self) -> None:
+        """Dump the merged machine IR to ir.json (Phase A, spec-IR, S13.1).
+
+        Why: every drift class S10.9-S12.16 is two artifacts disagreeing on
+        a value that never existed as data; the IR (spec_ir.build_ir) merges
+        every engine-declared datum — route ownership, status, media,
+        request shape, module symbol contracts, env vars, pins — into ONE
+        closed structure per node so Phases B/C can compile from it.
+        What: ONE write through the workspace door at plan time plus ONE
+        `ir_written` journal event carrying node count and validation
+        tallies. Read-only over the datums — no gate behaviour changes.
+        Test: tests/audit/test_ir_scenarios_schema.py."""
+        try:
+            try:
+                from . import spec_ir  # type: ignore
+            except ImportError:  # flat layout: repo root on sys.path
+                import spec_ir  # type: ignore
+            ir = spec_ir.build_ir(self)
+            rep = spec_ir.validate_ir(ir)
+            self.workspace._write(
+                "ir.json",
+                json.dumps(ir, indent=2, sort_keys=True) + "\n",
+                "contract")
+            self.emit(
+                "decompose", "engine", "",
+                str(getattr(self, "_root_id", "") or "L0"),
+                "machine IR written (ir.json)",
+                "nodes: %d; closed-world errors: %d; incomplete: %d"
+                % (len(ir.get("nodes") or {}), len(rep["errors"]),
+                   len(rep["incomplete"])),
+                "ir_written", "", level=L_MILESTONE)
+        except Exception as exc:  # noqa: BLE001 — attributable, non-fatal
+            self.emit(
+                "decompose", "engine", "",
+                str(getattr(self, "_root_id", "") or "L0"),
+                "machine IR dump failed", str(exc)[:300],
+                "ir_written", "SKIP", level=L_MILESTONE)
 
     def _unserved_route_gate(self) -> list:
         """S12.3 (v159): a DECLARED route with NO resolvable handler fails
