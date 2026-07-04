@@ -874,6 +874,63 @@ GREEN-direction legacy case) — before the implementation commit.
   the model still left without a body is accepted as an honest
   INCOMPLETENESS finding (spec_ir reports it; the accept event carries the
   tally) — the engine never injects an invented body.
+## STAGE 16 — OpenAPI compilation from the IR (`test_openapi_compiler.py`)
+Phase B node B2 (`contract-oracle`) of the spec-IR rearchitecture (plan
+2026-07-04T00-45). The per-node OpenAPI 3.1 fragments inside `ir.json` are
+compiled by `spec_openapi.compile_openapi` into ONE product-level document
+that external contract oracles (Schemathesis property fuzzing, Specmatic
+contract tests) consume unmodified; `spec_openapi.lint_openapi` is the
+stdlib structural self-check over that document. The compiler NEVER invents:
+paths come verbatim from the fragments, and the injected error responses
+mirror EXACTLY what the engine's synthesized router
+(`_synthesize_entry_code`) actually does — this closes Phase A open
+question #2 (router error responses as shared data). Stage numbers 14–15
+are reserved for the parallel B1 (scenario-runner) / E1 (decomposer-IR)
+nodes.
+Ratchet evidence (RED before code): `test_openapi_compiler.py` was
+committed against a not-yet-existing `spec_openapi` and PROVEN RED —
+pytest collection: `ModuleNotFoundError: No module named 'spec_openapi'`,
+1 error — before the implementation commit turned it green.
+- S16.1 ONE DOCUMENT, OWNERSHIP HONORED: all node fragments merge into a
+  single `openapi`/`info`/`paths` document; every operation carries its
+  owning node as `x-spec-flow-node`. Two nodes claiming the same
+  (method, path) is a NAMED refusal — `DuplicateRouteError` carrying the
+  method, the path and BOTH node ids (P4) — never a silent
+  last-writer-wins merge. GREEN direction: distinct routes merge with
+  every fragment value verbatim.
+- S16.2 ROUTER-TRUTHFUL ERROR RESPONSES: per operation the compiler
+  injects exactly the error responses the synthesized router produces —
+  404 unknown path (`{"error": "not found"}`), 405 declared path with an
+  undeclared method (`{"error": "method not allowed"}`), 500 escaped
+  handler exception (`{"error": "internal: <type>: <msg>"}`), and 400
+  ONLY on operations whose contracted requestBody has required fields
+  (the router's S12.1 validation; the same writes also 400 on
+  malformed/empty JSON bodies). All are `$ref`s into ONE shared
+  `components.responses` section quoting the router's actual bodies; a
+  status the fragment already declares is NEVER overwritten (the
+  fragment is the contract source). RED direction: a GET or an
+  empty-shape write gaining a 400 would be invented behavior.
+- S16.3 STRUCTURAL SELF-LINT: `lint_openapi` checks the OpenAPI 3.1
+  rules verifiable with stdlib alone — required top-level keys, the 3.1
+  version string, well-formed paths/operations/responses/content, and
+  resolvable local `$ref`s — returning NAMED findings
+  (`{rule, where, message}`). An operation without `responses` is a
+  finding; the compiled document from a valid IR lints CLEAN (zero
+  findings), otherwise we ship a document the oracles reject.
+- S16.4 HONEST MEDIA GAP: a fragment response with no recorded media
+  compiles to a response WITHOUT `content` plus a gap finding in the
+  document's `x-spec-flow-gaps` (naming node, method, path) — never a
+  guessed content type (the S13.1 no-invention discipline carried
+  downstream). A description-only response is legal OpenAPI: the gap is
+  a finding, not a lint failure.
+- S16.5 EXTERNAL ORACLE HARNESSES: `tests/tools/run_schemathesis.py` and
+  `tests/tools/run_specmatic.py` assemble the exact CLI invocations
+  (`<cli> run <schema> --url <base>`; `java -jar <jar> test <spec>
+  --testBaseURL=<base>`) and probe tool availability honestly (which
+  binary/package/jar is missing). Argument assembly is unit-tested at
+  inspection level, so the harness stays correct even in environments
+  without pip-install rights or java — there the plan node is marked
+  `[!]` with the precise human-needed list.
 
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
