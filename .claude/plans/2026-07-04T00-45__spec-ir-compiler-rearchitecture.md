@@ -45,10 +45,10 @@ graph:
   - {id: A2, needs: [A1],             parallel: "",        status: "[x]", files: [spec_ir.py]}
   - {id: A3, needs: [A1],             parallel: "",        status: "[x]", files: [spec_ir.py, spec_flow_runner.py]}
   - {id: A4, needs: [A1, A2, A3],     parallel: "",        status: "[x]", files: [spec_ir.py]}
-  - {id: B1, needs: [A2, A3],         parallel: "after-a", status: "[~]", files: [spec_scenarios.py, spec_flow_runner.py]}
+  - {id: B1, needs: [A2, A3],         parallel: "after-a", status: "[x]", files: [spec_scenarios.py, spec_flow_runner.py]}
   - {id: B2, needs: [A1, A3],         parallel: "after-a", status: "[~]", files: [spec_openapi.py, tests/tools/]}
   - {id: B3, needs: [B1],             parallel: "",        status: "[ ]", files: [spec_flow_runner.py, tests/harness/]}
-  - {id: C1, needs: [A3, A4],         parallel: "",        status: "[ ]", files: [spec_skeletons.py, spec_flow_runner.py]}
+  - {id: C1, needs: [A3, A4],         parallel: "",        status: "[~]", files: [spec_skeletons.py, spec_flow_runner.py]}
   - {id: D1, needs: [B1, C1],         parallel: "",        status: "[ ]", files: [spec_flow_doctor.py, spec_flow_remedies.py]}
   - {id: E1, needs: [A4],             parallel: "after-a", status: "[~]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py]}
   - {id: F1, needs: [B3, C1, D1, E1], parallel: "",        status: "[ ]", files: [tests/scenarios/, tests/lib/]}
@@ -106,7 +106,7 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
 - заметки: именованные кейсы v157/v164/v149 зелёные в tests/audit/
   test_ir_closed_world.py и test_ir_scenarios_schema.py
 
-### [~] B1 `scenario-runner` — раннер сценариев = оракул интерфейса
+### [x] B1 `scenario-runner` — раннер сценариев = оракул интерфейса
 - выход: исполнение G-W-T из IR на лету как e2e через WSGI-поверхность
   (чёрный ящик); нарушение сценария = красная сборка; фабрика значений
   env (движковая, детерминированная — временный путь на прогон по
@@ -115,8 +115,12 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
   требование → сценарий (красный) → реализация → зелёный (TDD-петля);
   отсутствующее контрактное тело запроса = находка-пробел, не угаданное
   значение
-- заметки: сюда закрываются открытые вопросы Фазы A №3 (значения env)
-  и №4 (момент записи ir.json); worktree-агент запущен 2026-07-04
+- заметки: ГОТОВ — коммит 26f938d, влит 6a13cc4 (778 зелёных);
+  spec_scenarios.py: EnvValueFactory (значение из ПРАВИЛА env-записи IR,
+  временный путь на прогон), герметичный подпроцесс python3 -I; ре-дамп
+  ir.json при росте маршрутов (_maybe_redump_ir); события ir_written
+  (reason), scenario_gate, scenario_red/scenario_green (TDD-петля
+  поздней инъекции). Вопросы Фазы A №3 и №4 закрыты
 
 ### [~] B2 `contract-oracle` — Specmatic + Schemathesis поверх OpenAPI из IR
 - выход: компиляция полного OpenAPI-документа из ir.json (слияние
@@ -135,13 +139,13 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
 - приёмка: класс «тестер угадал» устранён по построению; никаких
   vanity-тестов; p6 гоняется только после этого узла
 
-### [ ] C1 `skeleton-compiler` — каркас модуля пишет движок
+### [~] C1 `skeleton-compiler` — каркас модуля пишет движок
 - выход: из IR — сигнатуры, таблица маршрутов, список разрешённых
   импортов; модель заполняет ТОЛЬКО тела функций
 - приёмка: дверь записи отвергает правку каркаса; красный кейс —
   попытка модели переписать сигнатуру
-- заметки: толкается с B1 в spec_flow_runner.py — стартовать после
-  влития B1 (или в worktree с осознанным merge)
+- заметки: стартовал после влития B1 (2026-07-04); порядок влития
+  раннерных правок: E1 → C1
 
 ### [ ] D1 `counterexample-repair` — лечение переспросом одной функции
 - выход: контрпример (вход/ожидалось/получилось) → переспрос ОДНОЙ
