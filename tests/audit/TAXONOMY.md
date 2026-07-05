@@ -1064,6 +1064,61 @@ the implementation commit turned it green.
   the S12.1 request-shape gate run unchanged over compiled files and pass
   trivially — the compiled asserts ARE the contracted datums the gates read.
 
+## STAGE 19 — Counterexample repair: re-ask ONE function (`test_counterexample_repair.py`)
+Phase D node D1 (`counterexample-repair`) of the spec-IR rearchitecture (plan
+2026-07-04T00-45). Until now every repair path re-asked the model with the
+WHOLE module plus the raw pytest dump (`_REPAIR_TASK` / `_REPAIR_DIFF_TASK`
+carry full src + full test + output tail), inviting a rewrite of everything
+in sight — v159 "the core rework re-guessed the module and erased routes"
+and the v160 eternal-open causes are one class: a repair whose degrees of
+freedom exceed the defect. B3 (Stage 18) made the leaf's contract tests an
+engine-compiled artifact and C1 (Stage 17) made the skeleton engine-owned;
+this stage composes them: a failing compiled contract test is reduced by
+DETERMINISTIC ENGINE CODE to a COUNTEREXAMPLE — function, input, expected,
+got — and the remedy re-asks the model for ONE function body with FRESH
+context (Ralph loop: one task per iteration, objective exit = the real
+contract-test run going green). Model-independence via minimum degrees of
+freedom: the re-ask carries only the one function's slot, and the write door
+accepts only that function's body — a full-file rewrite is impossible BY
+CONSTRUCTION, not by review.
+Ratchet evidence (RED before code): `test_counterexample_repair.py` was
+committed against a `spec_flow_doctor` without `Counterexample` /
+`extract_counterexamples` / `function_slot` / `repair_prompt` /
+`apply_function_body` / `counterexample_repair` and a `spec_flow_remedies`
+without `counterexample_config`, PROVEN RED at pytest collection — before
+the implementation commit turned it green.
+- S19.1 EXTRACTION IS DETERMINISTIC ENGINE CODE: the counterexample is
+  parsed from the compiled-test failure output (pytest failure sections) —
+  never an LLM call; attribution is the FAILING STEP (a scenario red on its
+  given.state POST blames `post_notes`, never the unreached when-step
+  handler); a green run or garbage output yields `[]`, total and crash-free;
+  same output -> same counterexamples.
+- S19.2 ONE FUNCTION, FRESH CONTEXT: `function_slot` is the engine-owned
+  def line plus the C1 contract anchor — never the failed body; the repair
+  prompt carries the slot and the counterexample (input/expected/got) and
+  NOTHING else — no sibling function, no module body, no raw pytest dump.
+  The `BODY_ONLY_RULE` sentence in the prompt is the same contract the door
+  enforces (prompt states, code guarantees).
+- S19.3 THE DOOR ACCEPTS ONLY THAT FUNCTION'S BODY: an unknown function, a
+  module-shaped reply (imports / column-0 defs beyond the one slot), a
+  renamed def or a rewritten argument list are REFUSED with a named
+  ValueError; a def hidden inside a block lands as a harmless NESTED def
+  while every byte outside the target block stays identical
+  (source-segment pinned) — both smuggling vectors dead; the splice keeps the
+  engine signature and the AICODE-NOTE anchor, and Stage 17's
+  `skeleton_conformance` stays green over it — D1 composes with the C1 door,
+  never bypasses it.
+- S19.4 OBJECTIVE EXIT, ONE TASK PER ITERATION, BOUNDED: `green` means the
+  REAL test run passed — a model that answers every round but never fixes
+  the defect ends `green=False` at `max_rounds`; each iteration re-extracts
+  the counterexample from the LATEST run (iteration 2 quotes the new
+  observed value, never a replay); a red run with no extractable
+  counterexample stops WITHOUT an LLM call, journaling the reason — the
+  remedy never guesses which function to blame.
+- S19.5 KNOBS ARE DATA: `counterexample_config` lives in the remedies
+  5-layer merge (factory default -> env JSON -> case YAML -> overrides), so
+  `max_rounds` is a per-case knob, not a literal in the loop.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.

@@ -11,10 +11,14 @@ caller).
 """
 from __future__ import annotations
 
+import ast
+import re
+import textwrap
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
-from spec_flow_remedies import (causes_config, doctor_config, escalation_kinds,
+from spec_flow_remedies import (causes_config, counterexample_config,
+                                doctor_config, escalation_kinds,
                                 evaluator_config, levels_order)
 
 
@@ -218,6 +222,340 @@ def doctor_metrics(loops: list) -> dict:
     return {"treatments": len(d), "by_cause": by_cause, "by_remedy": by_remedy,
             "by_outcome": by_outcome,
             "resolved_ratio": (resolved / len(d)) if d else 0.0}
+
+
+# --- counterexample-driven ONE-FUNCTION repair (node D1, Stage 19) ------------
+# Why: every existing repair path re-asks the model with the WHOLE module plus
+# the raw pytest dump, inviting a rewrite of everything it sees (the v159
+# route-erasing rework class). Here the degrees of freedom match the defect:
+# a failing ENGINE-COMPILED contract test (B3) is reduced by deterministic code
+# to a COUNTEREXAMPLE (function, input, expected, got); the re-ask carries only
+# that one function's slot (C1 def line + contract anchor) and the write door
+# splices ONLY that function's body — a full-file rewrite is impossible by
+# construction. Pure: no I/O here; the test run and the model call are injected
+# (the same seam the Classifier uses). Test: tests/audit/
+# test_counterexample_repair.py (S19.1-S19.5).
+
+# the ONE contract sentence shared by the prompt and the door — prompt states,
+# code guarantees (never let the two drift)
+BODY_ONLY_RULE = ("Return ONLY the statements of this one function's body — "
+                  "no def line, no module-level code, no other function, "
+                  "no prose, no code fence.")
+
+# pytest failure-section header: `____ test_name ____`
+_SECTION_RE = re.compile(r"^_{3,}\s+(test_\w+)\s+_{3,}\s*$")
+# the engine-compiled invoke step: `status, body = _invoke(handler, <args>)`
+_INVOKE_RE = re.compile(r"_invoke\(\s*(\w+)\s*,\s*(.*)\)\s*$")
+
+
+@dataclass(frozen=True)
+class Counterexample:
+    """One failing contract fact: which function, on what input, what the
+    contract expected and what the run observed. Extracted by ENGINE CODE
+    from the compiled-test failure output — never by an LLM."""
+    test: str
+    function: str
+    method: str = ""
+    path: str = ""
+    payload: Any = None
+    expected: str = ""
+    got: str = ""
+
+
+def _failure_sections(output: str) -> list:
+    """Split pytest output into (test_name, section_lines) chunks.
+
+    Why: the compiled-test failure section is the ONLY authoritative record
+    of which statement failed and with what values.
+    What: returns the FAILURES sections in output order; total — junk that
+    carries no section header yields [].
+    Test: garbage-output case in test_extraction_is_total_on_garbage_output.
+    """
+    sections: list = []
+    name, buf = "", []
+    for line in str(output or "").splitlines():
+        m = _SECTION_RE.match(line.strip())
+        if m:
+            if name:
+                sections.append((name, buf))
+            name, buf = m.group(1), []
+            continue
+        if name and line.startswith("="):        # summary separator ends all
+            sections.append((name, buf))
+            name, buf = "", []
+            continue
+        if name:
+            buf.append(line)
+    if name:
+        sections.append((name, buf))
+    return sections
+
+
+def _section_counterexample(name: str, lines: list) -> Optional[Counterexample]:
+    """One section -> one counterexample, or None when the section carries no
+    engine-compiled invoke step (an import error, a fixture crash — those
+    belong to other remedies, never guessed into a function blame).
+
+    Why: attribution must be the FAILING step — pytest marks the failing
+    statement with '>' and prints the source above it, so the LAST _invoke
+    line at or before the marker is the step whose judgement failed (a
+    scenario red on its given.state POST blames the POST handler, not the
+    unreached when-step).
+    What: parses handler/method/path/payload from the invoke line (literal by
+    construction — the engine compiled it) and expected/got from the '>' and
+    'E' lines.
+    Test: test_scenario_failure_blames_the_failing_step.
+    """
+    fail_at = -1
+    for i, ln in enumerate(lines):
+        if ln.lstrip().startswith(">"):
+            fail_at = i
+    if fail_at < 0:
+        return None
+    invoke = None
+    for ln in lines[:fail_at + 1]:
+        m = _INVOKE_RE.search(ln)
+        if m:
+            invoke = m
+    if invoke is None:
+        return None
+    try:
+        args = ast.literal_eval("(%s)" % invoke.group(2))
+    except (ValueError, SyntaxError):
+        return None
+    if not isinstance(args, tuple) or len(args) < 3:
+        return None
+    expected = lines[fail_at].lstrip().lstrip(">").strip()
+    got = "; ".join(ln[1:].strip() for ln in lines[fail_at:]
+                    if ln.startswith("E ") or ln.rstrip() == "E").strip()
+    return Counterexample(
+        test=name, function=invoke.group(1), method=str(args[0]),
+        path=str(args[1]), payload=args[2], expected=expected, got=got)
+
+
+def extract_counterexamples(test_source: str, output: str) -> list:
+    """Deterministic counterexamples from a compiled-test run's output.
+
+    Why: the repair must know WHICH function failed on WHAT input without
+    asking a model — the engine authored the test file, so it owns the
+    grammar of both the source and the failure output.
+    What: one Counterexample per pytest failure section whose test exists in
+    the compiled source and whose failing step is an engine _invoke call;
+    green runs, junk output and non-invoke failures yield [] (total).
+    Test: tests/audit/test_counterexample_repair.py (S19.1).
+    """
+    src = str(test_source or "")
+    out: list = []
+    for name, lines in _failure_sections(output):
+        if ("def %s(" % name) not in src:
+            continue                     # not a compiled test of this leaf
+        cx = _section_counterexample(name, lines)
+        if cx is not None:
+            out.append(cx)
+    return out
+
+
+def _module_fdef(module_src: str, function: str) -> tuple:
+    """(ast tree, module-level FunctionDef) or ValueError naming the offence.
+
+    Why: both the slot and the door need the SAME engine-owned lookup so they
+    can never disagree on where the function lives.
+    What: parses the module and returns its top-level def of `function`.
+    Test: unknown-function refusal in test_door_refuses_unknown_function.
+    """
+    try:
+        tree = ast.parse(module_src or "")
+    except SyntaxError as exc:
+        raise ValueError("module does not parse: %s" % exc)
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == function:
+            return tree, node
+    raise ValueError("function '%s' is not defined at module level — "
+                     "the door has no slot for it" % function)
+
+
+def function_slot(module_src: str, function: str) -> str:
+    """The ONE function's engine slot: def line + contract anchor comments,
+    WITHOUT the current body.
+
+    Why: fresh context — replaying the failed body invites the model to
+    patch around it; the slot plus the counterexample is the whole task.
+    What: the source lines from the def keyword to just before the first
+    body statement (the C1 anchor comment lives in that span).
+    Test: test_function_slot_is_signature_and_anchor_only.
+    """
+    _tree, fdef = _module_fdef(module_src, function)
+    lines = (module_src or "").splitlines()
+    header = lines[fdef.lineno - 1:fdef.body[0].lineno - 1]
+    if not header:                       # one-line def: keep the def line
+        header = [lines[fdef.lineno - 1]]
+    return "\n".join(header)
+
+
+def repair_prompt(cx: Counterexample, slot: str) -> str:
+    """The one-function re-ask with FRESH context.
+
+    Why: minimum degrees of freedom — the prompt receives ONLY the slot and
+    the counterexample, so a whole-file rewrite cannot even be requested.
+    What: a compact directive: slot, input, expected, got, body-only rule.
+    Test: test_repair_prompt_carries_one_function_and_no_module.
+    """
+    return (
+        "You repair EXACTLY ONE function of a spec-driven product module.\n\n"
+        "Function slot (engine-owned — the signature cannot change):\n"
+        "%s\n\n"
+        "Counterexample from the compiled contract-test run:\n"
+        "  test:     %s\n"
+        "  input:    %s %s payload=%r\n"
+        "  expected: %s\n"
+        "  got:      %s\n\n"
+        "%s The write door splices your reply into this single body slot; "
+        "everything else in the module is engine-frozen."
+        % (slot, cx.test, cx.method, cx.path, cx.payload, cx.expected,
+           cx.got, BODY_ONLY_RULE))
+
+
+_FENCE_RE = re.compile(r"```[a-zA-Z0-9_-]*\s*\n(.*?)```", re.S)
+
+
+def _reply_body(reply: str, function: str, want_args: list) -> str:
+    """Normalise a model reply into a bare function BODY, or refuse.
+
+    Why: the door's whole guarantee is that nothing but ONE body can land;
+    every module-shaped reply must die HERE with a named refusal.
+    What: strips a code fence; a reply that parses as a module is accepted
+    only when it is EXACTLY one def of `function` with the engine argument
+    list (its body is taken) or plain statements (taken verbatim); imports /
+    sibling defs / renamed defs / rewritten argument lists are refused. A
+    reply that only parses as a body (carries `return`) is syntax-probed.
+    Test: test_door_refuses_module_shaped_reply,
+    test_door_green_splice_keeps_engine_surface.
+    """
+    text = str(reply or "")
+    m = _FENCE_RE.search(text)
+    if m:
+        text = m.group(1)
+    body = textwrap.dedent(text).strip("\n")
+    if not body.strip():
+        raise ValueError("empty repair reply — nothing to splice")
+    module = None
+    try:
+        module = ast.parse(body)
+    except SyntaxError:
+        pass                             # body-only replies carry `return`
+    if module is not None:
+        stmts = module.body
+        if len(stmts) == 1 and isinstance(stmts[0], ast.FunctionDef):
+            fd = stmts[0]
+            if fd.name != function:
+                raise ValueError(
+                    "reply defines '%s', the slot is '%s' — the door accepts "
+                    "ONLY that function's body" % (fd.name, function))
+            if [a.arg for a in fd.args.args] != list(want_args):
+                raise ValueError(
+                    "reply rewrites the argument list of '%s' — the "
+                    "signature is engine-owned" % function)
+            seg = body.splitlines()[fd.body[0].lineno - 1:fd.end_lineno]
+            body = textwrap.dedent("\n".join(seg)).strip("\n")
+        elif any(isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                ast.ClassDef, ast.Import, ast.ImportFrom))
+                 for s in stmts):
+            raise ValueError(
+                "reply is module-shaped (imports / defs beyond the one "
+                "'%s' slot) — full-file rewrites are refused by "
+                "construction" % function)
+    probe = ("def _probe(%s):\n" % ", ".join(want_args)
+             + textwrap.indent(body, "    "))
+    try:
+        ast.parse(probe)
+    except SyntaxError as exc:
+        raise ValueError("reply is not a valid function body: %s" % exc)
+    return body
+
+
+def apply_function_body(module_src: str, function: str, reply: str) -> str:
+    """The WRITE DOOR: splice a reply into EXACTLY ONE function's body.
+
+    Why: acceptance of node D1 — a full-file rewrite is impossible BY
+    CONSTRUCTION because only the named function's body region is ever
+    replaced; the def line and the C1 anchor comments are engine-kept and
+    every byte outside the block is carried over verbatim.
+    What: returns the new module text; ValueError (named) for an unknown
+    function or a reply that is not one plain body.
+    Test: tests/audit/test_counterexample_repair.py (S19.3).
+    """
+    _tree, fdef = _module_fdef(module_src, function)
+    want_args = [a.arg for a in fdef.args.args]
+    body = _reply_body(reply, function, want_args)
+    lines = (module_src or "").splitlines()
+    header = lines[fdef.lineno - 1:fdef.body[0].lineno - 1]
+    if not header:
+        raise ValueError(
+            "function '%s' is a one-line def — the engine skeleton owns the "
+            "slot shape and never emits one" % function)
+    out_lines = (lines[:fdef.lineno - 1] + header
+                 + textwrap.indent(body, "    ").splitlines()
+                 + lines[fdef.end_lineno:])
+    out = "\n".join(out_lines)
+    if (module_src or "").endswith("\n"):
+        out += "\n"
+    try:
+        new_tree, new_fdef = _module_fdef(out, function)
+    except ValueError as exc:
+        raise ValueError("splice broke the module — refused: %s" % exc)
+    if [a.arg for a in new_fdef.args.args] != want_args:
+        raise ValueError("splice would change the signature of '%s' — "
+                         "refused" % function)
+    return out
+
+
+def counterexample_repair(module_src: str, test_source: str, *,
+                          run_tests: Callable, ask: Callable,
+                          max_rounds: Optional[int] = None) -> dict:
+    """The Ralph loop: fresh context, ONE task per iteration, objective exit.
+
+    Why: a repair loop is honest only when its exit condition is the REAL
+    contract-test run — a cooperative model that never fixes the defect must
+    end red; and one counterexample per iteration keeps every re-ask small
+    enough for a weak model (model-independence).
+    What: run tests -> green? exit; else extract counterexamples, take the
+    FIRST, re-ask that one function, splice through the door, repeat up to
+    ``max_rounds`` (config datum). Returns {green, rounds, module, records};
+    a red run with no extractable counterexample stops WITHOUT an LLM call.
+    ``run_tests(module_src) -> (passed, output)`` and ``ask(prompt) -> reply``
+    are injected (the Classifier's seam pattern) — this function does no I/O.
+    Test: tests/audit/test_counterexample_repair.py (S19.4).
+    """
+    rounds = int(max_rounds if max_rounds is not None
+                 else counterexample_config().get("max_rounds", 3))
+    src = module_src
+    records: list = []
+    for rnd in range(1, max(1, rounds) + 1):
+        passed, output = run_tests(src)
+        if passed:
+            return {"green": True, "rounds": rnd - 1, "module": src,
+                    "records": records}
+        cxs = extract_counterexamples(test_source, output)
+        if not cxs:
+            records.append({"round": rnd, "applied": False,
+                            "detail": "no counterexample extractable from "
+                                      "the failing run — stopping honestly"})
+            return {"green": False, "rounds": rnd - 1, "module": src,
+                    "records": records}
+        cx = cxs[0]                      # ONE task per iteration
+        rec = {"round": rnd, "test": cx.test, "function": cx.function,
+               "applied": False}
+        try:
+            slot = function_slot(src, cx.function)
+            reply = ask(repair_prompt(cx, slot))
+            src = apply_function_body(src, cx.function, reply)
+            rec["applied"] = True
+        except ValueError as exc:
+            rec["detail"] = str(exc)[:200]
+        records.append(rec)
+    passed, _output = run_tests(src)     # the objective FINAL verdict
+    return {"green": bool(passed), "rounds": max(1, rounds), "module": src,
+            "records": records}
 
 
 # --- Doctor facade -----------------------------------------------------------
