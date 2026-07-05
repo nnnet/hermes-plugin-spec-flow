@@ -211,7 +211,7 @@ def test_s20_4_linter_reds_on_tampered_specs():
     base = next(iter(_specs(_gen()).values()))
     tampered = {
         "seed_files": base + "\nseed_files:\n  - src/app.py\n",
-        "code_fence": base.replace("goal:", "goal: |\n  ```python\n  x = 1\n  ```\n#", 1),
+        "code_fence": base + "\n# ```python\n# x = 1\n# ```\n",
         "def_body": base + "\n# def build_app(): return app\n",
     }
     for rule, text in tampered.items():

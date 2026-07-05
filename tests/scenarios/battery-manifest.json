@@ -1,0 +1,341 @@
+{
+  "format": "spec-flow battery v1",
+  "seed": 20260705,
+  "count": 8,
+  "generator": "tests/lib/battery_gen.py",
+  "specs": [
+    {
+      "file": "bat01_quotes.yaml",
+      "name": "bat01_quotes",
+      "kind": "service",
+      "domain": "quotes",
+      "dims": {
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/health",
+            "media": "json"
+          },
+          {
+            "method": "POST",
+            "path": "/quotes",
+            "media": "json"
+          },
+          {
+            "method": "GET",
+            "path": "/quotes",
+            "media": "json"
+          },
+          {
+            "method": "DELETE",
+            "path": "/quotes",
+            "media": "json"
+          }
+        ],
+        "route_count": 4,
+        "methods": [
+          "DELETE",
+          "GET",
+          "POST"
+        ],
+        "media": [
+          "json"
+        ],
+        "required_fields": [
+          "quote",
+          "speaker",
+          "source"
+        ],
+        "storage_env": "QUOTES_DB",
+        "modules": [
+          "src/quote_store.py",
+          "src/quotes_api.py"
+        ],
+        "module_count": 2,
+        "scenario_count": 3
+      }
+    },
+    {
+      "file": "bat02_readings.yaml",
+      "name": "bat02_readings",
+      "kind": "service",
+      "domain": "readings",
+      "dims": {
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/health",
+            "media": "json"
+          },
+          {
+            "method": "POST",
+            "path": "/readings",
+            "media": "json"
+          },
+          {
+            "method": "GET",
+            "path": "/readings",
+            "media": "json"
+          },
+          {
+            "method": "GET",
+            "path": "/readings/count",
+            "media": "json"
+          },
+          {
+            "method": "GET",
+            "path": "/about",
+            "media": "html"
+          }
+        ],
+        "route_count": 5,
+        "methods": [
+          "GET",
+          "POST"
+        ],
+        "media": [
+          "html",
+          "json"
+        ],
+        "required_fields": [
+          "sensor",
+          "value"
+        ],
+        "storage_env": "READINGS_DB",
+        "modules": [
+          "src/reading_store.py",
+          "src/readings_api.py",
+          "src/readings_page.py"
+        ],
+        "module_count": 3,
+        "scenario_count": 3
+      }
+    },
+    {
+      "file": "bat03_textstats.yaml",
+      "name": "bat03_textstats",
+      "kind": "lib",
+      "domain": "textstats",
+      "dims": {
+        "capabilities": [
+          "char_count",
+          "line_count",
+          "reverse_text"
+        ],
+        "layout": "single-module",
+        "modules": [
+          "src/textlib_impl.py",
+          "src/textlib.py"
+        ],
+        "module_count": 2,
+        "scenario_count": 3
+      }
+    },
+    {
+      "file": "bat04_contacts.yaml",
+      "name": "bat04_contacts",
+      "kind": "service",
+      "domain": "contacts",
+      "dims": {
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/health",
+            "media": "json"
+          },
+          {
+            "method": "POST",
+            "path": "/contacts",
+            "media": "json"
+          },
+          {
+            "method": "GET",
+            "path": "/contacts",
+            "media": "json"
+          },
+          {
+            "method": "GET",
+            "path": "/contacts/count",
+            "media": "json"
+          }
+        ],
+        "route_count": 4,
+        "methods": [
+          "GET",
+          "POST"
+        ],
+        "media": [
+          "json"
+        ],
+        "required_fields": [
+          "name",
+          "email"
+        ],
+        "storage_env": "CONTACTS_DB",
+        "modules": [
+          "src/contact_store.py",
+          "src/contacts_api.py"
+        ],
+        "module_count": 2,
+        "scenario_count": 3
+      }
+    },
+    {
+      "file": "bat05_tasks.yaml",
+      "name": "bat05_tasks",
+      "kind": "service",
+      "domain": "tasks",
+      "dims": {
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/health",
+            "media": "json"
+          },
+          {
+            "method": "POST",
+            "path": "/tasks",
+            "media": "json"
+          },
+          {
+            "method": "GET",
+            "path": "/tasks",
+            "media": "json"
+          },
+          {
+            "method": "GET",
+            "path": "/help",
+            "media": "html"
+          }
+        ],
+        "route_count": 4,
+        "methods": [
+          "GET",
+          "POST"
+        ],
+        "media": [
+          "html",
+          "json"
+        ],
+        "required_fields": [
+          "title"
+        ],
+        "storage_env": "TASKS_DB",
+        "modules": [
+          "src/task_store.py",
+          "src/tasks_api.py",
+          "src/tasks_page.py"
+        ],
+        "module_count": 3,
+        "scenario_count": 3
+      }
+    },
+    {
+      "file": "bat06_events.yaml",
+      "name": "bat06_events",
+      "kind": "service",
+      "domain": "events",
+      "dims": {
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/health",
+            "media": "json"
+          },
+          {
+            "method": "POST",
+            "path": "/events",
+            "media": "json"
+          },
+          {
+            "method": "GET",
+            "path": "/events",
+            "media": "json"
+          }
+        ],
+        "route_count": 3,
+        "methods": [
+          "GET",
+          "POST"
+        ],
+        "media": [
+          "json"
+        ],
+        "required_fields": [
+          "title"
+        ],
+        "storage_env": "EVENTS_DB",
+        "modules": [
+          "src/event_store.py",
+          "src/events_api.py"
+        ],
+        "module_count": 2,
+        "scenario_count": 2
+      }
+    },
+    {
+      "file": "bat07_numkit.yaml",
+      "name": "bat07_numkit",
+      "kind": "lib",
+      "domain": "numkit",
+      "dims": {
+        "capabilities": [
+          "add_all",
+          "max_of"
+        ],
+        "layout": "module-per-cap",
+        "modules": [
+          "src/add_all.py",
+          "src/max_of.py",
+          "src/numlib.py"
+        ],
+        "module_count": 3,
+        "scenario_count": 2
+      }
+    },
+    {
+      "file": "bat08_tickets.yaml",
+      "name": "bat08_tickets",
+      "kind": "service",
+      "domain": "tickets",
+      "dims": {
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/health",
+            "media": "json"
+          },
+          {
+            "method": "GET",
+            "path": "/help",
+            "media": "html"
+          },
+          {
+            "method": "GET",
+            "path": "/version",
+            "media": "json"
+          }
+        ],
+        "route_count": 3,
+        "methods": [
+          "GET"
+        ],
+        "media": [
+          "html",
+          "json"
+        ],
+        "required_fields": null,
+        "storage_env": null,
+        "modules": [
+          "src/tickets_site.py"
+        ],
+        "module_count": 1,
+        "scenario_count": 2
+      }
+    }
+  ],
+  "run": {
+    "detached": "cd tests && ./run-detached.sh --case bat --depth product --workers real --decomposer llm",
+    "note": "run_cases substring-matches --case against the file stem, so '--case bat' runs the whole battery sequentially with a fresh run dir + fresh HERMES_HOME per spec"
+  }
+}
