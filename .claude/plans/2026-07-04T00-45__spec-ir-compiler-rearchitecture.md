@@ -56,7 +56,8 @@ graph:
   - {id: G1, needs: [],               parallel: "post-b3", status: "[x]", files: [tests/harness/llm_backend.py, tests/workers/, tests/memory/]}
   - {id: F1, needs: [B3, C1, D1, E1], parallel: "",        status: "[x]", files: [tests/scenarios/, tests/lib/]}
   - {id: G2, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/nodes/]}
-  - {id: G3, needs: [],               parallel: "",        status: "[~]", files: [spec_flow_runner.py, tests/decomposition/]}
+  - {id: G3, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/decomposition/]}
+  - {id: G4, needs: [G3],             parallel: "",        status: "[ ]", files: [tests/]}
 ```
 
 Зоны (`files`) — что узел МЕНЯЕТ; пересечение зон = последовательность
@@ -237,7 +238,7 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
   давний task #146. Полный набор после влития: 1793 зелёных,
   красные только 3 старых parallel_children (→ G3)
 
-### [~] G3 `parallel-children-overlap` — давнее красное трио перекрытия
+### [x] G3 `parallel-children-overlap` — давнее красное трио перекрытия
 - выход: tests/decomposition/test_parallel_children.py зелёный:
   overlap-probe фиксирует peak > 1 (реальное перекрытие потоков
   братьев), max_workers ограничивает глобально, независимые братья
@@ -250,7 +251,30 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
   «спека-IR как источник», трогает ту же волновую механику, что
   только что перестроил G2 — брать отдельной сессией по решению юзера,
   на свежей голове и зелёной базе.
-  Решение юзера 2026-07-05: брать сейчас. worktree-агент запущен
+  Решение юзера 2026-07-05: брать сейчас. worktree-агент запущен.
+  ГОТОВ — коммиты 9f6d199 + 43deabb, влит c3be99a; движок был ПРАВ,
+  волновая механика перекрывает как заявлено (peak 4 из 4 детей,
+  ровно 2 при max_workers: 2). Мёртвым был шов пробы: тиринг ревью
+  (по умолчанию ВКЛ, simple_max_loc 120) молча пропускал вызов
+  ревьюера у 80-LOC листьев фикстур — проба меряла один вызов корня.
+  Фикс только в фикстурах: review_policy={"tiering": False} на 11
+  вызовов; пробы и проверки не ослаблены; 7 холостых тестов пробы
+  снова честные. Вторая скрытая причина: дефолт depth_limit стал
+  безлимитным в 6d34695 — фикстура пинит 0 явно. Полный набор на
+  влитом: 1796 зелёных, 2 пропуска, НОЛЬ красных — впервые за план
+
+### [ ] G4 `vacuous-reviewer-seam-audit` — поиск других холостых проб
+- выход: разбор тестов, зондирующих через шов ревьюера без выключения
+  тиринга (кандидаты по grep: tests/workers/test_worker_config.py — 7
+  крюков, tests/gates/test_gates_policy.py — 5, tests/coverage/
+  test_tiers.py — 2, tests/harness/memory.py, tests/spec/lint/) —
+  каждый либо честен (лист не «простой»/крюк проверяется), либо
+  чинится как G3
+- приёмка: по каждому кандидату письменный вердикт; ни одного теста,
+  чей крюк ревьюера молча не вызывается
+- заметки: рождён находкой G3 (та же вакуумность уже прятала дрейф
+  depth_limit). НЕ запущен: ждёт решения юзера — сегодняшний заказ
+  был G3+тест, он закрыт
 
 ### [x] D2 `wire-counterexample-repair` — подключение лечения к шву ремонтника
 - выход: counterexample_repair (D1) вызывается из шва ремонтника
