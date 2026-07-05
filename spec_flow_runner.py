@@ -6187,7 +6187,7 @@ _REQUIRED = {
 }
 
 
-def _send(start_response, code, body):
+def _send(start_response, code, body, extra=None):
     if isinstance(body, (dict, list)):
         payload = json.dumps(body).encode("utf-8")
         ctype = "application/json"
@@ -6198,7 +6198,7 @@ def _send(start_response, code, body):
         ctype = ("text/html; charset=utf-8"
                  if text.lstrip().startswith("<") else "text/plain; charset=utf-8")
         payload = text.encode("utf-8")
-    start_response(_status_line(code), [("Content-Type", ctype)])
+    start_response(_status_line(code), [("Content-Type", ctype)] + list(extra or []))
     return [payload]
 
 
@@ -6207,8 +6207,12 @@ def %(callable)s(environ, start_response):
     path = environ.get("PATH_INFO") or "/"
     handler = _ROUTES.get((method, path))
     if handler is None:
-        if any(p == path for (_m, p) in _ROUTES):
-            return _send(start_response, 405, {"error": "method not allowed"})
+        # RFC 9110 §15.5.6 (S16.6): a 405 MUST carry Allow naming the path's
+        # contracted methods — pure _ROUTES data, sorted, comma-separated
+        allowed = sorted({m for (m, p) in _ROUTES if p == path})
+        if allowed:
+            return _send(start_response, 405, {"error": "method not allowed"},
+                         extra=[("Allow", ", ".join(allowed))])
         return _send(start_response, 404, {"error": "not found"})
     abi, fn = handler
     if abi == "ws":                             # raw WSGI handler reads input itself
