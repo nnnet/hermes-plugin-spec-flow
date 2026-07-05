@@ -85,10 +85,21 @@ and a static depth gate starved online growth).
 - S9.3 PARALLELISM/recomposition: a fan-out materialising DEEPER than the
   initial shape (a branch recomposed online) still forks — no static depth
   starvation.
-- S9.4 (open) PARALLELISM/ordering: cross-LEVEL declared dependencies must be
-  honoured by wave partitioning — Kahn waves currently serialise only
-  intra-sibling deps; a research node on one level can lose the race to an
-  impl leaf under another branch (flaky p4 research_before_impl; task #146).
+- S9.4 PARALLELISM/ordering: research precedes sibling implementation BY
+  CONSTRUCTION, not by thread luck (was: flaky p4 research_before_impl under
+  CPU load; task #146). Closed by the runner's research readiness gate:
+  spikes decidable at schedule time are HOISTED into the scheduler's own
+  thread before the worker pool starts (`_run_child_pool` pre-pass →
+  `_run_node_spike`, idempotent); every LAUNCHED wave member is registered
+  pending in the scheduler thread before its worker exists and released at
+  its spike point (`_release_preamble`, release-on-failure in the worker's
+  finally — a dead research never hangs impl); leaf implementation parks at
+  `_await_research_preambles` (entry of `_leaf_pipeline`) until the set
+  drains, lending its worker slot back so the drain stays deadlock-free.
+  Members queued behind the pool limit follow sequential (declared-order)
+  semantics. Test: `tests/nodes/test_research_wave_order.py` — adversarial
+  emit-boundary scheduler starving the first worker-thread research emit;
+  both engines (the fsm has no scheduling of its own — engine-agnostic).
 - S9.5 (open) same liveness proof owed to: --resume, doctor remedies,
   worktree isolation, memory tiers — one representative dynamic test each.
 
