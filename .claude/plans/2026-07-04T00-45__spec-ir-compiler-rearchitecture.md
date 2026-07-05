@@ -55,6 +55,7 @@ graph:
   - {id: B4, needs: [B3],             parallel: "post-b3", status: "[x]", files: [spec_flow_runner.py, spec_openapi.py]}
   - {id: G1, needs: [],               parallel: "post-b3", status: "[x]", files: [tests/harness/llm_backend.py, tests/workers/, tests/memory/]}
   - {id: F1, needs: [B3, C1, D1, E1], parallel: "",        status: "[~]", files: [tests/scenarios/, tests/lib/]}
+  - {id: G2, needs: [],               parallel: "",        status: "[~]", files: [spec_flow_node_fsm.py]}
 ```
 
 Зоны (`files`) — что узел МЕНЯЕТ; пересечение зон = последовательность
@@ -204,6 +205,19 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
   «модуль vs тело» не может опираться на SyntaxError.
   Открытый вопрос → узел D2: механизм не подключён к шву ремонтника
   (role_worker._orchestra_run / лестницы defaults.yaml)
+
+### [~] G2 `fsm-research-order-race` — fsm-движок нарушает порядок под нагрузкой
+- выход: fsm-движок (spec_flow_node_fsm.py) держит зависимость
+  «исследование раньше реализации» КОДОМ (порядок готовности), не
+  расписанием потоков
+- приёмка: пойманный контрпример (оракул p4: research_before_impl,
+  первый тик исследования 40 против реализации 30) воспроизводится
+  красным кейсом с детерминированной провокацией (без сна/нагрузки) и
+  зелёным после; inline-движок — эталон (25/25 под любой нагрузкой)
+- заметки: найден при приёмке волны влитий 2026-07-05: полный прогон
+  красный дважды, поодиночке зелёный; ловец под параллельной нагрузкой
+  поймал на живом вердикте (лог /tmp/claude-1000/p4-flake-catch.log);
+  worktree-агент запущен 2026-07-05
 
 ### [ ] D2 `wire-counterexample-repair` — подключение лечения к шву ремонтника
 - выход: counterexample_repair (D1) вызывается из шва ремонтника
