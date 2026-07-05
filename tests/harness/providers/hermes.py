@@ -5,9 +5,9 @@ already carries skills/tools, instead of a raw local LLM — same RoleResult out
 What: POST the RoleTask as a single message to a Hermes gateway addressed to an
 ``agent`` (profile), read the reply + any written files, map them to a
 RoleResultLike.
-Test: a fake transport asserts the POST url (``{gateway}/v1/agents/{agent}/messages``),
-method and JSON body (carries role/node/spec/prompt), and a canned reply with
-``files`` parses into RoleResultLike.artifacts.
+Test: a fake transport asserts the POST url (``{gateway}/v1/chat/completions``),
+method and JSON body (system/user framing carries agent/role/node), and a
+canned chat-completion reply with ``files`` parses into RoleResultLike.artifacts.
 
 Config (resolved by the caller, passed on the RoleTask.context or constraints):
   - ``gateway``  — Hermes gateway base URL

@@ -49,11 +49,12 @@ graph:
   - {id: B2, needs: [A1, A3],         parallel: "after-a", status: "[x]", files: [spec_openapi.py, tests/tools/]}
   - {id: B3, needs: [B1],             parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/harness/]}
   - {id: C1, needs: [A3, A4],         parallel: "",        status: "[x]", files: [spec_skeletons.py, spec_flow_runner.py]}
-  - {id: D1, needs: [B1, C1],         parallel: "post-b3", status: "[~]", files: [spec_flow_doctor.py, spec_flow_remedies.py]}
+  - {id: D1, needs: [B1, C1],         parallel: "post-b3", status: "[x]", files: [spec_flow_doctor.py, spec_flow_remedies.py]}
+  - {id: D2, needs: [D1, G1],         parallel: "",        status: "[ ]", files: [tests/harness/role_worker.py, spec_flow_doctor.defaults.yaml]}
   - {id: E1, needs: [A4],             parallel: "after-a", status: "[x]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py]}
   - {id: B4, needs: [B3],             parallel: "post-b3", status: "[x]", files: [spec_flow_runner.py, spec_openapi.py]}
-  - {id: G1, needs: [],               parallel: "post-b3", status: "[~]", files: [tests/harness/llm_backend.py, tests/workers/, tests/memory/]}
-  - {id: F1, needs: [B3, C1, D1, E1], parallel: "",        status: "[ ]", files: [tests/scenarios/, tests/lib/]}
+  - {id: G1, needs: [],               parallel: "post-b3", status: "[x]", files: [tests/harness/llm_backend.py, tests/workers/, tests/memory/]}
+  - {id: F1, needs: [B3, C1, D1, E1], parallel: "",        status: "[~]", files: [tests/scenarios/, tests/lib/]}
 ```
 
 Зоны (`files`) — что узел МЕНЯЕТ; пересечение зон = последовательность
@@ -191,8 +192,29 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
   объективный выход = зелёные контрактные тесты)
 - приёмка: полная перепись файла невозможна по построению;
   модель-независимость через минимум степеней свободы
-- заметки: worktree-агент запущен 2026-07-05 (группа post-b3, зона
-  доктора/ремедий не пересекается с B4/G1)
+- заметки: ГОТОВ — коммиты 77d62b7 (S19 красные, TAXONOMY Ступень 19)
+  + cc13120, влит a5c4b5f (аудит+доктор 463 зелёных). spec_flow_doctor:
+  extract_counterexamples (детерминированный разбор вывода красных
+  тестов), function_slot/apply_function_body (дверь принимает ТОЛЬКО
+  тело одной функции — перепись файла невозможна по построению; отказ
+  на def в нулевой колонке), repair_prompt со свежим контекстом,
+  counterexample_repair (петля Ральфа, max_rounds=3);
+  spec_flow_remedies.counterexample_config (case-yaml + env).
+  Урок: ast.parse принимает return на верхнем уровне — детекция
+  «модуль vs тело» не может опираться на SyntaxError.
+  Открытый вопрос → узел D2: механизм не подключён к шву ремонтника
+  (role_worker._orchestra_run / лестницы defaults.yaml)
+
+### [ ] D2 `wire-counterexample-repair` — подключение лечения к шву ремонтника
+- выход: counterexample_repair (D1) вызывается из шва ремонтника
+  (role_worker._orchestra_run: контрпример вместо целого src+test+dump
+  в _REPAIR_DIFF_TASK) и/или из лестницы причин
+  spec_flow_doctor.defaults.yaml (первая ступень test_status-причины)
+- приёмка: красный кейс — падение компилированного теста ведёт к
+  переспросу ОДНОЙ функции (журнал), полная перепись не предлагается;
+  зелёный — лист без контрпримера идёт историческим путём байт-в-байт
+- заметки: рождён открытым вопросом D1; зона пересекалась с идущим G1
+  (role_worker.py) — ждал его влития
 
 ### [x] E1 `decomposer-emits-ir` — декомпозер выдаёт IR, не прозу
 - выход: описание → IR со схемной валидацией на выходе декомпозера;
@@ -222,7 +244,7 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
   (sorted), OpenAPI-компонент RouterMethodNotAllowed объявляет
   headers.Allow; аудит целиком 425 зелёных после влития
 
-### [~] G1 `workers-suite-red` — 23 красных теста workers/memory на ветке
+### [x] G1 `workers-suite-red` — 23 красных теста workers/memory на ветке
 - выход: tests/workers/ + tests/memory/test_memory_modes.py зелёные в
   полном окружении (1739 собираемых тестов), без ослабления тестов
 - приёмка: полный прогон без падений кроме 3 известных красных
@@ -235,9 +257,21 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
   цепочки на 5xx (правка v063) съедает сигнал квоты 429 → RuntimeError
   вместо QuotaExhausted. Санбокс не при чём (проверено без него).
   worktree-агент запущен 2026-07-05 (группа post-b3, зона
-  llm_backend/tests не пересекается с D1/B4)
+  llm_backend/tests не пересекается с D1/B4).
+  ГОТОВ — 5 коммитов по классам (4c1545b, ef0f568, 62a5d52, 24de7a5,
+  2ae5a6e), влит a4e1254; целевой срез 183 зелёных / 0 красных.
+  Все 23 — правки тестов с обоснованием, движок не тронут: каждое
+  падение упиралось в осознанную более позднюю правку кода (рост
+  сигнатур швов aac0034/d9c18d3 -> заглушки *a,**k; дефолт temperature
+  0.1 + log_model 2c41c07; адаптер на /v1/chat/completions 46cfa6a;
+  тиринг ревью 61b62ea -> выключен публичной ручкой в фикстурах).
+  Смешанный 429+5xx решён инвариантом: НАБЛЮДЁННЫЙ 429 переживает
+  обрыв на 5xx как QuotaExhausted — код уже верен, тест переписан на
+  точную последовательность (429->500, ровно 2 вызова). Хвост:
+  устаревшая строка докстринга tests/harness/providers/hermes.py —
+  правит координатор
 
-### [ ] F1 `universality-battery` — батарея случайных спек
+### [~] F1 `universality-battery` — батарея случайных спек
 - выход: генератор случайных маленьких спек разных доменов; конвейер
   обязан собрать ВСЕ без памяти между ними
 - приёмка: p6 перестаёт быть единственным мерилом; провал любой спеки
