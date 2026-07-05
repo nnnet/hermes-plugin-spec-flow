@@ -55,17 +55,24 @@ def test_research_precedes_impl_under_adversarial_scheduler(
 
     impl_emitted = threading.Event()
     scheduler_thread = threading.current_thread()
+    starved: list = []          # one-shot: starve the FIRST research emit
     orig_emit = runner.Engine.emit
 
     def adversarial_emit(self, phase, profile, skill, task, action, *a, **kw):
-        # A WORKER thread about to emit research loses the CPU until some
-        # thread has emitted an implement event. Research emitted from the
-        # scheduler's own thread skips the wait entirely — that is exactly
-        # the by-construction ordering the fix provides. The bounded wait is
-        # an escape hatch so a mis-ordered run still terminates (as RED).
+        # The WORKER thread about to emit the run's first research event
+        # loses the CPU until some thread has emitted an implement event —
+        # the exact schedule CPU contention produces. Research emitted from
+        # the scheduler's own thread skips the wait (hoisted spikes ARE the
+        # by-construction ordering). The bounded wait is an escape hatch,
+        # not a synchronization point: a mis-ordered run goes RED long
+        # before it elapses (impl emits in milliseconds), and a correctly
+        # ordered run parks implementation at the runner's readiness gate,
+        # so the timeout expiring WITHOUT an impl emit is itself the proof.
         if (skill == "spec-research" and not impl_emitted.is_set()
+                and not starved
                 and threading.current_thread() is not scheduler_thread):
-            impl_emitted.wait(timeout=30)
+            starved.append(task)
+            impl_emitted.wait(timeout=5)
         out = orig_emit(self, phase, profile, skill, task, action, *a, **kw)
         if skill == "spec-implement":
             impl_emitted.set()

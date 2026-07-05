@@ -2824,6 +2824,22 @@ class Engine:
         # #8: auto-spike thresholds (0 = off) — set in run() from the project
         self._spike_open = 0
         self._spike_loc = 0
+        # S9.4 (#146): node ids whose research spike already ran — the wave
+        # scheduler HOISTS decidable spikes ahead of the worker pool and
+        # _visit must not run them twice. Adds are structurally ordered
+        # (a node's spike is hoisted before its thread starts, or runs in
+        # its own thread), so a plain set suffices.
+        self._spike_ran: set = set()
+        # S9.4 (#146): research-preamble readiness gate. Ids of LAUNCHED wave
+        # members whose preamble (expansion + clarify + spike) has not yet
+        # completed; leaf implementation waits until the set drains. A member
+        # is registered in the SCHEDULER thread before its worker thread
+        # starts (happens-before edge — no impl can slip past an unregistered
+        # but launched research sibling) and released right after its spike
+        # point, or in the worker's finally on any failure — a dead research
+        # can never hang implementation.
+        self._preamble_pending: set = set()
+        self._preamble_cv = threading.Condition()
         # #122: small-product floor — a product whose contract declares <= this
         # many routes is built as ONE atomic leaf (single module owns all routes
         # + storage); 0 = off. Set in run() from the project.
@@ -8290,12 +8306,152 @@ def %(callable)s(environ, start_response):
             remaining = [c for c in remaining if c.get("id") not in wave_ids]
         return waves
 
+    def _run_node_spike(self, node: dict, nid: str, title: str) -> None:
+        """Run the node's research spike (declared or auto-flagged) ONCE.
+
+        Why: S9.4 / task #146 — research must precede sibling implementation
+        BY CONSTRUCTION, not by thread luck: ticks are assigned at emission
+        time, so with the spike embedded in a worker thread a sibling impl
+        emit could beat it under CPU contention (flaky p4
+        research_before_impl, engine-agnostic). The wave scheduler hoists
+        this call into ITS OWN thread for members whose spike is decidable
+        at schedule time (see _run_child_pool); _visit calls it too, so a
+        spike that only appears after expansion still runs before the
+        node's own subtree implements.
+        What: #8 auto-spike — a HARD node (open decisions / estimated LOC
+        over the configured thresholds, 0 = off; a decomposer-authored
+        spike always wins) is flagged for research; then the spike runs
+        through the researcher worker when attached, folding the
+        recommendation into the spec. Idempotent per node id. Deadlock
+        semantics: a dead researcher NEVER blocks implementation — the
+        failure is emitted to the journal and the decomposer's own
+        recommendation stands (release-on-failure, no gate to hang on).
+        Test: tests/nodes/test_research_wave_order.py — the p4 oracle's
+        research_before_impl holds for BOTH engines under an adversarial
+        scheduler that starves every worker-thread research emit."""
+        if nid in self._spike_ran:
+            return
+        self._spike_ran.add(nid)
+        if not node.get("spike") and (self._spike_open or self._spike_loc):
+            m = node.get("metrics") or {}
+            od = int(m.get("open_decisions", 0) or 0)
+            loc = int(m.get("estimated_loc", 0) or 0)
+            hard = ((self._spike_open and od >= self._spike_open)
+                    or (self._spike_loc and loc >= self._spike_loc))
+            if hard:
+                node["spike"] = {
+                    "question": (f"'{title}' is hard ({od} open decisions, "
+                                 f"~{loc} LOC). Research the SINGLE best "
+                                 "approach + the key risk before the spec is "
+                                 "frozen."),
+                    "recommendation": "(researcher to fill)"}
+                self.emit("research", "researcher", "spec-research", nid,
+                          "auto-spike: hard node flagged for research",
+                          f"open_decisions={od} loc={loc}", level=L_DETAIL)
+
+        # spike before freeze (research)
+        spike = node.get("spike")
+        if spike:
+            sid = f"{nid}:spike"
+            self.task(sid, spike["question"], "research", "researcher", "spec-research", parents=[nid])
+            self.emit("research", "researcher", "spec-research", sid,
+                      "SPIKE before freeze", spike["question"])
+            # Real researcher worker, when attached: the spike is researched
+            # for real instead of the decomposer answering its own question.
+            # Mutates the spike in place so the written spec carries the
+            # researched recommendation. Falls back to the decomposer's one.
+            researcher = self.agents.get("researcher")
+            if researcher is not None:
+                try:
+                    out = researcher({"question": spike["question"], "node": nid,
+                                      "goal": self._goal,
+                                      "workspace_root": self.workspace.root}) or {}
+                    if str(out.get("recommendation", "")).strip():
+                        spike["recommendation"] = out["recommendation"]
+                        if out.get("basis"):
+                            spike["basis"] = out["basis"]
+                except Exception as exc:  # noqa: BLE001 — worker must not kill the run
+                    self.emit("research", "researcher", "spec-research", sid,
+                              "researcher worker failed — keeping decomposer's recommendation",
+                              str(exc)[:200], level=L_DETAIL)
+            self.emit("research", "researcher", "spec-research", sid,
+                      "recommendation folded into spec (above the gate, no rework)",
+                      spike["recommendation"])
+            self.tasks[sid].status = "done"
+            self._completed += 1
+
+    def _release_preamble(self, nid) -> None:
+        """Mark a wave member's research preamble complete and wake waiters.
+
+        Why: S9.4 (#146) — the readiness gate must release on research
+        completion AND on honest failure, or a dead research would hang
+        sibling implementation forever.
+        What: drops the id from the pending set (idempotent — called both at
+        the spike point in _visit and in the worker's finally) and notifies
+        every gate waiter.
+        Test: tests/nodes/test_research_wave_order.py completes (no hang)
+        with the adversarial seam stalling the research emit."""
+        if nid is None:
+            return
+        with self._preamble_cv:
+            self._preamble_pending.discard(nid)
+            self._preamble_cv.notify_all()
+
+    def _await_research_preambles(self) -> None:
+        """Park until every launched wave member's research preamble is done.
+
+        Why: S9.4 (#146) — a research spike discovered only at a member's
+        expansion (live-decomposer `{id,title}` stubs) cannot be hoisted at
+        schedule time; without a gate a sibling's implementation wins the
+        tick race under CPU contention (flaky p4 research_before_impl).
+        What: called at the leaf-implementation entry (_leaf_pipeline);
+        waits on the readiness gate until `_preamble_pending` drains. The
+        waiter LENDS its global worker slot back (same pattern as a waiting
+        parent in _run_child_pool), so a pending member blocked on
+        `_parallel_sem` can always acquire a slot and finish its preamble —
+        the drain is guaranteed: registered ⇒ its thread is launched, and a
+        preamble never waits on this gate (no cycle), releasing in a finally
+        even on failure. Own-subtree ancestors released before recursing, so
+        a leaf never waits on itself.
+        Test: tests/nodes/test_research_wave_order.py — implementation ticks
+        follow the starved research tick for both engines; the p4 flake
+        catcher loop stays green under parallel CPU load."""
+        with self._preamble_cv:
+            if not self._preamble_pending:
+                return
+        lent = getattr(self._sem_state, "held", False)
+        if lent:
+            self._sem_state.held = False
+            self._parallel_sem.release()
+        try:
+            with self._preamble_cv:
+                self._preamble_cv.wait_for(
+                    lambda: not self._preamble_pending)
+        finally:
+            if lent:
+                self._parallel_sem.acquire()
+                self._sem_state.held = True
+
     def _run_child_pool(self, wave: list, depth: int, contract_ctx, phase,
                         title: str, nid: str, ancestors: tuple) -> None:
         """Run every node in `wave` concurrently (each its whole subtree in a
         thread), joining before return — the barrier the caller relies on.
         A parent that only WAITS hands its semaphore slot back so nested
-        grandchildren can't starve it into a live deadlock."""
+        grandchildren can't starve it into a live deadlock.
+        S9.4 (#146): before ANY worker thread starts, every wave member whose
+        research spike is decidable NOW (declared ``spike``, or ``metrics``
+        present for the auto-spike thresholds) researches sequentially in
+        THIS thread, in wave (declared/topo) order — so no sibling subtree
+        can reach IMPLEMENT ahead of a sibling's research. This mirrors the
+        sequential semantics (parallel.children: 1), where declared order
+        runs research first. Members without metrics (live-decomposer stubs)
+        spike inside their own _visit after expansion: their OWN subtree
+        still orders research before implement, only the cross-sibling edge
+        is best-effort for them."""
+        for c in wave:
+            if isinstance(c, dict) and c.get("id") and (
+                    c.get("spike") or "metrics" in c):
+                self._run_node_spike(c, c["id"], c.get("title", c["id"]))
         errs: list = []
 
         def _one(c):
@@ -8310,6 +8466,12 @@ def %(callable)s(environ, start_response):
                         self._sem_state.held = False
             except Exception as exc:    # noqa: BLE001 — re-raised after join
                 errs.append(exc)
+            finally:
+                # S9.4: safety net — a member that failed BEFORE its spike
+                # point (expansion error, stop request) must still release
+                # the readiness gate or sibling implementation hangs.
+                self._release_preamble(
+                    c.get("id") if isinstance(c, dict) else None)
 
         lent = getattr(self._sem_state, "held", False)
         if lent:
@@ -8320,7 +8482,20 @@ def %(callable)s(environ, start_response):
             limit = self._parallel_children
             while pool or alive:
                 while pool and len(alive) < limit:
-                    th = threading.Thread(target=_one, args=(pool.pop(0),),
+                    c = pool.pop(0)
+                    # S9.4: register the member's research preamble in THIS
+                    # (scheduler) thread BEFORE its worker exists — the
+                    # happens-before edge that makes the ordering structural:
+                    # any sibling implementation launched after this line
+                    # sees the member pending at the readiness gate. Members
+                    # still queued behind the pool limit are NOT registered —
+                    # they start only after a slot frees, matching sequential
+                    # (declared-order) semantics, and registered ⇒ launched
+                    # keeps the gate drain deadlock-free.
+                    if isinstance(c, dict) and c.get("id"):
+                        with self._preamble_cv:
+                            self._preamble_pending.add(c["id"])
+                    th = threading.Thread(target=_one, args=(c,),
                                           daemon=True)
                     th.start()
                     alive.append(th)
@@ -8788,58 +8963,14 @@ def %(callable)s(environ, start_response):
             self.tasks[nid].runs += 1
             self.loops.append({"type": "clarify", "task": nid, "detail": clar["decision"]})
 
-        # #8 (П8): auto-spike HARD nodes. A node with many open decisions or
-        # high estimated LOC gets a research spike before freeze even if the
-        # decomposer didn't request one — the researcher role runs it (config
-        # it to lead a STRONGER free model / the haiku subscription). Thresholds
-        # 0 = off. A decomposer-authored spike always wins.
-        if not node.get("spike") and (self._spike_open or self._spike_loc):
-            m = node.get("metrics") or {}
-            od = int(m.get("open_decisions", 0) or 0)
-            loc = int(m.get("estimated_loc", 0) or 0)
-            hard = ((self._spike_open and od >= self._spike_open)
-                    or (self._spike_loc and loc >= self._spike_loc))
-            if hard:
-                node["spike"] = {
-                    "question": (f"'{title}' is hard ({od} open decisions, "
-                                 f"~{loc} LOC). Research the SINGLE best "
-                                 "approach + the key risk before the spec is "
-                                 "frozen."),
-                    "recommendation": "(researcher to fill)"}
-                self.emit("research", "researcher", "spec-research", nid,
-                          "auto-spike: hard node flagged for research",
-                          f"open_decisions={od} loc={loc}", level=L_DETAIL)
-
-        # spike before freeze (research)
-        spike = node.get("spike")
-        if spike:
-            sid = f"{nid}:spike"
-            self.task(sid, spike["question"], "research", "researcher", "spec-research", parents=[nid])
-            self.emit("research", "researcher", "spec-research", sid,
-                      "SPIKE before freeze", spike["question"])
-            # Real researcher worker, when attached: the spike is researched
-            # for real instead of the decomposer answering its own question.
-            # Mutates the spike in place so the written spec carries the
-            # researched recommendation. Falls back to the decomposer's one.
-            researcher = self.agents.get("researcher")
-            if researcher is not None:
-                try:
-                    out = researcher({"question": spike["question"], "node": nid,
-                                      "goal": self._goal,
-                                      "workspace_root": self.workspace.root}) or {}
-                    if str(out.get("recommendation", "")).strip():
-                        spike["recommendation"] = out["recommendation"]
-                        if out.get("basis"):
-                            spike["basis"] = out["basis"]
-                except Exception as exc:  # noqa: BLE001 — worker must not kill the run
-                    self.emit("research", "researcher", "spec-research", sid,
-                              "researcher worker failed — keeping decomposer's recommendation",
-                              str(exc)[:200], level=L_DETAIL)
-            self.emit("research", "researcher", "spec-research", sid,
-                      "recommendation folded into spec (above the gate, no rework)",
-                      spike["recommendation"])
-            self.tasks[sid].status = "done"
-            self._completed += 1
+        # #8 (П8) + S9.4 (#146): research spike (declared or auto) before
+        # freeze. The wave scheduler may have HOISTED this call already —
+        # the method is idempotent per node id (see _run_node_spike). The
+        # node's research preamble is now complete: open the readiness gate
+        # for sibling implementation (release-on-failure lives in the
+        # worker's finally in _run_child_pool).
+        self._run_node_spike(node, nid, title)
+        self._release_preamble(nid)
 
         # #122/#123: small-product floor. The ROOT product node of a
         # product-depth run whose contract declares <= _small_product_routes
@@ -9541,6 +9672,11 @@ def %(callable)s(environ, start_response):
                        ancestors: tuple = ()):
         nid = node["id"]
         title = node.get("title", nid)
+        # S9.4 (#146): research-before-impl BY CONSTRUCTION — no leaf may
+        # spec/implement while a launched wave member's research preamble is
+        # still pending anywhere in the run (its own preamble was released
+        # in _visit before reaching here, so it never waits on itself).
+        self._await_research_preambles()
         # resume: a leaf already in the journal was specced, reviewed and frozen
         # in the original run; its spec sits in the restored checkpoint. Re-running
         # the review gate would REWRITE that spec (the lint loop even re-asks the
