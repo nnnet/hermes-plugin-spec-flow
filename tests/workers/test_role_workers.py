@@ -607,7 +607,9 @@ def test_fallback_goes_direct_past_the_gateway(monkeypatch):
     seen = {}
 
     def fake_claude(prompt, model, system=None, direct=False, timeout=None,
-                    allowed=None, disallowed=None, cwd=None):
+                    allowed=None, disallowed=None, cwd=None, log_model=None):
+        # log_model (2c41c07): the full chain id ('claude/haiku') for the call
+        # log while `model` stays the bare CLI id
         seen["direct"] = direct
         return "ok"
 
