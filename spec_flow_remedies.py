@@ -169,6 +169,25 @@ def evaluator_config(project: Optional[dict] = None,
     return cfg
 
 
+def counterexample_config(project: Optional[dict] = None,
+                          overrides: Optional[dict] = None) -> dict:
+    """Knobs of the counterexample-driven one-function repair (node D1) in
+    the same 5-layer merge as every other doctor table — data, not literals.
+
+    Why: bounded Ralph-loop rounds must be a per-case knob, never a constant
+    baked into the loop.
+    What: factory default (max_rounds=3), then defaults-YAML `counterexample`
+    block, env JSON, case YAML, launch overrides.
+    Test: tests/audit/test_counterexample_repair.py (S19.5)."""
+    cfg: dict = {"max_rounds": 3}
+    _deep_merge(cfg, _DEFAULTS.get("counterexample") or {})
+    _deep_merge(cfg, _env_json("SPEC_FLOW_DOCTOR_COUNTEREXAMPLE"))
+    _deep_merge(cfg, (project or {}).get("counterexample"))
+    _deep_merge(cfg, (overrides or {}).get("counterexample"))
+    _deep_merge(cfg, _OVERRIDES.get("counterexample"))
+    return cfg
+
+
 def tiers_config(project: Optional[dict] = None,
                  overrides: Optional[dict] = None) -> dict:
     cfg = copy.deepcopy(DEFAULT_TIERS)

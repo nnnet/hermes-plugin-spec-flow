@@ -263,12 +263,19 @@ def test_door_refuses_module_shaped_reply():
 
 
 def test_door_full_file_rewrite_impossible_by_construction():
-    """A body smuggling a sibling's def cannot touch the sibling: it lands
-    as a harmless NESTED def while every byte outside the target block is
-    unchanged — the rewrite is impossible by construction, not by review."""
+    """Both smuggling vectors are dead: a column-0 sibling def is REFUSED as
+    module-shaped, and a def hidden inside a block lands NESTED in the target
+    body while every byte outside the target block is unchanged — the
+    rewrite is impossible by construction, not by review."""
     module = _module(post_body=_BAD_POST)
-    sneaky = ("def get_notes(payload, query):\n"
-              "    return 200, {'hacked': True}\n"
+    with pytest.raises(ValueError):      # column-0 def of the sibling
+        apply_function_body(module, "post_notes",
+                            "def get_notes(payload, query):\n"
+                            "    return 200, {'hacked': True}\n"
+                            "return 201, {'id': 1}")
+    sneaky = ("if True:\n"
+              "    def get_notes(payload, query):\n"
+              "        return 200, {'hacked': True}\n"
               "return 201, {'id': 1}")
     out = apply_function_body(module, "post_notes", sneaky)
     before, after = ast.parse(module), ast.parse(out)

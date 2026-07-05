@@ -1083,10 +1083,11 @@ the implementation commit turned it green.
   The `BODY_ONLY_RULE` sentence in the prompt is the same contract the door
   enforces (prompt states, code guarantees).
 - S19.3 THE DOOR ACCEPTS ONLY THAT FUNCTION'S BODY: an unknown function, a
-  module-shaped reply (imports / several defs), a renamed def or a rewritten
-  argument list are REFUSED with a named ValueError; a body smuggling a
-  sibling's def lands as a harmless NESTED def while every byte outside the
-  target block stays identical (source-segment pinned); the splice keeps the
+  module-shaped reply (imports / column-0 defs beyond the one slot), a
+  renamed def or a rewritten argument list are REFUSED with a named
+  ValueError; a def hidden inside a block lands as a harmless NESTED def
+  while every byte outside the target block stays identical
+  (source-segment pinned) — both smuggling vectors dead; the splice keeps the
   engine signature and the AICODE-NOTE anchor, and Stage 17's
   `skeleton_conformance` stays green over it — D1 composes with the C1 door,
   never bypasses it.
