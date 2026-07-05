@@ -57,7 +57,7 @@ graph:
   - {id: F1, needs: [B3, C1, D1, E1], parallel: "",        status: "[x]", files: [tests/scenarios/, tests/lib/]}
   - {id: G2, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/nodes/]}
   - {id: G3, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/decomposition/]}
-  - {id: G4, needs: [G3],             parallel: "",        status: "[ ]", files: [tests/]}
+  - {id: G4, needs: [G3],             parallel: "",        status: "[~]", files: [tests/]}
 ```
 
 Зоны (`files`) — что узел МЕНЯЕТ; пересечение зон = последовательность
@@ -263,7 +263,7 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
   безлимитным в 6d34695 — фикстура пинит 0 явно. Полный набор на
   влитом: 1796 зелёных, 2 пропуска, НОЛЬ красных — впервые за план
 
-### [ ] G4 `vacuous-reviewer-seam-audit` — поиск других холостых проб
+### [~] G4 `vacuous-reviewer-seam-audit` — поиск других холостых проб
 - выход: разбор тестов, зондирующих через шов ревьюера без выключения
   тиринга (кандидаты по grep: tests/workers/test_worker_config.py — 7
   крюков, tests/gates/test_gates_policy.py — 5, tests/coverage/
@@ -273,8 +273,8 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
 - приёмка: по каждому кандидату письменный вердикт; ни одного теста,
   чей крюк ревьюера молча не вызывается
 - заметки: рождён находкой G3 (та же вакуумность уже прятала дрейф
-  depth_limit). НЕ запущен: ждёт решения юзера — сегодняшний заказ
-  был G3+тест, он закрыт
+  depth_limit). Решение юзера 2026-07-05: разобраться и починить.
+  worktree-агент запущен
 
 ### [x] D2 `wire-counterexample-repair` — подключение лечения к шву ремонтника
 - выход: counterexample_repair (D1) вызывается из шва ремонтника
