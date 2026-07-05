@@ -183,10 +183,15 @@ def test_reviewer_reject_records_loop_and_bumps_version(plugin, tmp_path):
             return {"verdict": "REJECT", "reasons": ["acceptance not testable"]}
         return {"verdict": "PASS", "reasons": []}
 
+    # tiering off: since 61b62ea a SIMPLE leaf (like 'editor' here) skips the
+    # LLM reviewer by default; this test targets the reviewer REJECT loop
+    # itself, so it pins the full-review policy (tiering has its own suite,
+    # tests/gates/test_review_tiering.py)
     res = eng.run_project(dict(GOAL), workspace=str(tmp_path / "wk"),
                           tools=plugin.tools,
                           agents={"decomposer": simple_decomposer,
-                                  "reviewer": reviewer})
+                                  "reviewer": reviewer},
+                          review_policy={"tiering": False})
     loops = [l for l in res.loops if l["type"] == "spec-review-reject"]
     assert loops and loops[0]["task"] == "editor"
     assert res.tasks["editor"].version >= 2          # bumped on reject
@@ -224,10 +229,15 @@ def test_verifier_fail_is_recorded(plugin, tmp_path):
 
 def test_without_workers_behaviour_unchanged(plugin, tmp_path):
     # no reviewer/researcher/verifier attached → the historical simulated
-    # events stay exactly as before (no spec_review / integrate_verify gates)
+    # events stay exactly as before (no spec_review / integrate_verify gates).
+    # Tiering off: since 61b62ea the ENGINE itself emits a deterministic
+    # spec_review PASS for simple leaves regardless of workers; that engine
+    # gate is covered by tests/gates/test_review_tiering.py — here we pin the
+    # worker-free baseline under the full-review policy.
     res = eng.run_project(dict(GOAL), workspace=str(tmp_path / "wk"),
                           tools=plugin.tools,
-                          agents={"decomposer": simple_decomposer})
+                          agents={"decomposer": simple_decomposer},
+                          review_policy={"tiering": False})
     assert not [e for e in res.events if e.gate in ("spec_review", "integrate_verify")]
     assert not [l for l in res.loops
                 if l["type"] in ("spec-review-reject", "integrate-fail")]
@@ -347,9 +357,12 @@ def test_reject_triggers_rework_until_pass(plugin, tmp_path):
             return {"verdict": "REJECT", "reasons": ["REQ-editor-1 untestable"]}
         return {"verdict": "PASS", "reasons": []}
 
+    # tiering off (61b62ea): the rework loop under test only engages when the
+    # LLM reviewer actually reviews the simple 'editor' leaf
     res = eng.run_project(dict(GOAL), workspace=str(tmp_path / "wk"),
                           tools=plugin.tools,
-                          agents={"decomposer": decomposer, "reviewer": reviewer})
+                          agents={"decomposer": decomposer, "reviewer": reviewer},
+                          review_policy={"tiering": False})
     # the rework round consulted the decomposer WITH the reasons
     assert any(n == "editor" and "untestable" in fb for n, fb in seen_feedback)
     # exactly one reject episode, then PASS — the error went away
