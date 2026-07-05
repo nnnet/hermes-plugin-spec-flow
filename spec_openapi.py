@@ -49,7 +49,9 @@ _ROUTER_ERROR_COMPONENTS = {
             "node declares."),
     "405": ("RouterMethodNotAllowed",
             "Router dispatch: {\"error\": \"method not allowed\"} for a "
-            "declared path asked with an undeclared method."),
+            "declared path asked with an undeclared method; carries an "
+            "Allow header listing the path's contracted methods, sorted "
+            "and comma-separated (RFC 9110 §15.5.6, S16.6)."),
     "500": ("RouterInternalError",
             "Router guard: {\"error\": \"internal: <type>: <msg>\"} when "
             "an exception escapes a leaf handler."),
@@ -159,6 +161,15 @@ def compile_openapi(ir: dict) -> dict:
             "content": {"application/json": {"schema": {
                 "$ref": "#/components/schemas/RouterError"}}},
         }
+        if status == "405":
+            # Mirror of the router's RFC 9110 Allow header (S16.6): declared
+            # per OpenAPI 3.1 response `headers`; the value is per-path data
+            # (the path's contracted methods), so only its shape lives here.
+            components_responses[name]["headers"] = {"Allow": {
+                "description": "The path's contracted methods, sorted and "
+                               "comma-separated (RFC 9110 §15.5.6).",
+                "schema": {"type": "string"},
+            }}
 
     doc: dict = {
         "openapi": OPENAPI_VERSION,

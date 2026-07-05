@@ -931,6 +931,23 @@ pytest collection: `ModuleNotFoundError: No module named 'spec_openapi'`,
   inspection level, so the harness stays correct even in environments
   without pip-install rights or java — there the plan node is marked
   `[!]` with the precise human-needed list.
+- S16.6 405 CARRIES `Allow` (RFC 9110) — node B4 `router-allow-header`
+  (`test_router_allow_header.py`), born from an honest Schemathesis
+  finding during the B2 demo: RFC 9110 §15.5.6 makes `Allow` MANDATORY
+  on a 405, and the router already holds the truth in its own `_ROUTES`
+  table. RED direction: a synthesized-router 405 without `Allow`, or
+  with a value that is not EXACTLY the path's contracted methods sorted
+  and comma-separated (`GET, POST`; single-method paths pinned too);
+  the OpenAPI mirror reds when the shared `RouterMethodNotAllowed`
+  response does not declare `headers.Allow` (OpenAPI 3.1 response
+  `headers`, string schema) with the description saying so. GREEN
+  direction: a 404 carries NO `Allow` (nothing is contracted there —
+  listing methods would be invented behavior) and success responses
+  stay untouched. Pure engine data (route table / compiled document),
+  never guessed. Ratchet evidence (RED before code): 3 failed —
+  `Allow` absent from both 405 cases (`got headers {'Content-Type':
+  'application/json'}`) and `headers.Allow` absent from the compiled
+  405 component — with the 2 green guards already passing.
 
 ## STAGE 17 — Skeleton compiler: the ENGINE writes the module skeleton
 (`test_skeleton_compiler.py`, `test_skeleton_write_door.py`)
