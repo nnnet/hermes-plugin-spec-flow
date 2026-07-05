@@ -60,9 +60,10 @@ serially while the config claimed parallelism.
 **Guarded by.** STAGE 9 (S9.1 base fan-out, S9.2 late-injection accumulation,
 S9.3 online recomposition) with a structural thread-overlap witness.
 
-**GAP.** S9.4 (cross-level ordering under wave partitioning) and S9.5
-(liveness proofs for `--resume`, doctor remedies, worktree isolation, memory
-tiers) are open — declared capabilities currently without a proof.
+**GAP.** S9.5 (liveness proofs for `--resume`, doctor remedies, worktree
+isolation, memory tiers) is open — a declared capability currently without
+a proof. S9.4 (cross-level ordering under wave partitioning) is closed by
+node G2: spike hoisting + readiness gate, `test_research_wave_order.py`.
 
 ---
 
