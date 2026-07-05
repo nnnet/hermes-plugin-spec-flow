@@ -1149,6 +1149,58 @@ wiring commit turned them green.
   the S18.5 `_active_team` lesson) — the diff task survives as
   fallback-only, so a leaf on the legacy LLM-test path keeps it.
 
+## STAGE 20 — Universality battery: generated specs across domains (`test_universality_battery.py`)
+Node F1 (`universality-battery`) of the spec-IR rearchitecture (plan
+2026-07-04T00-45, "Целевая форма"): the product goal is UNIVERSAL software —
+new tasks every time, no memory of past projects, the spec as the only source
+of truth. Sixteen live runs of the SAME p6 case reward per-case tuning and
+prove nothing about universality. This stage puts a BATTERY of small generated
+specs (different domains, different STRUCTURE: route counts, method sets,
+required request fields, media mixes, module ownership, scenario counts,
+service AND library product kinds) next to the hand-written cases. The
+generator (`tests/lib/battery_gen.py`) is deterministic engine-side code
+(seed -> byte-identical set, stdlib only, no LLM); each output is a case YAML
+the EXISTING conveyor consumes unchanged (run_cases.py glob + run-detached.sh
+launcher — the battery is data plus a thin driver, never a second harness).
+A failure of ANY battery spec in a live sweep is a ratchet investigation:
+honest red, never softened, never patched per-case.
+Ratchet evidence (RED before code): `test_universality_battery.py` was
+committed against a repo without `tests/lib/battery_gen.py` and without any
+committed `bat*.yaml` / `battery-manifest.json` under tests/scenarios/,
+PROVEN RED at pytest collection (ModuleNotFoundError: battery_gen) — before
+the implementation commit turned it green.
+- S20.1 DETERMINISM: `generate(seed, count)` twice -> byte-identical file
+  set; seed+1 -> a different set (the seed is live, not decorative).
+- S20.2 COMMITTED SET == GENERATOR: the battery checked into tests/scenarios/
+  byte-equals a regeneration from the committed manifest's seed/count (a
+  hand-edited battery spec is DRIFT and reds here); >= 6 specs so p6 stops
+  being the only yardstick; no stray `bat*.yaml` beside the manifest.
+- S20.3 VALIDITY, SMALL, IR-SURFACE: every spec parses with the same loader
+  run_cases uses and carries the required case keys (name == file stem,
+  boot pre_gate on, non-empty acceptance); services declare 2-5 routes with
+  methods/media inside the IR schema surface (`spec_ir._OA_METHODS` /
+  `spec_ir._MIME`) and LITERAL paths (no templates); libs declare 2-4
+  capabilities; <= 3 modules. Manifest dims are BOUND to the spec text
+  ("METHOD /path" appears verbatim) — no parallel truth.
+- S20.4 HONESTY (no leakage): no `seed_files`/`blueprint`/`solution`-class
+  keys, no code fences, no function-body fragments, no injections block —
+  the spec states desired behaviour ONLY; the worker derives everything.
+  Both directions: the linter (`battery_gen.lint_case_text`) is silent on
+  the legitimate battery AND reds on tampered known-answer inputs. Selector
+  safety: every battery stem starts with `bat` and no other scenario stem
+  contains it, so `--case bat` selects exactly the battery.
+- S20.5 VARIETY: the default battery spans the structural dimensions — >= 2
+  distinct route counts, >= 2 method sets, json-only AND json+html media
+  mixes, >= 2 required-field counts, >= 2 module counts, >= 2 scenario
+  counts, both product kinds, >= 6 non-repeating domains. Breadth is the
+  point; renamed nouns over one shape do not pass.
+- S20.6 EXISTING LAUNCHER, NO MEMORY: the manifest's recorded live command
+  goes through tests/run-detached.sh (`--case bat --depth product --workers
+  real --decomposer llm`); fresh workspace per spec is the conveyor's own
+  behaviour (run_cases mints a fresh run dir + fresh HERMES_HOME per case);
+  no battery spec smuggles cross-run project memory (memory.project.mode,
+  when present, is `fresh`).
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.

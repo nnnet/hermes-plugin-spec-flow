@@ -296,6 +296,22 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
   обязан собрать ВСЕ без памяти между ними
 - приёмка: p6 перестаёт быть единственным мерилом; провал любой спеки
   из батареи = разбор по храповику
+- заметки: сборка батареи ГОТОВА на ветке node-f1-universality-battery —
+  коммиты 1ec496e (S20 красные до кода, TAXONOMY Ступень 20) + e44375c.
+  tests/lib/battery_gen.py: детерминированный (seed → байт-в-байт),
+  stdlib-only, без ЛЛМ; 8 спек bat01–bat08 + battery-manifest.json в
+  tests/scenarios/ (seed 20260705): 6 WSGI-сервисов + 2 библиотеки,
+  8 разных доменов; структура из перетасованной сидом «колоды форм»
+  (маршруты 3/4/5, методы GET / GET+POST / GET+POST+DELETE, media
+  json-only И json+html, обязательные поля 1-3, владение 1-3 модулями,
+  сценарии 2-3). Спеки — JSON-тело в .yaml (JSON ⊂ YAML): run_cases.py
+  ест их без правок, второго харнесса нет. Честность жёстко: без
+  seed_files/blueprint/код-фенсов/инъекций (lint_case_text, S20.4 в обе
+  стороны). Аудит целиком 440 зелёных. Живой прогон запускает ОПЕРАТОР:
+  `cd tests && ./run-detached.sh --case bat --depth product
+  --workers real --decomposer llm` (все 8 последовательно, свежий
+  run-dir + свежий HERMES_HOME на каждую). Дрейф-проверка:
+  `python3 tests/lib/battery_gen.py --check`.
 
 ## Что сохраняется
 
