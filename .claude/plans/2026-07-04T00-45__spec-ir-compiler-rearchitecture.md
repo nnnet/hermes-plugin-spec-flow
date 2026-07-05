@@ -56,7 +56,7 @@ graph:
   - {id: G1, needs: [],               parallel: "post-b3", status: "[x]", files: [tests/harness/llm_backend.py, tests/workers/, tests/memory/]}
   - {id: F1, needs: [B3, C1, D1, E1], parallel: "",        status: "[x]", files: [tests/scenarios/, tests/lib/]}
   - {id: G2, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/nodes/]}
-  - {id: G3, needs: [],               parallel: "",        status: "[ ]", files: [spec_flow_runner.py, tests/decomposition/]}
+  - {id: G3, needs: [],               parallel: "",        status: "[~]", files: [spec_flow_runner.py, tests/decomposition/]}
 ```
 
 Зоны (`files`) — что узел МЕНЯЕТ; пересечение зон = последовательность
@@ -237,7 +237,7 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
   давний task #146. Полный набор после влития: 1793 зелёных,
   красные только 3 старых parallel_children (→ G3)
 
-### [ ] G3 `parallel-children-overlap` — давнее красное трио перекрытия
+### [~] G3 `parallel-children-overlap` — давнее красное трио перекрытия
 - выход: tests/decomposition/test_parallel_children.py зелёный:
   overlap-probe фиксирует peak > 1 (реальное перекрытие потоков
   братьев), max_workers ограничивает глобально, независимые братья
@@ -249,7 +249,8 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
   297). Свободен, но НЕ запущен осознанно: вне цели плана
   «спека-IR как источник», трогает ту же волновую механику, что
   только что перестроил G2 — брать отдельной сессией по решению юзера,
-  на свежей голове и зелёной базе
+  на свежей голове и зелёной базе.
+  Решение юзера 2026-07-05: брать сейчас. worktree-агент запущен
 
 ### [x] D2 `wire-counterexample-repair` — подключение лечения к шву ремонтника
 - выход: counterexample_repair (D1) вызывается из шва ремонтника
