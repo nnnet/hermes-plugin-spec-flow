@@ -130,10 +130,10 @@ def _real_env(monkeypatch, tmp_path, *, model_head="chainhead:free"):
     monkeypatch.setattr(rw, "load_skill_md", lambda s: "SYS")
     monkeypatch.setattr(rw, "_model_for", lambda *a, **k: model_head)
     monkeypatch.setattr(lb, "model_for", lambda *a, **k: model_head)
-    monkeypatch.setattr(rw, "_ensemble_size", lambda: 1)
+    monkeypatch.setattr(rw, "_ensemble_size", lambda *a, **k: 1)
     monkeypatch.setattr(rw, "_chat_only", lambda: True)
     monkeypatch.setattr(rw.llm_backend, "chain_for",
-                        lambda role, specialty="": [model_head])
+                        lambda *a, **k: [model_head])
 
 
 def test_specialist_model_and_params_reach_backend(monkeypatch, tmp_path,
@@ -170,8 +170,9 @@ def test_specialist_without_model_falls_back_to_chain(monkeypatch, tmp_path,
     """A specialist with NO model uses the implementer role's chain head — the
     same resolver the single-agent path uses (today's behaviour). The reply is
     served by the real local server and verified by a real pytest run; we read
-    the model the harness really sent and confirm a paramless step carries no
-    sampling knobs."""
+    the model the harness really sent and confirm a paramless step carries only
+    the universal low-temperature default (2c41c07 prevention: every worker
+    call gets temperature 0.1 unless the caller sets one), no other knobs."""
     monkeypatch.delenv("SPEC_FLOW_IMPLEMENTER_TEAM", raising=False)
     lb.configure_workers(None)
     _real_env(monkeypatch, tmp_path)
@@ -186,8 +187,9 @@ def test_specialist_without_model_falls_back_to_chain(monkeypatch, tmp_path,
     payload = srv.requests[0]["payload"]
     assert payload["model"] == "chainhead:free", \
         "no specialist model -> the role chain head answers"
-    assert set(payload) == {"model", "messages"}, \
-        "no params -> backend defaults (no sampling knobs in the body)"
+    assert set(payload) == {"model", "messages", "temperature"}, \
+        "no params -> only the universal low-temperature default rides along"
+    assert payload["temperature"] == 0.1
 
 
 # ── team-of-one equivalence + ordered multi-step run ──────────────────────
@@ -333,12 +335,16 @@ def test_ask_threads_params_into_openai_payload(monkeypatch, fake_openai):
     assert payload["max_tokens"] == 50
 
 
-def test_ask_without_params_keeps_legacy_payload(monkeypatch, fake_openai):
+def test_ask_without_params_carries_only_the_default_temperature(
+        monkeypatch, fake_openai):
     """No params -> the body sent to the real server is exactly {model,
-    messages} as before, so a paramless call is byte-for-byte the legacy
-    request."""
+    messages, temperature}: since 2c41c07 every worker call carries a LOW
+    default temperature (0.1, prevention against flaky generations) unless the
+    caller sets one; no other sampling knob may sneak in."""
     monkeypatch.setattr(lb, "_free_down_until", 0.0)
     lb.configure_workers(None)
     srv = fake_openai([(200, ok("ok"))])
     lb.ask("q", model="openrouter/a:free", role="decomposer", step="")
-    assert set(srv.requests[0]["payload"]) == {"model", "messages"}
+    payload = srv.requests[0]["payload"]
+    assert set(payload) == {"model", "messages", "temperature"}
+    assert payload["temperature"] == 0.1

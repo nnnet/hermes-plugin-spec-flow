@@ -199,13 +199,18 @@ def test_configure_resets_budget_counter(fake_openai):
 
 
 def test_mixed_429_raises_quota_for_fallback(fake_openai):
-    # one 429 among the retries is a quota signal — the old `all retries
-    # throttled` rule let a final 429 surface as RuntimeError and killed
-    # a whole live run with no fallback. A real server serves 500/429/502.
-    fake_openai([(500, "boom"), (429, '{"retry_after_seconds": 0}'),
-                 (502, "bad gateway")], retries=3, backoff=0.0)
+    # one OBSERVED 429 among the retries is a quota signal (2a8ed41: the old
+    # `all retries throttled` rule let a final 429 surface as RuntimeError and
+    # killed a whole live run with no fallback). Since 46b9373 a 5xx ends the
+    # per-model loop immediately (retrying a down gateway burned ~12 min in
+    # v063), so the 429 must come BEFORE the 5xx to be observed at all — and
+    # the break must NOT swallow it into a plain RuntimeError: the quota
+    # signal wins over the later server error.
+    srv = fake_openai([(429, '{"retry_after_seconds": 0}'), (500, "boom")],
+                      retries=3, backoff=0.0)
     with pytest.raises(lb.QuotaExhausted, match="throttled"):
         lb._ask_openai("q", "openrouter/a:free")
+    assert srv.call_count == 2, "the 5xx after a 429 must still fail over fast"
 
 
 def test_chain_absorbs_plain_provider_failure(monkeypatch, fake_openai):
