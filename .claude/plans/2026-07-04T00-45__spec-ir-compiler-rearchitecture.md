@@ -50,11 +50,11 @@ graph:
   - {id: B3, needs: [B1],             parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/harness/]}
   - {id: C1, needs: [A3, A4],         parallel: "",        status: "[x]", files: [spec_skeletons.py, spec_flow_runner.py]}
   - {id: D1, needs: [B1, C1],         parallel: "post-b3", status: "[x]", files: [spec_flow_doctor.py, spec_flow_remedies.py]}
-  - {id: D2, needs: [D1, G1],         parallel: "",        status: "[ ]", files: [tests/harness/role_worker.py, spec_flow_doctor.defaults.yaml]}
+  - {id: D2, needs: [D1, G1],         parallel: "",        status: "[x]", files: [tests/harness/role_worker.py, spec_flow_doctor.defaults.yaml]}
   - {id: E1, needs: [A4],             parallel: "after-a", status: "[x]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py]}
   - {id: B4, needs: [B3],             parallel: "post-b3", status: "[x]", files: [spec_flow_runner.py, spec_openapi.py]}
   - {id: G1, needs: [],               parallel: "post-b3", status: "[x]", files: [tests/harness/llm_backend.py, tests/workers/, tests/memory/]}
-  - {id: F1, needs: [B3, C1, D1, E1], parallel: "",        status: "[~]", files: [tests/scenarios/, tests/lib/]}
+  - {id: F1, needs: [B3, C1, D1, E1], parallel: "",        status: "[x]", files: [tests/scenarios/, tests/lib/]}
   - {id: G2, needs: [],               parallel: "",        status: "[~]", files: [spec_flow_runner.py, tests/nodes/]}
 ```
 
@@ -225,7 +225,7 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
   волну (_run_child_pool 8293). Узел пересобран на зону раннера,
   агент перезапущен 2026-07-05
 
-### [ ] D2 `wire-counterexample-repair` — подключение лечения к шву ремонтника
+### [x] D2 `wire-counterexample-repair` — подключение лечения к шву ремонтника
 - выход: counterexample_repair (D1) вызывается из шва ремонтника
   (role_worker._orchestra_run: контрпример вместо целого src+test+dump
   в _REPAIR_DIFF_TASK) и/или из лестницы причин
@@ -234,7 +234,18 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
   переспросу ОДНОЙ функции (журнал), полная перепись не предлагается;
   зелёный — лист без контрпримера идёт историческим путём байт-в-байт
 - заметки: рождён открытым вопросом D1; зона пересекалась с идущим G1
-  (role_worker.py) — ждал его влития
+  (role_worker.py) — ждал его влития.
+  ГОТОВ — коммиты 0e2a9db (S19.6-S19.9 красные) + 952733a, влит;
+  подключены ОБА шва ремонтника через один помощник
+  _counterexample_repair_step (_orchestra_run fixer + make_implementer
+  repair round): флаг tests_precompiled + извлекаемый контрпример →
+  петля Ральфа D1 с реальным pytest и дверью apply_function_body,
+  событие журнала counterexample_repair; отказ → исторический путь
+  байт-в-байт. Ступень в defaults.yaml ОСОЗНАННО не добавлена:
+  исполнители ремедий живут только в раннере
+  (_attempt_integrate_repair) — имя без исполнителя = мёртвые данные,
+  сжигающие ступень лестницы; follow-up при появлении исполнителя.
+  Аудит 458 зелёных после влития (вместе с F1)
 
 ### [x] E1 `decomposer-emits-ir` — декомпозер выдаёт IR, не прозу
 - выход: описание → IR со схемной валидацией на выходе декомпозера;
