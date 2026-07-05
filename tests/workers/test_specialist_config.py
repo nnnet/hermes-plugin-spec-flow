@@ -130,10 +130,10 @@ def _real_env(monkeypatch, tmp_path, *, model_head="chainhead:free"):
     monkeypatch.setattr(rw, "load_skill_md", lambda s: "SYS")
     monkeypatch.setattr(rw, "_model_for", lambda *a, **k: model_head)
     monkeypatch.setattr(lb, "model_for", lambda *a, **k: model_head)
-    monkeypatch.setattr(rw, "_ensemble_size", lambda: 1)
+    monkeypatch.setattr(rw, "_ensemble_size", lambda *a, **k: 1)
     monkeypatch.setattr(rw, "_chat_only", lambda: True)
     monkeypatch.setattr(rw.llm_backend, "chain_for",
-                        lambda role, specialty="": [model_head])
+                        lambda *a, **k: [model_head])
 
 
 def test_specialist_model_and_params_reach_backend(monkeypatch, tmp_path,

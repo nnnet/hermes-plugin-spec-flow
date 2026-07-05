@@ -114,7 +114,7 @@ def test_decomposer_prompt_carries_memory_block(monkeypatch, fake_openai):
     mem.MANAGER = mem.MemoryManager(f, "p4-case")
     # real local server answers; we then read the prompt the harness sent it.
     monkeypatch.setattr(rw, "_model_for",
-                        lambda role, specialty="": "openrouter/x:free")
+                        lambda *a, **k: "openrouter/x:free")
     srv = fake_openai([(200, ok(_json.dumps(
         {"atomic": True, "metrics": dict(_LEAF),
          "spec_markdown": "## Requirements\n- x"})))])
@@ -138,7 +138,7 @@ def test_green_leaf_retained_in_both_tiers(tmp_path, monkeypatch, fake_openai):
     (tmp_path / "specs" / "pay.md").write_text("spec", encoding="utf-8")
 
     monkeypatch.setattr(rw, "_model_for",
-                        lambda role, specialty="": "openrouter/x:free")
+                        lambda *a, **k: "openrouter/x:free")
     fake_openai([(200, ok(_json.dumps({"files": {
         "src/pay.py": "def ok():\n    return True\n",
         "tests/test_pay.py":

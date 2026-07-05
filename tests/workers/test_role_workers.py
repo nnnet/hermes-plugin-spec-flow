@@ -29,7 +29,7 @@ def _free_model(monkeypatch):
     chat worker's REAL ask() passes the free-only gate and hits the test
     server."""
     monkeypatch.setattr(rw, "_model_for",
-                        lambda role, specialty="": "openrouter/x:free")
+                        lambda *a, **k: "openrouter/x:free")
 
 
 def _gw(srv, **extra):

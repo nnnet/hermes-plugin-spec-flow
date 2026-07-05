@@ -67,7 +67,7 @@ def _common(monkeypatch, tmp_path):
     monkeypatch.setattr(lb, "model_for", lambda *a, **k: "m")
     monkeypatch.setattr(rw, "_model_for", lambda *a, **k: "m")
     monkeypatch.setattr(rw, "load_skill_md", lambda s: "SYS")
-    monkeypatch.setattr(rw, "_ensemble_size", lambda: 1)
+    monkeypatch.setattr(rw, "_ensemble_size", lambda *a, **k: 1)
 
 
 def test_remote_coder_step_routes_through_adapter(monkeypatch, tmp_path,
@@ -119,7 +119,7 @@ def test_remote_specialist_falls_back_to_local_when_unreachable(monkeypatch, tmp
     monkeypatch.setattr(rw, "_chat_only", lambda: True)
     monkeypatch.setattr(
         rw.llm_backend, "chain_for",
-        lambda role, specialty="": ["openrouter/qwen/qwen3-coder:free"])
+        lambda *a, **k: ["openrouter/qwen/qwen3-coder:free"])
 
     # local LLM IS the fallback target — the REAL door hits a real local server
     # (the specialist's model is a free id, so the free-only gate lets it run),
