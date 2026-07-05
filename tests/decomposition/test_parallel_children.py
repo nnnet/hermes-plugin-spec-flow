@@ -179,16 +179,21 @@ def test_min_siblings_guard(tmp_path):
 
 
 def test_depth_limit_keeps_deep_branches_sequential(tmp_path):
-    # a depth-1 branch must NOT fork when depth_limit is 0 (the default)
-    proj = _project(0, parallel={"children": 4})
+    # a depth-1 branch must NOT fork when depth_limit pins forks to depth 0.
+    # NOTE: depth_limit used to DEFAULT to 0; the online fork policy (commit
+    # 6d34695, operator directive) made the default unlimited — forks are now
+    # governed by accumulated complexity, and a case pins depth_limit
+    # explicitly when it wants a static bound. This pin is that explicit case.
+    proj = _project(0, parallel={"children": 4, "depth_limit": 0})
     proj["tree"]["children"] = [
         {"id": "mid", "title": "Middle branch", "metrics": dict(_BRANCH),
          "children": [{"id": f"deep{i}", "title": _TITLES[i],
                        "metrics": dict(_LEAF)} for i in range(4)]}]
     probe = _OverlapProbe()
     eng.run_project(proj, workspace=str(tmp_path / "wk"), depth="spec",
-                    agents={"reviewer": probe})
-    assert probe.peak == 1, "depth 1 branch stays sequential by default"
+                    agents={"reviewer": probe},
+                    review_policy=_FULL_REVIEW)
+    assert probe.peak == 1, "depth 1 branch stays sequential under the pin"
 
 
 def test_max_workers_caps_global_concurrency(tmp_path):
