@@ -43,6 +43,15 @@ def test_clean_and_idless_specs_pass():
 
 # ─── engine wiring: lint fires before the reviewer ────────────────────
 
+# A1 review tiering (engine default ON, simple_max_loc 120) skips the LLM
+# reviewer for a "simple" leaf — the _LEAF fixture (80 LOC, 0 open decisions)
+# classifies as simple, so with tiering on the reviewer fires only for the
+# root branch and NEVER sees the linted leaf 'disc': the ordering claim
+# "lint fix round runs before the reviewer" would be probed on a node the
+# reviewer never visits. The probe-driven run disables tiering so the
+# reviewer really receives the leaf after the lint fix round.
+_FULL_REVIEW = {"tiering": False}
+
 # goal-only project: the DECOMPOSER authors specs (a pre-built tree with
 # metrics never consults the agent, so there would be nothing to lint)
 PROJECT = {
@@ -82,7 +91,8 @@ def test_lint_fix_round_runs_before_reviewer(tmp_path):
     res = eng.run_project(dict(PROJECT), workspace=str(tmp_path / "wk"),
                           depth="spec",
                           agents={"decomposer": _decomposer_with_lint_fix(calls),
-                                  "reviewer": reviewer})
+                                  "reviewer": reviewer},
+                          review_policy=_FULL_REVIEW)
     fails = [e for e in res.events
              if e.gate == "spec_lint" and e.verdict == "FAIL"]
     assert fails and "REQ-disc-5 is missing" in fails[0].detail
@@ -91,6 +101,11 @@ def test_lint_fix_round_runs_before_reviewer(tmp_path):
     assert "DETERMINISTIC LINT" in calls[0]["review_feedback"]
     assert "REQ-disc-5" in calls[0]["review_feedback"]
     assert calls[0]["previous_spec"] == BAD_MD
+    # the reviewer really visited the linted leaf — pins the seam so a future
+    # policy-default change cannot silently re-sever it (G4 audit): before
+    # this guard the probe collected only the root and the ordering claim
+    # was never exercised on 'disc'
+    assert "disc" in seen_by_reviewer
     # the spec the reviewer finally saw is the FIXED one
     assert any(e.gate == "spec_lint" and e.verdict == "PASS"
                for e in res.events)
