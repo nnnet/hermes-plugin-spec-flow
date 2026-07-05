@@ -1119,6 +1119,36 @@ the implementation commit turned it green.
   5-layer merge (factory default -> env JSON -> case YAML -> overrides), so
   `max_rounds` is a per-case knob, not a literal in the loop.
 
+Node D2 (`wire-counterexample-repair`, `test_counterexample_wiring.py`)
+connects the D1 mechanism to the repairman seam of the harness. Both repair
+call sites — `_orchestra_run`'s fixer step and `make_implementer`'s repair
+round — used to re-ask with `_REPAIR_DIFF_TASK` (full module + full test +
+raw pytest dump) regardless of whether the leaf's tests were engine-compiled.
+Ratchet evidence (RED before code): the wiring rules were committed against a
+`role_worker` without `_counterexample_repair_step`, PROVEN RED, before the
+wiring commit turned them green.
+- S19.6 ENGAGEMENT: with `ctx['tests_precompiled']` set AND a failing
+  compiled run, `_counterexample_repair_step` hands repair to the doctor's
+  Ralph loop — the model receives ONLY the one-function slot +
+  counterexample prompt (BODY_ONLY_RULE; no sibling function, no module
+  body, no test source, no SEARCH/REPLACE diff task) and a correct body
+  turns the leaf green through the SAME two-tier `_leaf_bar`; the journal
+  event `counterexample_repair` names the re-asked function(s) — the proof
+  the re-ask was one-function-scoped, asserted, never assumed.
+- S19.7 THE DOOR HOLDS AT THE SEAM: a module-shaped reply (the v159
+  rewrite class) cannot land — the workspace module stays byte-identical
+  and the leaf ends honestly red; the constraint is the D1 write door
+  (`apply_function_body`), enforced by code at the seam, not by prompt hope.
+- S19.8 FALLBACK IS BYTE-FOR-BYTE LEGACY: without the flag, or when the red
+  run yields no extractable counterexample, the step declines (None) with
+  ZERO LLM calls, ZERO writes and ZERO journal events — the caller walks
+  the historical whole-file repair path unchanged (the GREEN direction of
+  the node's acceptance).
+- S19.9 THE SEAMS ARE CONSULTED: both call sites resolve repair through
+  `_counterexample_repair_step` BEFORE `_REPAIR_DIFF_TASK` (source-pinned,
+  the S18.5 `_active_team` lesson) — the diff task survives as
+  fallback-only, so a leaf on the legacy LLM-test path keeps it.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.
