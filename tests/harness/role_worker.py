@@ -1240,6 +1240,7 @@ def _orchestra_run(ctx: dict, ws_root: str, nid: str, fn: str, *,
     # NotImplementedError here, OUT of the per-step try/except, so an
     # unsupported provider fails loudly (phase-3 message) instead of being
     # logged-and-skipped like a transient step error.
+    team = _active_team(team, ctx, nid)
     tasks = [_specialist_task(step, ctx, nid, fn, ws_root) for step in team]
     # Phase 2: the STEP ORDER is now declarative. A team with no `workflow:`/
     # `process:` (today's bare list) drives the specialists sequentially — the
@@ -1313,7 +1314,8 @@ def _orchestra_run(ctx: dict, ws_root: str, nid: str, fn: str, *,
                     base_passed, base_out = pv.run_suite(
                         ws_root, include_smoke=False)
                     baseline = pv._badness(base_passed, base_out)
-                    if _write_reply_files(ws, out.get("files") or {}, fn):
+                    if _write_reply_files(ws, out.get("files") or {}, fn,
+                            protect_tests=bool(ctx.get("tests_precompiled"))):
                         wrote = True
                         passed, test_out = _leaf_bar(ws_root, fn, baseline, pv)
                         handoff["test_output"] = test_out
@@ -1333,14 +1335,16 @@ def _orchestra_run(ctx: dict, ws_root: str, nid: str, fn: str, *,
                     params=s_params)
                 with ws_tx.transaction(ws_root, f"leaf:{nid}",
                                        "orchestra repair"):
-                    if _apply_diff_repair(ws, ws_root, fn, raw2):
+                    if _apply_diff_repair(ws, ws_root, fn, raw2,
+                            protect_tests=bool(ctx.get("tests_precompiled"))):
                         passed, test_out = _leaf_bar(ws_root, fn, baseline, pv)
                     else:
                         try:
                             out2 = _extract_json(raw2)
                         except ValueError:
                             out2 = {}
-                        if _write_reply_files(ws, out2.get("files") or {}, fn):
+                        if _write_reply_files(ws, out2.get("files") or {}, fn,
+                                protect_tests=bool(ctx.get("tests_precompiled"))):
                             passed, test_out = _leaf_bar(
                                 ws_root, fn, baseline, pv)
                 handoff["test_output"] = test_out
@@ -1595,15 +1599,48 @@ def _code_style_block() -> str:
             + eng.RULE_CODE_STYLE)
 
 
-def _write_reply_files(ws: Any, files: dict, fn: str) -> bool:
+def _active_team(team: list, ctx: dict, nid: str) -> list:
+    """B3 (S18.5): the tester step is retired for a leaf whose interface
+    tests were compiled from the IR by the engine.
+
+    Why: an LLM-authored interface test re-guesses facts the IR already
+    carries (the v149/v150 classes); the engine is the author now.
+    What: with ctx['tests_precompiled'] set, drops every 'tester' step and
+    journals the retirement; without the flag the team is returned unchanged
+    (the historical path, byte-for-byte).
+    Test: tests/audit/test_ir_compiled_tests.py."""
+    if not ctx.get("tests_precompiled"):
+        return team
+    kept = [s for s in team
+            if str((s.get("role") if isinstance(s, dict) else s) or "")
+            != "tester"]
+    if len(kept) != len(team):
+        llm_log.log({"event": "orchestra_step_skipped", "node": nid,
+                     "role": "tester",
+                     "reason": "interface tests are engine-compiled from "
+                               "the IR"})
+    return kept
+
+
+def _write_reply_files(ws: Any, files: dict, fn: str,
+                       protect_tests: bool = False) -> bool:
     """Write the worker's files into the workspace (harness does the I/O in
     chat-only mode). Only the leaf's own src/tests paths are accepted, and
-    the platform-seeded skeleton is immutable."""
+    the platform-seeded skeleton is immutable. With `protect_tests` the
+    leaf's test file is engine-compiled from the IR (B3/S18.5) — a worker
+    write to it is refused and journaled."""
     from . import pytest_verifier
     protected = pytest_verifier.protected_files()
     wrote = False
     safe = {f"src/{fn}.py": "code", f"tests/test_{fn}.py": "test"}
     for rel, kind in safe.items():
+        if protect_tests and kind == "test":
+            if isinstance(files.get(rel), str) and files[rel].strip():
+                llm_log.log({"event": "write_refused", "role": "implementer",
+                             "node": fn, "path": rel,
+                             "reason": "interface tests are engine-compiled "
+                                       "from the IR"})
+            continue
         if rel in protected:
             llm_log.log({"event": "write_refused", "role": "implementer",
                          "node": fn, "path": rel,
@@ -1634,18 +1671,22 @@ def _write_reply_files(ws: Any, files: dict, fn: str) -> bool:
     return wrote
 
 
-def _apply_diff_repair(ws: Any, ws_root: str, fn: str, reply: str) -> bool:
+def _apply_diff_repair(ws: Any, ws_root: str, fn: str, reply: str,
+                       protect_tests: bool = False) -> bool:
     """#1 / П3: apply SEARCH/REPLACE diff blocks from a repair reply to the
     leaf's own files. Only src/<fn>.py and tests/test_<fn>.py are touchable;
     the platform skeleton stays immutable and platform-internal content is
-    refused. Returns True if at least one block applied (a write happened)."""
+    refused. With `protect_tests` the test file is engine-compiled from the
+    IR (B3/S18.5) — a diff aimed at it is refused like a protected path.
+    Returns True if at least one block applied (a write happened)."""
     from . import diff_repair, pytest_verifier
     blocks = diff_repair.parse_blocks(reply)
     if not blocks:
         return False
     safe = {f"src/{fn}.py": "code", f"tests/test_{fn}.py": "test"}
     protected = pytest_verifier.protected_files()
-    allowed = {p for p in safe if p not in protected}
+    allowed = {p for p in safe if p not in protected
+               and not (protect_tests and safe[p] == "test")}
 
     def _read(rel: str) -> str:
         return _inline_file(ws_root, rel) or ""
@@ -1883,7 +1924,8 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         with ws_tx.transaction(ws_root, f"leaf:{nid}", "write+bar"):
             base_passed, base_out = pv.run_suite(ws_root, include_smoke=False)
             baseline = pv._badness(base_passed, base_out)
-            wrote = _write_reply_files(ws, out.get("files") or {}, fn)
+            wrote = _write_reply_files(ws, out.get("files") or {}, fn,
+                    protect_tests=bool(ctx.get("tests_precompiled")))
             if wrote:
                 passed, test_out = _leaf_bar(ws_root, fn, baseline, pv)
         if wrote:
@@ -1905,7 +1947,8 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
                                specialty=specialty)
             with ws_tx.transaction(ws_root, f"leaf:{nid}",
                                    "repair write+bar"):
-                if _apply_diff_repair(ws, ws_root, fn, raw2):
+                if _apply_diff_repair(ws, ws_root, fn, raw2,
+                        protect_tests=bool(ctx.get("tests_precompiled"))):
                     passed, test_out = _leaf_bar(ws_root, fn, baseline, pv)
                 else:
                     # no applicable diff — fall back to whole-file JSON if the
@@ -1914,7 +1957,8 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
                         out2 = _extract_json(raw2)
                     except ValueError:
                         out2 = {}
-                    if _write_reply_files(ws, out2.get("files") or {}, fn):
+                    if _write_reply_files(ws, out2.get("files") or {}, fn,
+                            protect_tests=bool(ctx.get("tests_precompiled"))):
                         passed, test_out = _leaf_bar(ws_root, fn, baseline, pv)
             _granular_commit(ws_root, fn, "repair")    # opt-in fine-grained history
             raw = raw2
