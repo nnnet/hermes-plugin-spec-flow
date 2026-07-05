@@ -46,12 +46,13 @@ graph:
   - {id: A3, needs: [A1],             parallel: "",        status: "[x]", files: [spec_ir.py, spec_flow_runner.py]}
   - {id: A4, needs: [A1, A2, A3],     parallel: "",        status: "[x]", files: [spec_ir.py]}
   - {id: B1, needs: [A2, A3],         parallel: "after-a", status: "[x]", files: [spec_scenarios.py, spec_flow_runner.py]}
-  - {id: B2, needs: [A1, A3],         parallel: "after-a", status: "[!]", files: [spec_openapi.py, tests/tools/]}
-  - {id: B3, needs: [B1],             parallel: "",        status: "[~]", files: [spec_flow_runner.py, tests/harness/]}
+  - {id: B2, needs: [A1, A3],         parallel: "after-a", status: "[~]", files: [spec_openapi.py, tests/tools/]}
+  - {id: B3, needs: [B1],             parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/harness/]}
   - {id: C1, needs: [A3, A4],         parallel: "",        status: "[x]", files: [spec_skeletons.py, spec_flow_runner.py]}
-  - {id: D1, needs: [B1, C1],         parallel: "",        status: "[~]", files: [spec_flow_doctor.py, spec_flow_remedies.py]}
+  - {id: D1, needs: [B1, C1],         parallel: "post-b3", status: "[~]", files: [spec_flow_doctor.py, spec_flow_remedies.py]}
   - {id: E1, needs: [A4],             parallel: "after-a", status: "[x]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py]}
-  - {id: B4, needs: [],               parallel: "",        status: "[ ]", files: [spec_flow_runner.py]}
+  - {id: B4, needs: [B3],             parallel: "post-b3", status: "[~]", files: [spec_flow_runner.py, spec_openapi.py]}
+  - {id: G1, needs: [],               parallel: "post-b3", status: "[~]", files: [tests/harness/llm_backend.py, tests/workers/, tests/memory/]}
   - {id: F1, needs: [B3, C1, D1, E1], parallel: "",        status: "[ ]", files: [tests/scenarios/, tests/lib/]}
 ```
 
@@ -123,7 +124,7 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
   (reason), scenario_gate, scenario_red/scenario_green (TDD-петля
   поздней инъекции). Вопросы Фазы A №3 и №4 закрыты
 
-### [!] B2 `contract-oracle` — Specmatic + Schemathesis поверх OpenAPI из IR
+### [~] B2 `contract-oracle` — Specmatic + Schemathesis поверх OpenAPI из IR
 - выход: компиляция полного OpenAPI-документа из ir.json (слияние
   фрагментов узлов + ответы ошибок роутера общей секцией); контрактные
   тесты (Specmatic) + property-фаззинг (Schemathesis) как внешние оракулы
@@ -141,15 +142,29 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
   ТРЕБУЕТ ЧЕЛОВЕКА (для Specmatic): 1) apt install default-jre-headless;
   2) скачать specmatic.jar с specmatic.io в tests/tools/;
   3) python3 tests/tools/run_specmatic.py <openapi.json> <base-url>.
-  Попутная честная находка оракула → узел B4
+  Попутная честная находка оракула → узел B4.
+  2026-07-05: пункты 1-2 закрыты человеком (openjdk 21 +
+  tests/tools/specmatic.jar от 2026-07-04); остался пункт 3 — прогон.
 
-### [~] B3 `retire-llm-tester` — снятие ЛЛМ-тестера с интерфейса
+### [x] B3 `retire-llm-tester` — снятие ЛЛМ-тестера с интерфейса
 - выход: тесты соответствия генерирует движок из IR; за ЛЛМ — только
   доменные краевые случаи сверх интерфейса (опционально)
 - приёмка: класс «тестер угадал» устранён по построению; никаких
   vanity-тестов; p6 гоняется только после этого узла
-- заметки: worktree-агент запущен 2026-07-04 после влития B1/E1; зона
-  пересекается с C1 в раннере — записанный порядок влития C1 → B3
+- заметки: ГОТОВ — коммиты d41b460 (S18 красные) + 9e7fe79, влит
+  c437332 (конфликт C1↔B3 в раннере и TAXONOMY решён по записанному
+  порядку C1 → B3; аудиты S17+S18 = 45 зелёных вместе).
+  spec_conformance.compile_leaf_tests: детерминированный
+  tests/test_<module>.py только из IR-фрагмента узла (точный статус,
+  форма ответа, повтор сценария; пробел = видимый skip с причиной);
+  раннер пишет файл ДО работника (leaf_tests_source: ir-compiled|llm)
+  и восстанавливает его поверх любой переписи (ir_tests_authority);
+  harness увольняет шаг тестера (_active_team) и отвергает записи
+  работника в файл. Дубль рабочей копии из главного дерева убран в
+  тайник (git stash: «B3 duplicate working copy superseded»).
+  Попутная честная находка: в свежем окружении собирается 1739 тестов
+  (раньше ~806 — зависимостей не хватало), из них 23 в
+  tests/workers+memory красные ещё с E1-влития → узел G1.
 
 ### [x] C1 `skeleton-compiler` — каркас модуля пишет движок
 - выход: из IR — сигнатуры, таблица маршрутов, список разрешённых
@@ -165,12 +180,14 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
   движка каркасом не покрывается (урок v164); правило якорей — только
   целостность движкового текста (защита от ложного красного v151)
 
-### [ ] D1 `counterexample-repair` — лечение переспросом одной функции
+### [~] D1 `counterexample-repair` — лечение переспросом одной функции
 - выход: контрпример (вход/ожидалось/получилось) → переспрос ОДНОЙ
   функции со СВЕЖИМ контекстом (петля Ральфа: одна задача за итерацию,
   объективный выход = зелёные контрактные тесты)
 - приёмка: полная перепись файла невозможна по построению;
   модель-независимость через минимум степеней свободы
+- заметки: worktree-агент запущен 2026-07-05 (группа post-b3, зона
+  доктора/ремедий не пересекается с B4/G1)
 
 ### [x] E1 `decomposer-emits-ir` — декомпозер выдаёт IR, не прозу
 - выход: описание → IR со схемной валидацией на выходе декомпозера;
@@ -185,14 +202,31 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
   _route_request_fields / _route_media_map (проза — фолбэк без IR).
   Вопрос Фазы A №1 закрыт: значения тела пишет декомпозер в when.body
 
-### [ ] B4 `router-allow-header` — 405 роутера без заголовка Allow
+### [~] B4 `router-allow-header` — 405 роутера без заголовка Allow
 - выход: синтезированный роутер (_synthesize_entry_code) шлёт Allow с
   перечнем контрактных методов пути при 405 (RFC 9110); зеркало в
   spec_openapi (описание 405 упоминает Allow)
 - приёмка: находка Schemathesis воспроизводится красным кейсом до фикса
   и зелёным после; ступень по храповику
 - заметки: рождён честной находкой Schemathesis при демонстрации B2;
-  зона — раннер, занят C1/B3 → стартует после их влития
+  зона — раннер, занят C1/B3 → стартует после их влития.
+  worktree-агент запущен 2026-07-05 (группа post-b3): B3 влит, раннер
+  свободен; зеркало 405→Allow добавляется и в spec_openapi.py
+
+### [~] G1 `workers-suite-red` — 23 красных теста workers/memory на ветке
+- выход: tests/workers/ + tests/memory/test_memory_modes.py зелёные в
+  полном окружении (1739 собираемых тестов), без ослабления тестов
+- приёмка: полный прогон без падений кроме 3 известных красных
+  parallel_children; каждое падение разобрано (движок чинится или тест
+  признан неверным с обоснованием), не подгонка
+- заметки: найден при приёмке B3 2026-07-05: красные уже на влитии E1
+  (2a4d18d), прежние «N зелёных» считались в бедном окружении
+  (~806 собираемых тестов, не хватало зависимостей — fastapi и пр.).
+  Пример класса: test_mixed_429_raises_quota_for_fallback — обрыв
+  цепочки на 5xx (правка v063) съедает сигнал квоты 429 → RuntimeError
+  вместо QuotaExhausted. Санбокс не при чём (проверено без него).
+  worktree-агент запущен 2026-07-05 (группа post-b3, зона
+  llm_backend/tests не пересекается с D1/B4)
 
 ### [ ] F1 `universality-battery` — батарея случайных спек
 - выход: генератор случайных маленьких спек разных доменов; конвейер
