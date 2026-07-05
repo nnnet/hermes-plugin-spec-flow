@@ -9356,6 +9356,8 @@ def %(callable)s(environ, start_response):
             # seed the leaf's spec into the worktree so it is self-contained
             # (the worktree branches off HEAD; an uncommitted spec is absent)
             self._seed_worktree_file(wt.path, ictx.get("spec"))
+            # B3: the engine-compiled interface tests travel with the worker
+            self._seed_worktree_file(wt.path, ictx.get("tests_precompiled"))
             view = _LeafWorkspaceView(ws, wt.path)
             impl({**ictx, "workspace": view})
         if getattr(wt, "conflicts", None):
@@ -9419,6 +9421,86 @@ def %(callable)s(environ, start_response):
             if syms:
                 out[p.stem] = syms
         return out
+
+    def _compile_ir_leaf_tests(self, node: dict, nid: str, code_fn: str,
+                               test_rel: Optional[str], ictx: dict) -> None:
+        """B3 (S18.5): author the leaf's INTERFACE tests from its IR entry.
+
+        Why: an LLM tester re-guesses facts the IR already carries (the
+        v149/v150 classes); when the decomposer supplied a machine fragment
+        for this leaf the ENGINE compiles tests/test_<module>.py from it and
+        the tester role is retired for interface coverage.
+        What: writes the compiled file BEFORE the worker runs, flags the
+        worker context (`tests_precompiled`) so the harness drops the tester
+        step and refuses worker writes to the file, and journals the source
+        either way: `leaf_tests_source: ir-compiled` | `leaf_tests_source:
+        llm`. A compiler refusal (invalid IR) falls back to the LLM path
+        carrying the refusal reason — never a silent half-compiled file.
+        The import module name is the engine's `_module_for` datum: the
+        fragment's files entry is overridden with src/<module>.py so the
+        compiled import can never chase a model-proposed stem. An
+        edit-in-place leaf (code_target) shares the OWNER's test file and
+        keeps the historical path.
+        Test: tests/audit/test_ir_compiled_tests.py."""
+        reg = self.__dict__.get("_decomposer_ir_nodes") or {}
+        frag = reg.get(nid) if isinstance(reg.get(nid), dict) else None
+        detail = ""
+        if node.get("code_target"):
+            frag, detail = None, "edit-in-place leaf keeps the llm path"
+        content = None
+        if frag and ((frag.get("openapi") or {}).get("paths")) and test_rel:
+            try:
+                from . import spec_conformance  # type: ignore
+                from . import spec_ir  # type: ignore
+            except ImportError:  # flat layout: repo root on sys.path
+                import spec_conformance  # type: ignore
+                import spec_ir  # type: ignore
+            nodes = dict(reg)
+            nodes[nid] = dict(frag, files=[f"src/{code_fn}.py"])
+            try:
+                content = spec_conformance.compile_leaf_tests(
+                    {"format": spec_ir.IR_FORMAT, "product": {},
+                     "nodes": nodes}, nid)
+            except ValueError as exc:
+                detail = "compiler refused: %s" % str(exc)[:200]
+        if content is not None:
+            self.workspace._write(test_rel, content, "test")
+            self.__dict__.setdefault("_ir_compiled_tests", {})[nid] = content
+            ictx["tests_precompiled"] = test_rel
+            src = "ir-compiled"
+        else:
+            src = "llm"
+        self.emit("implement", "engine", "spec-implement", f"{nid}:tests",
+                  "leaf interface tests authored",
+                  ("leaf_tests_source: %s" % src)
+                  + ("; %s" % detail if detail else ""),
+                  "leaf_tests_source", "",
+                  level=L_MILESTONE if src == "ir-compiled" else L_DETAIL)
+
+    def _reassert_ir_leaf_tests(self, nid: str,
+                                test_rel: Optional[str]) -> None:
+        """B3 (S18.5): the compiled interface tests are ENGINE authority.
+
+        Why: a worker pass (or a diff repair) may still rewrite the test
+        file; trusting refusal logs alone would be prompt hope, not code.
+        What: if the workspace copy differs from the compiled content the
+        engine restores it and journals the enforcement; inert for leaves
+        that never compiled (the llm path is untouched).
+        Test: tests/audit/test_ir_compiled_tests.py."""
+        want = (self.__dict__.get("_ir_compiled_tests") or {}).get(nid)
+        root = getattr(self.workspace, "root", None)
+        if not (want and test_rel and root):
+            return
+        p = Path(root) / test_rel
+        cur = (p.read_text(encoding="utf-8", errors="replace")
+               if p.is_file() else None)
+        if cur != want:
+            self.workspace._write(test_rel, want, "test")
+            self.emit("implement", "engine", "spec-implement",
+                      f"{nid}:tests",
+                      "ir-compiled tests re-asserted over a worker rewrite",
+                      str(test_rel), "ir_tests_authority", "ENFORCED",
+                      level=L_MILESTONE)
 
     def _leaf_pipeline(self, node: dict, contract_ctx: Optional[dict],
                        depth: int = 0, parent: Optional[str] = None,
@@ -9592,6 +9674,11 @@ def %(callable)s(environ, start_response):
                     ictx["acceptance"] = node.get("acceptance")
                 if node.get("examples"):
                     ictx["examples"] = node.get("examples")
+                # B3 (S18.5): a leaf with an accepted IR fragment gets its
+                # interface tests COMPILED by the engine — the LLM tester
+                # is retired for interface coverage (leaf_tests_source).
+                self._compile_ir_leaf_tests(node, nid, code_fn, test_rel,
+                                            ictx)
                 try:
                     self._invoke_implementer(ictx, nid, code_fn)
                 except NotImplementedError:
@@ -9633,6 +9720,10 @@ def %(callable)s(environ, start_response):
                                   "edit-in-place guard: dropped a parallel fork",
                                   f"removed src/{fn}.py — surface owned by {ctgt}",
                                   "amend_guard", "ENFORCED", level=L_MILESTONE)
+                # B3 (S18.5): the compiled interface tests are ENGINE
+                # authority — restore them if any worker pass rewrote the
+                # file (inert for llm-path leaves).
+                self._reassert_ir_leaf_tests(nid, test_rel)
                 # 437: a late requirement must leave a REAL delta in its owner
                 # module before it is judged 'implemented' (the v041 empty-change
                 # failure). Inert for ordinary nodes.
