@@ -1323,6 +1323,23 @@ def _orchestra_run(ctx: dict, ws_root: str, nid: str, fn: str, *,
             elif role == "fixer":
                 if passed or not wrote:
                     continue                # nothing to fix
+                # D2: a leaf with ENGINE-COMPILED tests and an extractable
+                # counterexample repairs by a ONE-FUNCTION re-ask through the
+                # doctor's body-only door — the whole-file diff task below is
+                # never offered to the model in that case. No flag / no
+                # counterexample -> the historical path runs unchanged.
+                cx_res = _counterexample_repair_step(
+                    ctx, ws, ws_root, nid, fn, handoff["test_output"],
+                    baseline, pv,
+                    ask=lambda p: _call_model(
+                        p, system=s_system, allowed=allowed,
+                        disallowed=disallowed, cwd=ws_root, model=s_model,
+                        role="implementer", specialty=specialty,
+                        meta=step_meta, params=s_params))
+                if cx_res is not None:
+                    passed, test_out = cx_res
+                    handoff["test_output"] = test_out
+                    continue
                 cur_src = _inline_file(ws_root, f"src/{fn}.py") or ""
                 cur_test = _inline_file(ws_root, f"tests/test_{fn}.py") or ""
                 repair = (base_prompt + "\n\n" + _REPAIR_DIFF_TASK.format(
@@ -1553,6 +1570,68 @@ def _run_pytest(ws_root: str, test_rel: str) -> tuple[bool, str]:
             cwd=ws_root, env=_pv.hermetic_env(ws_root))
     out = (proc.stdout or "") + (proc.stderr or "")
     return proc.returncode == 0, out[-1500:]
+
+
+def _counterexample_repair_step(ctx: dict, ws: Any, ws_root: str, nid: str,
+                                fn: str, test_out: str, baseline: int, pv,
+                                ask: Callable) -> "Optional[tuple[bool, str]]":
+    """D2: COUNTEREXAMPLE-scoped ONE-FUNCTION repair at the repairman seam.
+
+    Why: the historical repair re-asks with the WHOLE module + full test +
+    raw pytest dump (_REPAIR_DIFF_TASK), inviting the v159 route-erasing
+    rewrite class; a leaf whose interface tests are ENGINE-COMPILED (B3)
+    reduces its failing run deterministically to a counterexample, so the
+    re-ask can carry ONE function slot and the D1 write door
+    (spec_flow_doctor.apply_function_body) makes a full-file rewrite
+    impossible by construction — enforced by code, never by prompt hope.
+    What: engages ONLY when ctx['tests_precompiled'] is set AND the failing
+    output yields a counterexample; runs the doctor's Ralph loop with
+    run_tests wired to the REAL workspace pytest and ``ask`` wired to the
+    caller's model call, journals event ``counterexample_repair`` naming the
+    re-asked function(s), then re-judges via the SAME two-tier _leaf_bar.
+    Returns (passed, test_out) when engaged; None when the historical
+    whole-file path must run unchanged (no flag / no counterexample) — the
+    fallback direction is byte-for-byte legacy: zero calls, zero writes,
+    zero journal events.
+    Test: tests/audit/test_counterexample_wiring.py (S19.6-S19.9).
+    """
+    if not ctx.get("tests_precompiled"):
+        return None
+    import sys as _sys
+    if str(PLUGIN_ROOT) not in _sys.path:    # plugin root hosts the doctor
+        _sys.path.insert(0, str(PLUGIN_ROOT))
+    import spec_flow_doctor as _doctor
+    from . import pytest_verifier
+    from . import ws_tx
+    src_rel, test_rel = f"src/{fn}.py", f"tests/test_{fn}.py"
+    cur_src = _inline_file(ws_root, src_rel) or ""
+    cur_test = _inline_file(ws_root, test_rel) or ""
+    if not cur_src or not _doctor.extract_counterexamples(cur_test, test_out):
+        return None                       # historical path, untouched
+
+    def _run(module_src: str) -> tuple:
+        # the loop judges the REAL workspace artifact; the platform-internals
+        # gate is the same one every other write door applies (parity)
+        body = module_src if module_src.endswith("\n") else module_src + "\n"
+        if not pytest_verifier.content_allowed(body):
+            llm_log.log({"event": "write_refused", "role": "implementer",
+                         "node": nid, "path": src_rel,
+                         "reason": "touches platform internals"})
+            return False, "repair body touches platform internals — refused"
+        ws._write(src_rel, body, "code")
+        return _run_pytest(ws_root, test_rel)
+
+    with ws_tx.transaction(ws_root, f"leaf:{nid}", "counterexample repair"):
+        res = _doctor.counterexample_repair(cur_src, cur_test,
+                                            run_tests=_run, ask=ask)
+        passed, out = _leaf_bar(ws_root, fn, baseline, pv)
+    llm_log.log({"event": "counterexample_repair", "node": nid,
+                 "green": bool(res.get("green")),
+                 "rounds": res.get("rounds"),
+                 "functions": [r.get("function")
+                               for r in (res.get("records") or [])
+                               if r.get("function")]})
+    return passed, out
 
 
 def _path_header(fn: str) -> str:
@@ -1932,36 +2011,49 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
             _granular_commit(ws_root, fn, "create")   # opt-in fine-grained history
         if wrote and not passed:
             _round_gate(2, "repair round")
-            # #1 / П3: prefer a SURGICAL diff repair (SEARCH/REPLACE against
-            # the current files) over a whole-file rewrite — fewer regressions,
-            # cheaper. Whole-file JSON stays as a back-compat fallback when the
-            # model returns no applicable diff.
-            cur_src = _inline_file(ws_root, f"src/{fn}.py") or ""
-            cur_test = _inline_file(ws_root, f"tests/test_{fn}.py") or ""
-            repair = (prompt + "\n\n"
-                      + _REPAIR_DIFF_TASK.format(output=test_out, fn=fn,
-                                                 src=cur_src, test=cur_test))
-            raw2 = _call_model(repair, system=system, allowed=allowed,
-                               disallowed=disallowed, cwd=ws_root,
-                               model=model, role="implementer",
-                               specialty=specialty)
-            with ws_tx.transaction(ws_root, f"leaf:{nid}",
-                                   "repair write+bar"):
-                if _apply_diff_repair(ws, ws_root, fn, raw2,
-                        protect_tests=bool(ctx.get("tests_precompiled"))):
-                    passed, test_out = _leaf_bar(ws_root, fn, baseline, pv)
-                else:
-                    # no applicable diff — fall back to whole-file JSON if the
-                    # model returned that shape instead
-                    try:
-                        out2 = _extract_json(raw2)
-                    except ValueError:
-                        out2 = {}
-                    if _write_reply_files(ws, out2.get("files") or {}, fn,
+            # D2: counterexample-first for a leaf with ENGINE-COMPILED tests —
+            # a ONE-FUNCTION re-ask through the doctor's body-only door; the
+            # whole-file diff task below is fallback-only, byte-for-byte.
+            cx_res = _counterexample_repair_step(
+                ctx, ws, ws_root, nid, fn, test_out, baseline, pv,
+                ask=lambda p: _call_model(
+                    p, system=system, allowed=allowed,
+                    disallowed=disallowed, cwd=ws_root, model=model,
+                    role="implementer", specialty=specialty))
+            if cx_res is not None:
+                passed, test_out = cx_res
+                _granular_commit(ws_root, fn, "repair")
+            else:
+                # #1 / П3: prefer a SURGICAL diff repair (SEARCH/REPLACE against
+                # the current files) over a whole-file rewrite — fewer regressions,
+                # cheaper. Whole-file JSON stays as a back-compat fallback when the
+                # model returns no applicable diff.
+                cur_src = _inline_file(ws_root, f"src/{fn}.py") or ""
+                cur_test = _inline_file(ws_root, f"tests/test_{fn}.py") or ""
+                repair = (prompt + "\n\n"
+                          + _REPAIR_DIFF_TASK.format(output=test_out, fn=fn,
+                                                     src=cur_src, test=cur_test))
+                raw2 = _call_model(repair, system=system, allowed=allowed,
+                                   disallowed=disallowed, cwd=ws_root,
+                                   model=model, role="implementer",
+                                   specialty=specialty)
+                with ws_tx.transaction(ws_root, f"leaf:{nid}",
+                                       "repair write+bar"):
+                    if _apply_diff_repair(ws, ws_root, fn, raw2,
                             protect_tests=bool(ctx.get("tests_precompiled"))):
                         passed, test_out = _leaf_bar(ws_root, fn, baseline, pv)
-            _granular_commit(ws_root, fn, "repair")    # opt-in fine-grained history
-            raw = raw2
+                    else:
+                        # no applicable diff — fall back to whole-file JSON if the
+                        # model returned that shape instead
+                        try:
+                            out2 = _extract_json(raw2)
+                        except ValueError:
+                            out2 = {}
+                        if _write_reply_files(ws, out2.get("files") or {}, fn,
+                                protect_tests=bool(ctx.get("tests_precompiled"))):
+                            passed, test_out = _leaf_bar(ws_root, fn, baseline, pv)
+                _granular_commit(ws_root, fn, "repair")    # opt-in fine-grained history
+                raw = raw2
         if passed:
             # a GREEN leaf is worth remembering: craft for the role,
             # the decision for the project (no-ops when memory is off)
