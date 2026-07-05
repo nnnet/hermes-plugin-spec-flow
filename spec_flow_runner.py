@@ -8289,7 +8289,13 @@ def %(callable)s(environ, start_response):
         ``_has_sibling_deps`` gate threw away — an LLM decomposer declares
         depends_on liberally (research→arch→features), which would otherwise
         serialize the whole branch. A dependency cycle degrades to one wave
-        (run together) rather than deadlocking."""
+        (run together) rather than deadlocking.
+        Hand-rolled on purpose (not stdlib ``graphlib.TopologicalSorter``):
+        the deliverable is LEVELS with barrier semantics plus a cycle
+        DEGRADE-to-one-wave policy, while TopologicalSorter yields a
+        ready-stream and raises CycleError — the adaptation would exceed
+        these ten lines; wave semantics also interlock with spike hoisting
+        and the research readiness gate (S9.4)."""
         ids = {c.get("id") for c in kids}
         deps = {c.get("id"): {d for d in (c.get("depends_on") or [])
                               if d in ids and d != c.get("id")} for c in kids}
