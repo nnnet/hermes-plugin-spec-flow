@@ -53,6 +53,16 @@ def _project(n_leaves, parallel=None):
     return proj
 
 
+# A1 review tiering (engine default ON, simple_max_loc 120) skips the LLM
+# reviewer for a "simple" leaf — the EXACT seam _OverlapProbe hooks. The
+# fixtures' 80-LOC leaves classify as simple, so with tiering on the probe
+# fires only for the root branch review (once, in the scheduler thread) and
+# every peak measurement is vacuous: peak == 1 regardless of forking. Every
+# probe-driven run below disables tiering so the reviewer runs for EVERY
+# node and the probe measures REAL sibling overlap inside worker threads.
+_FULL_REVIEW = {"tiering": False}
+
+
 class _OverlapProbe:
     """Reviewer that records how many siblings run at the same moment."""
 
@@ -77,13 +87,15 @@ class _OverlapProbe:
 def test_parallel_children_overlap_and_sequential_default(tmp_path):
     seq = _OverlapProbe()
     eng.run_project(_project(4), workspace=str(tmp_path / "w1"),
-                    depth="spec", agents={"reviewer": seq})
+                    depth="spec", agents={"reviewer": seq},
+                    review_policy=_FULL_REVIEW)
     assert seq.peak == 1, "no flag — strictly sequential (the default)"
 
     par = _OverlapProbe()
     eng.run_project(_project(4, parallel={"children": 4}),
                     workspace=str(tmp_path / "w2"),
-                    depth="spec", agents={"reviewer": par})
+                    depth="spec", agents={"reviewer": par},
+                    review_policy=_FULL_REVIEW)
     assert par.peak >= 2, "the flag must produce real sibling overlap"
     assert sorted(n for n in par.nodes if n.startswith("leaf")) == \
         [f"leaf{i}" for i in range(4)], "every child still processed"
@@ -92,7 +104,8 @@ def test_parallel_children_overlap_and_sequential_default(tmp_path):
 def test_trace_ticks_stay_single_writer_under_parallel(tmp_path):
     res = eng.run_project(_project(6, parallel={"children": 6}),
                           workspace=str(tmp_path / "wk"), depth="spec",
-                          agents={"reviewer": _OverlapProbe(dwell=0.05)})
+                          agents={"reviewer": _OverlapProbe(dwell=0.05)},
+                          review_policy=_FULL_REVIEW)
     ticks = [e.tick for e in res.events]
     assert ticks == sorted(ticks) and len(ticks) == len(set(ticks)), \
         "tick sequence must stay strictly increasing and unique"
@@ -101,7 +114,8 @@ def test_trace_ticks_stay_single_writer_under_parallel(tmp_path):
 def test_branch_integrate_joins_all_children(tmp_path):
     res = eng.run_project(_project(5, parallel={"children": 5}),
                           workspace=str(tmp_path / "wk"), depth="spec",
-                          agents={"reviewer": _OverlapProbe(dwell=0.05)})
+                          agents={"reviewer": _OverlapProbe(dwell=0.05)},
+                          review_policy=_FULL_REVIEW)
     by_task = {}
     for e in res.events:
         by_task.setdefault(e.task, []).append(e.tick)
@@ -145,7 +159,8 @@ def test_agent_crash_in_one_child_spares_the_others(tmp_path):
 
     res = eng.run_project(_project(4, parallel={"children": 4}),
                           workspace=str(tmp_path / "wk"), depth="spec",
-                          agents={"reviewer": reviewer})
+                          agents={"reviewer": reviewer},
+                          review_policy=_FULL_REVIEW)
     for i in range(4):
         assert f"leaf{i}" in res.tasks, "every sibling still lands"
     assert "L0:integrate" in res.tasks
@@ -158,28 +173,35 @@ def test_min_siblings_guard(tmp_path):
     probe = _OverlapProbe()
     eng.run_project(_project(2, parallel={"children": 4, "min_siblings": 3}),
                     workspace=str(tmp_path / "wk"), depth="spec",
-                    agents={"reviewer": probe})
+                    agents={"reviewer": probe},
+                    review_policy=_FULL_REVIEW)
     assert probe.peak == 1
 
 
 def test_depth_limit_keeps_deep_branches_sequential(tmp_path):
-    # a depth-1 branch must NOT fork when depth_limit is 0 (the default)
-    proj = _project(0, parallel={"children": 4})
+    # a depth-1 branch must NOT fork when depth_limit pins forks to depth 0.
+    # NOTE: depth_limit used to DEFAULT to 0; the online fork policy (commit
+    # 6d34695, operator directive) made the default unlimited — forks are now
+    # governed by accumulated complexity, and a case pins depth_limit
+    # explicitly when it wants a static bound. This pin is that explicit case.
+    proj = _project(0, parallel={"children": 4, "depth_limit": 0})
     proj["tree"]["children"] = [
         {"id": "mid", "title": "Middle branch", "metrics": dict(_BRANCH),
          "children": [{"id": f"deep{i}", "title": _TITLES[i],
                        "metrics": dict(_LEAF)} for i in range(4)]}]
     probe = _OverlapProbe()
     eng.run_project(proj, workspace=str(tmp_path / "wk"), depth="spec",
-                    agents={"reviewer": probe})
-    assert probe.peak == 1, "depth 1 branch stays sequential by default"
+                    agents={"reviewer": probe},
+                    review_policy=_FULL_REVIEW)
+    assert probe.peak == 1, "depth 1 branch stays sequential under the pin"
 
 
 def test_max_workers_caps_global_concurrency(tmp_path):
     probe = _OverlapProbe(dwell=0.1)
     eng.run_project(_project(6, parallel={"children": 6, "max_workers": 2}),
                     workspace=str(tmp_path / "wk"), depth="spec",
-                    agents={"reviewer": probe})
+                    agents={"reviewer": probe},
+                    review_policy=_FULL_REVIEW)
     assert 2 <= probe.peak <= 2, f"global cap must hold, saw {probe.peak}"
 
 
@@ -244,7 +266,8 @@ def test_nested_forks_do_not_deadlock_on_max_workers(tmp_path):
     def _run():
         box["res"] = eng.run_project(
             proj, workspace=str(tmp_path / "wk"), depth="spec",
-            agents={"reviewer": _OverlapProbe(dwell=0.02)})
+            agents={"reviewer": _OverlapProbe(dwell=0.02)},
+            review_policy=_FULL_REVIEW)
 
     th = threading.Thread(target=_run, daemon=True)
     th.start()
@@ -293,7 +316,8 @@ def test_independent_siblings_parallelize_despite_dependencies(tmp_path):
     probe = _OverlapProbe(dwell=0.15)
     eng.run_project(_project_waves(parallel={"children": 4}),
                     workspace=str(tmp_path / "w"), depth="spec",
-                    agents={"reviewer": probe})
+                    agents={"reviewer": probe},
+                    review_policy=_FULL_REVIEW)
     assert probe.peak >= 2, "independent siblings in a wave must overlap"
     order = [n for n in probe.nodes if n in
              ("research", "arch", "auth", "catalog", "orders")]
@@ -325,7 +349,8 @@ def test_pure_dependency_chain_stays_serial(tmp_path):
     }
     probe = _OverlapProbe(dwell=0.1)
     eng.run_project(chain, workspace=str(tmp_path / "w"), depth="spec",
-                    agents={"reviewer": probe})
+                    agents={"reviewer": probe},
+                    review_policy=_FULL_REVIEW)
     assert probe.peak == 1, "a pure chain must stay strictly serial"
 
 
