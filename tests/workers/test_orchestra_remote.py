@@ -87,7 +87,11 @@ def test_remote_coder_step_routes_through_adapter(monkeypatch, tmp_path,
     def transport(url, *, method="GET", headers=None, body=None, timeout=30.0):
         sent.append({"url": url, "method": method,
                      "body": json.loads(body) if body else None})
-        return 200, json.dumps({"files": _green(1)})
+        # the gateway answers as an OpenAI chat completion whose assistant
+        # content carries the files object (46cfa6a: the Hermes gateway IS its
+        # api_server — /v1/agents/... does not exist)
+        return 200, json.dumps({"choices": [{"message": {
+            "content": json.dumps({"files": _green(1)})}}]})
     monkeypatch.setattr(rw, "PROVIDER_TRANSPORT", transport)
 
     rw._orchestra_run(_ctx(tmp_path), str(tmp_path), "leaf1", "leaf1",
@@ -97,8 +101,13 @@ def test_remote_coder_step_routes_through_adapter(monkeypatch, tmp_path,
 
     # the coder step hit the Hermes adapter (not the LLM) ...
     assert sent and sent[0]["method"] == "POST"
-    assert sent[0]["url"] == "https://hx.example/v1/agents/senior-dev/messages"
-    assert sent[0]["body"]["role"] == "coder"
+    assert sent[0]["url"] == "https://hx.example/v1/chat/completions"
+    # ... framed as a real agent invocation: the system message names the
+    # agent + role, the user message carries the node's task
+    msgs = sent[0]["body"]["messages"]
+    assert msgs[0]["role"] == "system"
+    assert "senior-dev" in msgs[0]["content"] and "coder" in msgs[0]["content"]
+    assert msgs[1]["role"] == "user" and "leaf1" in msgs[1]["content"]
     # ... and the adapter's files were written for real by the orchestra ...
     body = (tmp_path / "src" / "leaf1.py").read_text(encoding="utf-8")
     assert "def leaf1():\n    return 1\n" in body
