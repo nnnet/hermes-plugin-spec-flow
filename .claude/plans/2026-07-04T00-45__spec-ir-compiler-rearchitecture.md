@@ -46,7 +46,7 @@ graph:
   - {id: A3, needs: [A1],             parallel: "",        status: "[x]", files: [spec_ir.py, spec_flow_runner.py]}
   - {id: A4, needs: [A1, A2, A3],     parallel: "",        status: "[x]", files: [spec_ir.py]}
   - {id: B1, needs: [A2, A3],         parallel: "after-a", status: "[x]", files: [spec_scenarios.py, spec_flow_runner.py]}
-  - {id: B2, needs: [A1, A3],         parallel: "after-a", status: "[~]", files: [spec_openapi.py, tests/tools/]}
+  - {id: B2, needs: [A1, A3],         parallel: "after-a", status: "[x]", files: [spec_openapi.py, tests/tools/]}
   - {id: B3, needs: [B1],             parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/harness/]}
   - {id: C1, needs: [A3, A4],         parallel: "",        status: "[x]", files: [spec_skeletons.py, spec_flow_runner.py]}
   - {id: D1, needs: [B1, C1],         parallel: "post-b3", status: "[~]", files: [spec_flow_doctor.py, spec_flow_remedies.py]}
@@ -124,7 +124,7 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
   (reason), scenario_gate, scenario_red/scenario_green (TDD-петля
   поздней инъекции). Вопросы Фазы A №3 и №4 закрыты
 
-### [~] B2 `contract-oracle` — Specmatic + Schemathesis поверх OpenAPI из IR
+### [x] B2 `contract-oracle` — Specmatic + Schemathesis поверх OpenAPI из IR
 - выход: компиляция полного OpenAPI-документа из ir.json (слияние
   фрагментов узлов + ответы ошибок роутера общей секцией); контрактные
   тесты (Specmatic) + property-фаззинг (Schemathesis) как внешние оракулы
@@ -144,7 +144,12 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
   3) python3 tests/tools/run_specmatic.py <openapi.json> <base-url>.
   Попутная честная находка оракула → узел B4.
   2026-07-05: пункты 1-2 закрыты человеком (openjdk 21 +
-  tests/tools/specmatic.jar от 2026-07-04); остался пункт 3 — прогон.
+  tests/tools/specmatic.jar от 2026-07-04). Пункт 3 выполнен: Specmatic
+  v2.49.1 съел скомпилированный документ без правок (двухузловая IR как
+  в S16-аудите → compile_openapi, линт чистый) против крошечного WSGI
+  с семантикой роутера: 3/3 сценария SUCCEEDED (GET /about 200,
+  POST /notes 201, GET /notes 200). ГОТОВ — оба внешних оракула едят
+  наш OpenAPI.
 
 ### [x] B3 `retire-llm-tester` — снятие ЛЛМ-тестера с интерфейса
 - выход: тесты соответствия генерирует движок из IR; за ЛЛМ — только
