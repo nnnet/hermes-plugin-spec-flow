@@ -51,7 +51,7 @@ graph:
   - {id: C1, needs: [A3, A4],         parallel: "",        status: "[x]", files: [spec_skeletons.py, spec_flow_runner.py]}
   - {id: D1, needs: [B1, C1],         parallel: "post-b3", status: "[~]", files: [spec_flow_doctor.py, spec_flow_remedies.py]}
   - {id: E1, needs: [A4],             parallel: "after-a", status: "[x]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py]}
-  - {id: B4, needs: [B3],             parallel: "post-b3", status: "[~]", files: [spec_flow_runner.py, spec_openapi.py]}
+  - {id: B4, needs: [B3],             parallel: "post-b3", status: "[x]", files: [spec_flow_runner.py, spec_openapi.py]}
   - {id: G1, needs: [],               parallel: "post-b3", status: "[~]", files: [tests/harness/llm_backend.py, tests/workers/, tests/memory/]}
   - {id: F1, needs: [B3, C1, D1, E1], parallel: "",        status: "[ ]", files: [tests/scenarios/, tests/lib/]}
 ```
@@ -207,7 +207,7 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
   _route_request_fields / _route_media_map (проза — фолбэк без IR).
   Вопрос Фазы A №1 закрыт: значения тела пишет декомпозер в when.body
 
-### [~] B4 `router-allow-header` — 405 роутера без заголовка Allow
+### [x] B4 `router-allow-header` — 405 роутера без заголовка Allow
 - выход: синтезированный роутер (_synthesize_entry_code) шлёт Allow с
   перечнем контрактных методов пути при 405 (RFC 9110); зеркало в
   spec_openapi (описание 405 упоминает Allow)
@@ -216,7 +216,11 @@ B1 → E1; C1 отложен до влития B1 — его зона (синт�
 - заметки: рождён честной находкой Schemathesis при демонстрации B2;
   зона — раннер, занят C1/B3 → стартует после их влития.
   worktree-агент запущен 2026-07-05 (группа post-b3): B3 влит, раннер
-  свободен; зеркало 405→Allow добавляется и в spec_openapi.py
+  свободен; зеркало 405→Allow добавляется и в spec_openapi.py.
+  ГОТОВ — коммиты f3f283e (S16.6 красные: обе 405-ветки без Allow) +
+  6e4cb9f, влит e2473b9; шаблон роутера шлёт Allow из _ROUTES
+  (sorted), OpenAPI-компонент RouterMethodNotAllowed объявляет
+  headers.Allow; аудит целиком 425 зелёных после влития
 
 ### [~] G1 `workers-suite-red` — 23 красных теста workers/memory на ветке
 - выход: tests/workers/ + tests/memory/test_memory_modes.py зелёные в
