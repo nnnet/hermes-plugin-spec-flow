@@ -56,6 +56,14 @@ graph:
   - {id: G1, needs: [],               parallel: "post-b3", status: "[x]", files: [tests/harness/llm_backend.py, tests/workers/, tests/memory/]}
   - {id: F1, needs: [B3, C1, D1, E1], parallel: "",        status: "[x]", files: [tests/scenarios/, tests/lib/]}
   - {id: G2, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/nodes/]}
+  - {id: H1, needs: [],               parallel: "",        status: "[ ]", files: [spec_flow_runner.py]}
+  - {id: H2, needs: [],               parallel: "",        status: "[ ]", files: [spec_ir.py, spec_flow_runner.py]}
+  - {id: H3, needs: [],               parallel: "",        status: "[ ]", files: [spec_ir.py, spec_openapi.py, spec_conformance.py]}
+  - {id: H4, needs: [H3],             parallel: "",        status: "[ ]", files: [spec_ir.py, spec_flow_runner.py]}
+  - {id: H5, needs: [],               parallel: "",        status: "[ ]", files: [spec_ir.py, spec_skeletons.py, spec_flow_runner.py]}
+  - {id: H6, needs: [],               parallel: "",        status: "[ ]", files: [spec_skeletons.py, spec_flow_doctor.py]}
+  - {id: H7, needs: [],               parallel: "",        status: "[ ]", files: [spec_ir.py, tests/audit/]}
+  - {id: H8, needs: [],               parallel: "",        status: "[ ]", files: [spec_flow_runner.py]}
   - {id: G3, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/decomposition/]}
   - {id: G4, needs: [G3],             parallel: "",        status: "[x]", files: [tests/]}
 ```
@@ -445,3 +453,53 @@ HITL-инъекции посреди прогона. Недостающее бе
 
 Sources: github/spec-kit, spec-driven.md, Specmatic: MCP as guardrails,
 Schemathesis, awesome-ralph.
+
+### Узлы H — аудит трёх принципов 2026-07-05 (все ждут решения юзера)
+
+Источник: параллельный read-only аудит принципов (спека первична /
+замкнутый мир / либы раньше кода). Вердикты: П1 держится с дырами,
+П2 держится с крупными дырами, П3 нарушается для продуктов (стена
+осознанная) / держится для движка. Ни один узел не запущен — ждут
+решения юзера по составу и порядку.
+
+### [ ] H1 `wave-scheduler-nih-record` — причина рукописного планировщика
+- выход: записанная причина хардролла волн ИЛИ замена на
+  graphlib.TopologicalSorter
+- приёмка: молчаливого NIH нет — причина в TAXONOMY/плане или либа в коде
+
+### [ ] H2 `status-source-flag` — происхождение success-статуса видно
+- выход: конвенция движка (POST→201, /health-тело) помечена в артефакте
+  (status_source: convention|spec)
+- приёмка: по ir.json видно, что заказала спека, а что додумал движок
+
+### [ ] H3 `closed-response-schemas` — схемы ответов непустые и запинены
+- выход: compile_openapi эмитит контрактную схему тела (не {}),
+  compile_leaf_tests пинит её, не только isinstance(dict|list)
+- приёмка: эксплойт F1 (произвольное тело зелёное) закрыт красным кейсом
+
+### [ ] H4 `typed-request-fields` — поля запроса типизированы
+- выход: IR несёт типы полей, 400-гейт роутера отвергает неверный тип
+- приёмка: эксплойт F3 ({"text": 12345} проходит) закрыт
+
+### [ ] H5 `ir-dependencies` — спека может заказать стороннюю либу
+- выход: product.requirements/node.dependencies в схеме IR + seeding
+  requirements.txt + импорт-дверь из объявленных зависимостей
+- приёмка: спека с Flask/sqlite3 собирается; без декларации — отказ
+  как сейчас; снимает главную стену принципа 3 (spec_ir.py:63)
+
+### [ ] H6 `body-side-effects` — тело функции под замкнутым миром
+- выход: I/O-stdlib (os/subprocess/socket/urllib) в теле листа либо
+  запрещён без заказа спекой, либо декларируется датумом IR
+- приёмка: эксплойт F2 (side-effect на диск/сеть/env невидим дверям)
+  закрыт красным кейсом
+
+### [ ] H7 `jsonschema-oracle-for-ir` — внешний оракул для самой IR
+- выход: jsonschema-валидация рядом с validate_ir (замкнутый мир
+  остаётся поверх)
+- приёмка: расхождение двух валидаторов = красный тест
+
+### [ ] H8 `prose-fallback-honest-fail` — тихий prose-derived закрыт
+- выход: декомпозер с emits_ir=False — честная FAIL-ветка (или явный
+  журнал-гейт), не молчаливый переход на regex-прозу
+- приёмка: эксплойт F4 закрыт; interface_source: prose-derived не
+  появляется без явного разрешения в кейсе
