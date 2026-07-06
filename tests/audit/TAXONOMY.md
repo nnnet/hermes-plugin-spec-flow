@@ -704,11 +704,21 @@ same wrong reading and stay green until product e2e.
   for {"name": "notes-service", "version": "1.0"} while
   contracts/interface.json contracted text/html the whole time — the exact
   v159 re-guess class, one datum over. (`test_rework_media_binding.py`)
+- S12.17 the synthesized router validates request-body field TYPES, not
+  only presence (node H4, plan 2026-07-04T00-45; principles-audit F3). When
+  the IR (a decomposer machine fragment) declares a request field's JSON
+  type, `_route_request_field_types` bakes it into the entry as `_FIELD_TYPES`
+  and the router 400s a wrong-typed value AFTER the presence gate, naming the
+  field — `{"text": 12345}` for a string field no longer sails into the
+  handler. The JSON->Python mapping is EXACT (integer rejects bool, string
+  rejects int); a field whose type the IR never recorded (`{f: {}}`, a
+  prose-derived shape) is presence-only — the engine invents no type (S13.1
+  honest gap). (`test_request_field_types.py`)
 
 ## STAGE 13 — Spec-IR: one machine interface per node (`test_ir_closed_world.py`,
 `test_ir_openapi_conformance.py`, `test_ir_scenarios_schema.py`)
 Phase A of the spec-IR rearchitecture (plan 2026-07-04T00-45). Every drift
-class S10.9-S12.16 is ONE shape: two artifacts disagreeing on a value that
+class S10.9-S12.17 is ONE shape: two artifacts disagreeing on a value that
 never existed as data. Instead of catching each pairwise drift with its own
 gate, the IR merges the already-recorded datums — route ownership
 (`_route_owners`), success status (`_route_success_status`), media
