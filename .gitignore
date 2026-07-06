@@ -13,3 +13,4 @@ tests/runs-out/
 # tooling caches / scratch
 .serena/
 tmp/
+.venv/
