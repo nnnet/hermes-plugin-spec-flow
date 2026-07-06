@@ -5216,6 +5216,7 @@ class Engine:
         owned = self._leaf_owned_routes(node, log_source=not quiet)
         if not owned:
             return True
+        flags = self.__dict__.setdefault("_leaf_handler_missing", {})
         defined: "dict[str, list]" = {}
         try:
             src_text = (Path(self.workspace.root) / code_rel).read_text(
@@ -5244,7 +5245,14 @@ class Engine:
             if not ok:
                 missing.append((want, m, p))
         if not missing:
+            # S12.18 (node J1): the leaf now defines every contracted handler —
+            # clear the done-block flag so the leaf may reach DONE.
+            flags.pop(nid, None)
             return True
+        # S12.18: record that this leaf owes a contracted handler — the leaf
+        # lifecycle (`_leaf_ready_for_done`) must BLOCK a DONE transition while
+        # it is missing (v165: ping_text reached to_done with get_ping absent).
+        flags[nid] = [w for w, _m, _p in missing]
         if quiet:                    # S12.5 re-derivation: verdict only,
             return False             # no events / loops / doctor side effects
         human = "; ".join("%s %s -> def %s(payload, query)" % (m, p, w)
@@ -5271,6 +5279,24 @@ class Engine:
             lambda: self._leaf_handler_gate(node, nid, depth, code_rel,
                                             quiet=True))
         return False
+
+    def _leaf_ready_for_done(self, nid: str) -> bool:
+        """S12.18 (node J1): may this leaf transition to DONE?
+
+        Why: the handler gate is deterministic and hard — a leaf CONTRACTED to
+        expose a route handler that it never defined must NOT be marked done.
+        v165: ``ping_text`` reached to_done (trace tick 154) while
+        ``get_ping`` was still missing from src/core.py, so the miss only
+        surfaced at assembly and the run ended NOT READY with the handler never
+        reworked in. A missing contracted handler is a leaf-level RED, not a
+        deferred assembly detail.
+        What: True unless the last handler-gate run recorded a missing
+        contracted handler for this node (``_leaf_handler_missing``). The flag
+        is set on a FAIL and CLEARED the moment the handler appears, so a
+        successful rework frees the leaf.
+        Test: tests/audit/test_late_route_edit_in_place.py."""
+        missing = (self.__dict__.get("_leaf_handler_missing") or {}).get(nid)
+        return not missing
 
     def _artifact_owner_nid(self, rel: "Optional[str]", default: str) -> str:
         """S12.12 (v163): the doctor ADDRESSEE of a gate finding is the node
@@ -8819,6 +8845,21 @@ def %(callable)s(environ, start_response):
         if self._maybe_redump_ir("route set grew (late requirement %s)"
                                  % extra["id"]):
             self._scenario_red_probe(str(extra["id"]))
+        # S17.6 (node J1): the write-door skeleton for the AMENDED module must
+        # admit the bound late handler EVEN when no plan-time dump had run yet
+        # (the redump above no-ops before the first dump). Without this the
+        # stale per-node owner skeleton refuses the honest rework that ADDS
+        # get_ping — the v165 deadlock. Refresh unconditionally when a route was
+        # bound into a registered module; the refresh re-registers the grown
+        # co-owned surface against the module union (never a closed-world gap).
+        if extra.get("binds_route") and extra.get("code_target"):
+            reg = getattr(self.workspace, "ir_skeletons", None)
+            if reg and str(extra["code_target"]).replace("\\", "/") in reg:
+                try:
+                    from . import spec_ir  # type: ignore
+                except ImportError:      # flat layout: repo root on sys.path
+                    import spec_ir  # type: ignore
+                self._refresh_ir_skeletons(spec_ir.build_ir(self))
 
     def _dedup_children(self, node: dict, nid: str, title: str,
                         ancestors: tuple) -> None:
@@ -9544,6 +9585,50 @@ def %(callable)s(environ, start_response):
                                            % node.get("id"))
             except Exception:  # noqa: BLE001 — live snapshot is non-fatal
                 pass
+            # S12.18 (node J1): a leaf CONTRACTED to expose a route handler
+            # that it never defined must NOT reach DONE — v165's ping_text
+            # went to_done with get_ping missing, so the miss only surfaced at
+            # assembly and the run ended NOT READY with the handler never
+            # reworked in. Rework the owner module in place (the same repair
+            # channel the doctor uses), and if the handler is STILL absent keep
+            # the leaf REJECTED (out of the completed count, resume re-does it)
+            # rather than green-washing a leaf that owes a contracted handler.
+            if not self._leaf_ready_for_done(nid):
+                owed = (self.__dict__.get("_leaf_handler_missing")
+                        or {}).get(nid) or []
+                # rework the OWNER module (the file the amend edits), not the
+                # amend node's own module label — the handler must land in the
+                # file the contract points at (v165: core.py).
+                owner_stem = (Path(str(node.get("code_target"))).stem
+                              if node.get("code_target")
+                              else self._module_for(nid))
+                _crel = "src/%s.py" % owner_stem
+                budget = max(1, int(getattr(self, "_handler_max_rework", 2)))
+                for _round in range(1, budget + 1):
+                    self.tasks[nid].runs += 1
+                    self.emit("implement", "implementer", "spec-implement",
+                              nid, "rework: contracted handler missing "
+                              "(re-run to add it)", ", ".join(owed),
+                              "handler_gate", "REWORK", level=L_MILESTONE)
+                    self._remedy_rework_module(
+                        owner_stem, "contracted route handler(s) missing: "
+                        + ", ".join(owed) + " — add the handler in place")
+                    self._leaf_handler_gate(node, nid, depth, _crel)
+                    if self._leaf_ready_for_done(nid):
+                        self._doctor_resolve(node, nid, "handler_gate")
+                        break
+                if not self._leaf_ready_for_done(nid):
+                    self.tasks[nid].status = "rejected"
+                    self.emit("review", "engine", "", nid,
+                              "leaf REJECTED — contracted handler never "
+                              "defined after the rework budget",
+                              "%s: %s" % (_crel, ", ".join(owed)),
+                              "handler_gate", "rejected", level=L_MILESTONE)
+                    self.loops.append({"type": "handler-reject", "task": nid,
+                                       "detail": "leaf owes handler(s) %s in %s"
+                                       % (", ".join(owed), _crel)})
+                    self._research_tick(node, depth)
+                    return
 
         # close the node lifecycle — the guard refuses DONE if a mandatory gate
         # for this node kind was skipped (raises GateViolation in both engines).
@@ -9742,10 +9827,37 @@ def %(callable)s(environ, start_response):
         reg = self.__dict__.get("_decomposer_ir_nodes") or {}
         frag = reg.get(nid) if isinstance(reg.get(nid), dict) else None
         detail = ""
-        if node.get("code_target"):
+        # S18.7 (node J1): an edit-in-place leaf that OWNS a bound route (a late
+        # GET /ping folded into an owner module) has NO decomposer fragment —
+        # the route is ENGINE-derived data. v165 hard-skipped it ("edit-in-place
+        # leaf keeps the llm path") so nothing stayed RED until get_ping existed
+        # and the handler was never forced. Instead: synthesize the fragment
+        # from the engine's OWN build_ir node (which carries the bound route's
+        # openapi) and compile a DEDICATED conformance file — the owner's own
+        # test file is left untouched (append-safe), the compiled test imports
+        # the contracted handler from the owner module and stays RED until it
+        # is defined.
+        code_target = node.get("code_target")
+        eng_frag = None
+        if code_target and node.get("binds_route"):
+            try:
+                from . import spec_ir as _sir  # type: ignore
+            except ImportError:      # flat layout: repo root on sys.path
+                import spec_ir as _sir  # type: ignore
+            _built = (_sir.build_ir(self).get("nodes") or {}).get(nid)
+            if isinstance(_built, dict) and (
+                    (_built.get("openapi") or {}).get("paths")):
+                eng_frag = _built
+        elif code_target:
             frag, detail = None, "edit-in-place leaf keeps the llm path"
+        # a late route on an owner module compiles into its OWN conformance
+        # file so it never clobbers the owner's existing tests
+        if eng_frag is not None and test_rel:
+            test_rel = "tests/test_%s_conformance.py" % _snake(str(nid))
         content = None
-        if frag and ((frag.get("openapi") or {}).get("paths")) and test_rel:
+        use_frag = eng_frag if eng_frag is not None else frag
+        if use_frag and ((use_frag.get("openapi") or {}).get("paths")) \
+                and test_rel:
             try:
                 from . import spec_conformance  # type: ignore
                 from . import spec_ir  # type: ignore
@@ -9753,7 +9865,7 @@ def %(callable)s(environ, start_response):
                 import spec_conformance  # type: ignore
                 import spec_ir  # type: ignore
             nodes = dict(reg)
-            nodes[nid] = dict(frag, files=[f"src/{code_fn}.py"])
+            nodes[nid] = dict(use_frag, files=[f"src/{code_fn}.py"])
             try:
                 content = spec_conformance.compile_leaf_tests(
                     {"format": spec_ir.IR_FORMAT, "product": {},
@@ -9763,8 +9875,15 @@ def %(callable)s(environ, start_response):
         if content is not None:
             self.workspace._write(test_rel, content, "test")
             self.__dict__.setdefault("_ir_compiled_tests", {})[nid] = content
+            # S18.7: remember WHERE the compiled file went so the reassert
+            # targets the right path — a late-route conformance file lives
+            # beside (not on top of) the owner's own test file.
+            self.__dict__.setdefault("_ir_compiled_test_path", {})[nid] = \
+                test_rel
             ictx["tests_precompiled"] = test_rel
             src = "ir-compiled"
+            if eng_frag is not None:
+                detail = "edit-in-place late route -> dedicated conformance file"
         else:
             src = "llm"
         self.emit("implement", "engine", "spec-implement", f"{nid}:tests",
@@ -9785,6 +9904,10 @@ def %(callable)s(environ, start_response):
         that never compiled (the llm path is untouched).
         Test: tests/audit/test_ir_compiled_tests.py."""
         want = (self.__dict__.get("_ir_compiled_tests") or {}).get(nid)
+        # S18.7: a late-route conformance test lives in its OWN file, not the
+        # caller's tests/test_<module>.py — honour the recorded path.
+        test_rel = (self.__dict__.get("_ir_compiled_test_path") or {}).get(
+            nid, test_rel)
         root = getattr(self.workspace, "root", None)
         if not (want and test_rel and root):
             return
@@ -10775,21 +10898,78 @@ def %(callable)s(environ, start_response):
                       "skeleton_compiled", "SKIP", level=L_DETAIL)
             return ""
 
+    def _module_surface_ir(self, ir: dict, stem: str) -> "tuple":
+        """S17.6 (node J1): a synthetic IR whose ONE node carries the FULL
+        route surface a module must serve — the UNION of every owner leaf's
+        routes recorded to that module (`_route_handler_modules`).
+
+        Why: a co-owned owner module (core built first, a late GET /ping bound
+        into it) has NO single node whose IR entry lists the whole surface —
+        node ``core`` knows notes/health, node ``ping_text`` knows /ping. The
+        per-node write-door skeleton is therefore ALWAYS stale for a grown
+        co-owned module: dropping it (the old behaviour) opens the door to any
+        public function; keeping a per-node skeleton REFUSES the contracted
+        late handler (the v165 deadlock). The correct contract is the module's
+        union surface — it ADMITS every contracted handler and STILL refuses an
+        uncontracted one.
+        What: collects the routes recorded to ``stem`` across all modules,
+        builds one openapi fragment over them (the same _node_openapi datums
+        the per-node compile uses) and returns (ir, node_id) where node_id is a
+        stable synthetic key. Returns (None, "") when the module owns no route
+        (nothing to defend). Read-only over the datums.
+        Test: tests/audit/test_late_route_edit_in_place.py,
+        tests/audit/test_skeleton_write_door.py."""
+        try:
+            from . import spec_ir  # type: ignore
+        except ImportError:            # flat layout: repo root on sys.path
+            import spec_ir  # type: ignore
+        mods = self.__dict__.get("_route_handler_modules") or {}
+        routes = sorted({(str(m).upper(), str(p))
+                         for (m, p), s in mods.items() if str(s) == stem})
+        if not routes:
+            return None, ""
+        reqf = self._route_request_fields()
+        media = self._route_media_map()
+        openapi = spec_ir._node_openapi(
+            stem, routes, reqf, media, _route_success_status,
+            _route_fixed_body, _canonical_handler_symbol)
+        node_id = "__module__%s" % stem
+        # carry the per-node symbol/env/consumes contract of the ORIGINAL
+        # owner so the union skeleton keeps the SAME import world (a late
+        # handler must not silently widen the allowed imports). The owner is
+        # the registered node for this module's file, if any.
+        base = ((ir.get("nodes") or {}).get(
+            (self.__dict__.get("_module_names") or {}).get(stem, stem)) or {})
+        entry: dict = {"files": ["src/%s.py" % stem], "openapi": openapi}
+        if base.get("symbols"):
+            entry["symbols"] = base["symbols"]
+        if base.get("env"):
+            entry["env"] = base["env"]
+        surface_ir = {"format": spec_ir.IR_FORMAT, "product": {},
+                      "nodes": {node_id: entry}}
+        return surface_ir, node_id
+
     def _refresh_ir_skeletons(self, ir: dict) -> None:
-        """C1 (S17.4): keep the write-door skeleton registrations CURRENT
-        on every IR dump.
+        """C1 (S17.4) + J1 (S17.6): keep the write-door skeleton registrations
+        CURRENT on every IR dump.
 
         Why: a late requirement that binds a new route INTO an already
-        skeletoned module (v156 seam) makes the per-node skeleton stale —
+        skeletoned module (v156/v165 seam) makes the per-node skeleton stale —
         the honest rework that ADDS the late handler would be refused as
-        "uncontracted", a self-made deadlock.
-        What: for every registered file, compares the handlers the module
-        must serve (the S12.2 ``_route_handler_modules`` datum) against the
-        registered node's contracted surface; a grown surface DROPS the
-        registration (the erasure gate owns co-owned files), otherwise the
-        IR snapshot is replaced with the fresh one.
+        "uncontracted", a self-made deadlock (v165 GET /ping never landed).
+        What: for every registered file, compares the handlers the module must
+        serve (the S12.2 ``_route_handler_modules`` datum) against the
+        registered node's contracted surface. A surface that GREW past the
+        per-node interface is RE-REGISTERED against the module-surface UNION
+        skeleton (``_module_surface_ir``) — the door then ADMITS every
+        contracted handler of the whole module AND still refuses an
+        uncontracted one; it is NEVER simply dropped into a closed-world gap
+        (the v165 lesson: a dropped registration let any public function in
+        while the honest late handler had no skeleton to belong to). An
+        unchanged surface keeps the fresh per-node IR snapshot.
         Test: tests/audit/test_skeleton_write_door.py
-        (test_route_growth_drops_the_stale_registration)."""
+        (test_route_growth_reregisters_the_module_surface),
+        tests/audit/test_late_route_edit_in_place.py."""
         reg = getattr(self.workspace, "ir_skeletons", None)
         if not reg:
             return
@@ -10805,7 +10985,14 @@ def %(callable)s(environ, start_response):
                           for (m, p), s in mods.items() if str(s) == stem}
             surface = set(spec_skeletons.contract_surface(ir, nid))
             if must_serve - surface:
-                del reg[rel]
+                # grown co-owned surface: defend the UNION, never drop into a
+                # closed-world gap (v165 deadlock). Fall back to a drop only if
+                # the union cannot be built (no routes recorded).
+                surface_ir, surface_nid = self._module_surface_ir(ir, stem)
+                if surface_ir is not None:
+                    reg[rel] = {"ir": surface_ir, "node": surface_nid}
+                else:
+                    del reg[rel]
             else:
                 reg[rel]["ir"] = ir
 

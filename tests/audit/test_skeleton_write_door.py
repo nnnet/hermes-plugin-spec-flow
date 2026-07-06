@@ -169,18 +169,35 @@ def test_leaf_without_ir_interface_falls_back(tmp_path):
     assert "src/ghost.py" not in reg
 
 
-def test_route_growth_drops_the_stale_registration(tmp_path):
+def test_route_growth_reregisters_the_module_surface(tmp_path):
+    # S17.6 (node J1): a co-owned module whose surface GREW past the per-node
+    # interface must NOT drop its write-door registration into a closed-world
+    # gap (the v165 deadlock: a dropped registration let ANY public function
+    # in while the honest late handler had no skeleton to belong to). It is
+    # RE-REGISTERED against the module-surface UNION so the door ADMITS every
+    # contracted handler of the whole module AND still refuses an uncontracted
+    # one.
     eng = _engine(tmp_path)
     eng._write_ir()
     skel = eng._ir_skeleton_for("core", "src/core.py")
     assert skel and "src/core.py" in (eng.workspace.ir_skeletons or {})
     # the late requirement binds DELETE /notes INTO src/core.py: the module
-    # surface now exceeds node core's own interface — the stale skeleton
-    # would refuse the honest rework that ADDS delete_notes
+    # surface now exceeds node core's own interface — the stale per-node
+    # skeleton would refuse the honest rework that ADDS delete_notes
     _attach(eng, "delete_note", "ALLOW REMOVING A NOTE", _DELETE_REQ)
-    assert "src/core.py" not in (eng.workspace.ir_skeletons or {}), (
-        "a co-owned module surface must DROP the per-node skeleton "
-        "registration on re-dump — the S12.2 erasure gate owns it now")
+    reg = eng.workspace.ir_skeletons or {}
+    assert "src/core.py" in reg, (
+        "the co-owned surface must stay DEFENDED (re-registered against the "
+        "module union), never dropped into a closed-world gap")
+    ent = reg["src/core.py"]
+    surface = spec_skeletons.contract_surface(ent["ir"], ent["node"])
+    assert "delete_notes" in surface, (
+        "the re-registered module surface must CONTAIN the late handler so "
+        "the write door admits the honest rework: %s" % sorted(surface))
+    for h in ("post_notes", "get_notes", "get_health"):
+        assert h in surface, (
+            "the union must keep the original owner's handlers too: %s"
+            % sorted(surface))
 
 
 def test_leaf_pipeline_hands_the_skeleton_to_the_coder():

@@ -1,4 +1,4 @@
-"""Audit rule S17.6/S18.7/S12.13 — a late route on an EDIT-IN-PLACE module is
+"""Audit rule S17.6/S18.7/S12.18 — a late route on an EDIT-IN-PLACE module is
 DRIVEN to a handler by construction (node J1, plan 2026-07-04T00-45).
 
 v165 (2026-07-06T10-54-04 p6-micro-notes): the human injected 'ADD A LIVENESS
@@ -21,7 +21,7 @@ handler:
     conformance test was compiled — nothing stayed hard-RED until get_ping
     existed. The LLM tester wrote `from app import get_ping` (never even
     touching core.py) and the handler was never forced.
-  * NON-BLOCKING GATE (S12.13): `_leaf_handler_gate` FAILed (tick 144) but its
+  * NON-BLOCKING GATE (S12.18): `_leaf_handler_gate` FAILed (tick 144) but its
     verdict is advisory — the leaf reached to_done (tick 154) with the
     contracted handler still missing; the miss only surfaced at assembly and
     the run ended NOT READY without ever reworking the handler in.
@@ -33,7 +33,7 @@ Contract pinned here (all deterministic, no LLM):
   S18.7 an edit-in-place leaf that OWNS a bound route gets an IR conformance
         test COMPILED from the engine's own datums (not the decomposer), and
         that test is RED while get_ping is absent, GREEN once present;
-  S12.13 the late-req leaf handler gate BLOCKS the leaf from being marked DONE
+  S12.18 the late-req leaf handler gate BLOCKS the leaf from being marked DONE
         while the contracted handler is missing (an open handler cause is
         recorded, not silently passed).
 """
@@ -202,7 +202,7 @@ def test_compiled_late_route_test_is_red_then_green(tmp_path):
     assert "get_ping" in compiled
 
 
-# ── S12.13 the handler gate BLOCKS the late leaf from DONE ───────────────────
+# ── S12.18 the handler gate BLOCKS the late leaf from DONE ───────────────────
 
 def test_missing_late_handler_blocks_done(tmp_path):
     eng = _engine(tmp_path, initial_dump=True)
@@ -212,7 +212,7 @@ def test_missing_late_handler_blocks_done(tmp_path):
     assert ok is False, "the handler gate must be RED while get_ping is absent"
     # the leaf MUST NOT be admissible to DONE with the handler missing
     assert not eng._leaf_ready_for_done("ping_text"), (
-        "S12.13: a late-req leaf with a RED handler gate must be BLOCKED from "
+        "S12.18: a late-req leaf with a RED handler gate must be BLOCKED from "
         "DONE — v165 reached to_done (tick 154) with get_ping still missing")
 
 

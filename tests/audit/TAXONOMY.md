@@ -714,6 +714,21 @@ same wrong reading and stay green until product e2e.
   rejects int); a field whose type the IR never recorded (`{f: {}}`, a
   prose-derived shape) is presence-only — the engine invents no type (S13.1
   honest gap). (`test_request_field_types.py`)
+- S12.18 A LEAF OWING A CONTRACTED HANDLER CANNOT REACH DONE (node J1,
+  `test_late_route_edit_in_place.py`). v165: the `_leaf_handler_gate` FAILed
+  (trace tick 144, `get_ping` missing) but its verdict was advisory — the leaf
+  reached to_done (tick 154) with the contracted handler still absent, so the
+  miss only surfaced at assembly (tick 178) and the run ended NOT READY without
+  ever reworking the handler in. A missing contracted handler is a leaf-level
+  RED, not a deferred assembly detail. Fix: the handler gate records the owed
+  handler(s) per node (`_leaf_handler_missing`, cleared the instant the handler
+  appears); `_leaf_ready_for_done` reads it and the leaf lifecycle BLOCKS the
+  DONE transition while a handler is owed — it reworks the OWNER module in place
+  (the doctor's `_remedy_rework_module` channel, bounded by
+  `_handler_max_rework`) and, if the handler is STILL absent after the budget,
+  keeps the leaf REJECTED (out of the completed count; resume re-does it) rather
+  than green-washing it. GREEN direction: a leaf that defines its handler clears
+  the flag and reaches DONE unimpeded.
 
 ## STAGE 13 — Spec-IR: one machine interface per node (`test_ir_closed_world.py`,
 `test_ir_openapi_conformance.py`, `test_ir_scenarios_schema.py`)
@@ -1110,6 +1125,27 @@ RED — pytest collection fails with `ModuleNotFoundError: No module named
   leaf vocabulary (json/datetime/uuid/math/re/sqlite3 + env-read persistence)
   yields ZERO findings, and str.replace is not a pathlib false positive (the
   v151 lesson). (`test_body_effect_door.py`)
+- S17.6 A LATE ROUTE ON AN EDIT-IN-PLACE MODULE IS ADMITTED, NEVER DEADLOCKED
+  (node J1, `test_late_route_edit_in_place.py`). v165 (p6-micro-notes): the
+  human injected 'ADD A LIVENESS PING (GET /ping -> "pong", 200)' mid-run; the
+  engine BOUND the route (the contract, interface.json and the plan all carried
+  `get_ping`) yet get_ping was NEVER written to src/core.py and the run ended
+  NOT READY — an ENGINE defect, not a weak model. The co-owned owner module
+  (core, built first) kept its stale per-node write-door skeleton whose closed
+  public surface did NOT include get_ping, so a delivery ADDING get_ping was
+  refused 'public function get_ping is not in the IR interface'. The redump
+  path only DROPPED the stale registration, leaving NO closed world at all
+  (any public function admitted) AND no skeleton get_ping could belong to — a
+  self-made deadlock the S17.4 docstring warned of but did not close. Fix: a
+  grown co-owned module is RE-REGISTERED against the module-surface UNION
+  (`_module_surface_ir`: the openapi over EVERY route recorded to the module in
+  `_route_handler_modules`, keeping the owner's consumes/env import world) — the
+  door then ADMITS every contracted handler of the whole module AND still
+  refuses an uncontracted extra (closed world holds). The refresh runs on the
+  IR re-dump AND unconditionally from `_attach_late_req` when a route binds into
+  a registered module (the redump no-ops before the first plan-time dump — the
+  ordering that left the door shut). Both directions: get_ping lands with ZERO
+  findings; a `backdoor` public function is still refused.
 
 ## STAGE 18 — Conformance tests compiled from the IR (`test_ir_compiled_tests.py`)
 Phase B node B3 (`retire-llm-tester`) of the spec-IR rearchitecture (plan
@@ -1169,6 +1205,21 @@ the implementation commit turned it green.
 - S18.6 EXISTING GATES HOLD, NEVER WEAKENED: the S10.6/S12.7 status gate and
   the S12.1 request-shape gate run unchanged over compiled files and pass
   trivially — the compiled asserts ARE the contracted datums the gates read.
+- S18.7 AN EDIT-IN-PLACE LATE ROUTE GETS A COMPILED CONFORMANCE TEST (node J1,
+  `test_late_route_edit_in_place.py`). v165: `_compile_ir_leaf_tests` hard-
+  skipped an edit-in-place leaf ('edit-in-place leaf keeps the llm path'), so
+  no IR conformance test was compiled for the bound GET /ping — nothing stayed
+  hard-RED until get_ping existed and the LLM tester wrote `from app import
+  get_ping` (never touching core.py). Fix: an edit-in-place leaf that OWNS a
+  bound route has NO decomposer fragment (the route is ENGINE-derived data), so
+  the engine synthesizes the fragment from its OWN `build_ir` node (which
+  carries the bound route's openapi) and compiles a DEDICATED conformance file
+  `tests/test_<nid>_conformance.py` — the owner's own test file is left
+  untouched (append-safe). The compiled test imports the contracted handler
+  from the owner module and is RED while it is absent, GREEN once defined; the
+  reassert (S18.5) targets the recorded conformance path, not the caller's
+  tests/test_<module>.py. GREEN direction: a pure-refinement amend that binds
+  NO route keeps the historical llm path (`leaf_tests_source: llm`).
 
 ## STAGE 19 — Counterexample repair: re-ask ONE function (`test_counterexample_repair.py`)
 Phase D node D1 (`counterexample-repair`) of the spec-IR rearchitecture (plan
