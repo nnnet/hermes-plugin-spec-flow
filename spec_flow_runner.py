@@ -8960,11 +8960,9 @@ def %(callable)s(environ, start_response):
         if extra.get("binds_route") and extra.get("code_target"):
             reg = getattr(self.workspace, "ir_skeletons", None)
             if reg and str(extra["code_target"]).replace("\\", "/") in reg:
-                try:
-                    from . import spec_ir  # type: ignore
-                except ImportError:      # flat layout: repo root on sys.path
-                    import spec_ir  # type: ignore
-                self._refresh_ir_skeletons(spec_ir.build_ir(self))
+                # I3/S26: refresh from the held accumulator (the redump above
+                # already updated it), never a fresh datum rebuild behind it.
+                self._refresh_ir_skeletons(self._held_ir())
 
     def _dedup_children(self, node: dict, nid: str, title: str,
                         ancestors: tuple) -> None:
@@ -9945,11 +9943,9 @@ def %(callable)s(environ, start_response):
         code_target = node.get("code_target")
         eng_frag = None
         if code_target and node.get("binds_route"):
-            try:
-                from . import spec_ir as _sir  # type: ignore
-            except ImportError:      # flat layout: repo root on sys.path
-                import spec_ir as _sir  # type: ignore
-            _built = (_sir.build_ir(self).get("nodes") or {}).get(nid)
+            # I3/S26: the bound route's fragment comes from the held IR
+            # accumulator, not a fresh datum rebuild queried behind it.
+            _built = (self._held_ir().get("nodes") or {}).get(nid)
             if isinstance(_built, dict) and (
                     (_built.get("openapi") or {}).get("paths")):
                 eng_frag = _built
@@ -10974,6 +10970,38 @@ def %(callable)s(environ, start_response):
         Test: tests/audit/test_ir_single_accumulator.py."""
         return self._ir
 
+    def _held_ir(self) -> dict:
+        """I3/S26: the ONE IR a hot-path reader consumes — the held
+        accumulator, never a fresh rebuild of it.
+
+        Why: node I2 made self._ir the single in-memory source. A hot reader
+        that instead rebuilt the IR with no sources snapshot re-ran
+        collect_ir_sources and read every raw datum a SECOND time behind the
+        accumulator, so an update to self._ir was invisible to it (the
+        pairwise-drift class). Serving every hot read from the held structure
+        keeps the datum methods strictly upstream of the accumulator.
+        What: returns self._ir; if the accumulator is still empty (no locked
+        dump has run yet), builds it ONCE from a datum snapshot under the IR
+        lock and HOLDS the result, so subsequent hot reads see the same object.
+        Test: tests/audit/test_ir_hotpath_reads_accumulator.py."""
+        held = self._ir
+        if held is not None:
+            return held
+        try:
+            from . import spec_ir  # type: ignore
+        except ImportError:          # flat layout: repo root on sys.path
+            import spec_ir  # type: ignore
+        lock = self.__dict__.get("_ir_write_lock")
+        if lock is None:
+            lock = self.__dict__.setdefault(
+                "_ir_write_lock", threading.Lock())
+        with lock:
+            if self._ir is None:
+                sources = spec_ir.collect_ir_sources(self)
+                self._ir = spec_ir.build_ir(self, sources)
+                self._ir_sources = sources
+            return self._ir
+
     def _ir_route_set(self) -> set:
         """The realized route set: every (METHOD, path) any node owns."""
         reg = self.__dict__.get("_route_owners") or {}
@@ -10986,23 +11014,23 @@ def %(callable)s(environ, start_response):
         Why: an engine-written skeleton leaves the model ZERO freedom over
         signatures, imports and route surface — the v143/v157 drift classes
         die by construction instead of post-hoc audit.
-        What: builds a fresh IR over the engine datums, compiles the node's
-        skeleton (spec_skeletons.compile_skeleton) and registers
-        ``workspace.ir_skeletons[code_rel]`` so _delivery_lint can refuse a
-        skeleton edit. Returns '' — meaning "today's path, untouched" —
-        for the product entry (engine-synthesized router, the v164 template
+        What: reads the held IR accumulator (I3/S26 — never a fresh rebuild),
+        compiles the node's skeleton (spec_skeletons.compile_skeleton) and
+        registers ``workspace.ir_skeletons[code_rel]`` so _delivery_lint can
+        refuse a skeleton edit. Returns '' — meaning "today's path, untouched"
+        — for the product entry (engine-synthesized router, the v164 template
         lesson), for a module surface listed by more than one node (the
         S12.2 erasure gate owns co-owned files) and for leaves without an
         IR interface. A compile failure is an attributable SKIP, never a
         crash: the leaf falls back to the free-form path.
-        Test: tests/audit/test_skeleton_write_door.py."""
+        Test: tests/audit/test_skeleton_write_door.py,
+        tests/audit/test_ir_hotpath_reads_accumulator.py."""
         try:
             try:
-                from . import spec_ir, spec_skeletons  # type: ignore
+                from . import spec_skeletons  # type: ignore
             except ImportError:  # flat layout: repo root on sys.path
-                import spec_ir  # type: ignore
                 import spec_skeletons  # type: ignore
-            ir = spec_ir.build_ir(self)
+            ir = self._held_ir()
             rel = str(code_rel).replace("\\", "/")
             entry = str((ir.get("product") or {}).get("entry") or "")
             if entry and entry == rel:
