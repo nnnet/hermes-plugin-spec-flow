@@ -64,7 +64,7 @@ graph:
   - {id: H6, needs: [],               parallel: "wave-h1", status: "[x]", files: [spec_skeletons.py, spec_flow_doctor.py]}
   - {id: H7, needs: [],               parallel: "",        status: "[x]", files: [spec_ir.py, tests/audit/]}
   - {id: I1, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/audit/]}
-  - {id: I2, needs: [I1],             parallel: "",        status: "[ ]", files: [spec_ir.py, spec_flow_runner.py]}
+  - {id: I2, needs: [I1],             parallel: "",        status: "[x]", files: [spec_ir.py, spec_flow_runner.py]}
   - {id: I3, needs: [I2],             parallel: "",        status: "[ ]", files: [spec_flow_runner.py]}
   - {id: J1, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, spec_skeletons.py, tests/audit/]}
   - {id: K1, needs: [],               parallel: "",        status: "[x]", files: [spec_openapi.py, tests/audit/, tests/requirements-dev.txt]}
@@ -670,8 +670,25 @@ beyond this file», а контракт требует добавить get_ping
   дампом этого аккумулятора, а не пересборкой из пяти датумов
 - приёмка: датумы (interface/modules/request_fields) читаются ИЗ IR-
   аккумулятора, дубля нет; одно направление; полный набор зелёный
-- заметки: сердце переворота; крупный, делается на свежем контексте
-  отдельной сессией (не тяп-ляп на пределе)
+- заметки: ГОТОВ — Stage S25, коммит feat(S25). Разрез: раньше build_ir и
+  _write_interface_contract НЕЗАВИСИМО дёргали одни датумы (_route_media_map/
+  _route_request_fields) — два вычисления одной проекции без общей структуры
+  = класс дрейфа. Теперь: spec_ir.collect_ir_sources(engine) снимает СЫРЬЁ
+  датумов ОДИН раз; build_ir(engine, sources) собирает IR из него;
+  _write_ir_locked кэширует held-аккумулятор self._ir + self._ir_sources под
+  локом I1; _ir_snapshot() = тривиальный дамп held (не пересборка);
+  _write_interface_contract читает media/reqf из self._ir_sources, а не из
+  датумов. Одно направление: датумы→аккумулятор→{IR, interface}. RED-тест
+  test_ir_single_accumulator.py краснел на трёх: (S25a) self._ir=None нет
+  held; (S25b) interface брал media из RAW-датума (text/html) вместо
+  аккумулятора (application/json) — доказан дубль; (S25c) held=None.
+  Форма ir.json/interface.json НЕ менялась (61-тестовый риск I1 обойдён).
+  build_ir(self) без sources сохранил обратную совместимость (потребители
+  IR-nodes: _refresh_ir_skeletons, _skeleton_source_for — им нужен свежий IR,
+  не held). Зелёные: audit 536 (+3 S25), IR-наборы (nodes/decomposition/
+  api_contract/spec/core/gates/coverage) 715, workspace-наборы (dashboard/
+  journal/verification/workers/isolation/claims/board/commits) 411, harness 38.
+  Ослаблений нет. modules.json читатели — зона I3.
 
 ### I3 `datum-readers-on-ir` — читатели датумов переключены на IR
 - выход: места, читающие interface.json/modules.json напрямую, читают из

@@ -292,17 +292,46 @@ def requirements_txt(ir: Any) -> str:
     return "\n".join(lines) + ("\n" if lines else "")
 
 
-def build_ir(engine: Any) -> dict:
-    """Assemble the IR purely from the engine's already-recorded datums.
+def collect_ir_sources(engine: Any) -> dict:
+    """Read every raw datum the IR is built from — ONCE — into one snapshot.
+
+    Why (node I2): the IR and its downstream projections (contracts/
+    interface.json's route rows: media, request_fields, success_status) used
+    to each re-call `_route_media_map()` / `_route_request_fields()` on their
+    own. Two independent reads of the same datum = the pairwise-drift class.
+    Collecting the raw datums into ONE snapshot here makes that snapshot the
+    single upstream: `build_ir` and the interface projection both read it, so
+    there is one direction (datums -> snapshot -> {IR, interface}) and the
+    datum methods are never queried a second time behind the accumulator.
+    What: returns a dict of the raw datums (owners / module_names /
+    module_contracts / module_importers / media / request_fields / env vars /
+    pinned paths / product contract). Missing datum => empty, never guessed.
+    Test: tests/audit/test_ir_single_accumulator.py."""
+    return {
+        "owners": _datum(engine, "_route_owners", {}),
+        "module_names": _datum(engine, "_module_names", {}),
+        "contracts_sym": _datum(engine, "_module_contracts", {}),
+        "importers": _datum(engine, "_module_importers", {}),
+        "media": _call(engine, "_route_media_map", {}),
+        "reqf": _call(engine, "_route_request_fields", {}),
+        "envs": _call(engine, "_constitution_env_vars", []),
+        "pins": _call(engine, "_constitution_pinned_paths", []),
+        "contract": _call(engine, "_product_contract", {}),
+    }
+
+
+def build_ir(engine: Any, sources: "dict | None" = None) -> dict:
+    """Assemble the IR from ONE datum snapshot (the single-source accumulator).
 
     Why: ONE closed structure per node kills the pairwise-drift class by
     construction — every consumer reads the same merged data.
-    What: merges _route_owners / _route_handler_modules / _module_contracts
-    / _module_importers / _module_names / _route_media_map /
-    _route_request_fields / _constitution_env_vars /
-    _constitution_pinned_paths / _product_contract plus the pure route
-    functions into the IR documented in the module docstring. Missing datum
-    => absent field, never a guessed default.
+    What: merges the raw datums captured by `collect_ir_sources` — owners /
+    module_names / module_contracts / module_importers / media /
+    request_fields / env vars / pinned paths / product contract plus the pure
+    route functions — into the IR documented in the module docstring. When
+    `sources` is None it captures them itself; the runner passes the held
+    snapshot so IR and interface.json share one upstream. Missing datum =>
+    absent field, never a guessed default.
     Test: tests/audit/test_ir_openapi_conformance.py."""
     # late import: the runner imports this module, avoid a hard cycle
     try:
@@ -310,15 +339,17 @@ def build_ir(engine: Any) -> dict:
     except Exception:  # noqa: BLE001 — flat layout (repo root on sys.path)
         import spec_flow_runner as sfr  # type: ignore
 
-    owners: dict = _datum(engine, "_route_owners", {})
-    module_names: dict = _datum(engine, "_module_names", {})
-    contracts_sym: dict = _datum(engine, "_module_contracts", {})
-    importers: dict = _datum(engine, "_module_importers", {})
-    media: dict = _call(engine, "_route_media_map", {})
-    reqf: dict = _call(engine, "_route_request_fields", {})
-    envs: list = _call(engine, "_constitution_env_vars", [])
-    pins: list = _call(engine, "_constitution_pinned_paths", [])
-    contract: dict = _call(engine, "_product_contract", {})
+    if sources is None:
+        sources = collect_ir_sources(engine)
+    owners: dict = sources["owners"]
+    module_names: dict = sources["module_names"]
+    contracts_sym: dict = sources["contracts_sym"]
+    importers: dict = sources["importers"]
+    media: dict = sources["media"]
+    reqf: dict = sources["reqf"]
+    envs: list = sources["envs"]
+    pins: list = sources["pins"]
+    contract: dict = sources["contract"]
     tree = _tree_nodes(engine)
 
     routes_by_node: dict = {}
