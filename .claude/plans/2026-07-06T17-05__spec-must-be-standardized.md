@@ -111,7 +111,7 @@ graph:
   - {id: N2, needs: [N1, N6],  parallel: "",      status: "[x]", files: [spec_flow_runner.py, spec_registry.py, tests/audit/]}
   - {id: N3, needs: [N1],      parallel: "wave2", status: "[x]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py, spec_gherkin.py, spec_ir.py, tests/audit/]}
   - {id: N5, needs: [N1],      parallel: "wave2", status: "[x]", files: [tests/lib/live_dashboard.py, tests/dashboard/]}
-  - {id: N4, needs: [N2, N3],  parallel: "",      status: "[ ]", files: [spec_flow_runner.py, tests/audit/]}
+  - {id: N4, needs: [N2, N3],  parallel: "",      status: "[x]", files: [spec_flow_runner.py, tests/audit/]}
 ```
 
 N6 (модель содержания) — фундамент для гейта N2: формализует ОБЯЗАТЕЛЬНЫЕ
@@ -254,7 +254,21 @@ N6 (модель содержания) — фундамент для гейта 
   правка .md на сборку не влияет
 - приёмка: RED — .md не-HTTP узла не выводится из Gherkin-AST / проза влияет на
   сборку; GREEN — детерминированный рендер из носителя; Stage
-- заметки:
+- заметки: сделано (S36). Два детерминированных хелпера в `spec_flow_runner.py`
+  рядом с K3 `_openapi_interface_markdown`: `_gherkin_behaviour_markdown`
+  (рендер каждого Scenario Given/When/Then из `node["behavior"]`) +
+  `_symbols_api_markdown` (сигнатуры name(args)->returns + raises из
+  `node["symbols"]["exposes"]`). Вызовы вставлены в `spec()` СРАЗУ после
+  K3-секции OpenAPI и ПЕРЕД worker-prose → секции «## Behaviour (compiled from
+  the machine Gherkin)» и «## API (compiled from symbols)» идут ВЫШЕ прозы,
+  проза вторична. Инвариант derived-not-source: две разные прозы над одним
+  носителем дают байт-идентичные секции (S36.3). Пустой носитель → нет секций
+  (S36.4). RED краснел на 4/5 (нет секций из носителя), S36.4 сразу зелёный
+  (фантомных секций не было). Аудит: `tests/audit/test_prose_derived_non_http.py`
+  (S36, TAXONOMY обновлён). K3 S23 + N3 S32 не тронуты (12 passed). NB: в общем
+  прогоне tests/audit есть 1 PRE-EXISTING красный —
+  `test_gherkin_lib_oracle.py::test_validate_ir_folds_in_the_gherkin_oracle`
+  (зона spec_ir.validate_ir, НЕ N4; красный и на чистой базе до моих правок).
 
 ### N5 `dashboard-standard-spec` — дашборд: стандарт спеки + валидация, без текста
 - выход: вкладка «Спека» показывает СТАНДАРТ (OpenAPI-операции / Gherkin-сценарии
