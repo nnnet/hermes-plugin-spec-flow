@@ -1316,6 +1316,23 @@ wiring commit turned them green.
   `_counterexample_repair_step` BEFORE `_REPAIR_DIFF_TASK` (source-pinned,
   the S18.5 `_active_team` lesson) — the diff task survives as
   fallback-only, so a leaf on the legacy LLM-test path keeps it.
+- S19.10 THE DIFF APPLIER IS HAND-ROLLED ON PURPOSE (node H1b,
+  `test_diff_repair_reason.py`): the fallback SEARCH/REPLACE path
+  (`_REPAIR_DIFF_TASK`) applies its blocks through `harness/diff_repair.py`,
+  an aider-style applier written by hand rather than on a diff library
+  (diff-match-patch / unidiff / python-patch). This was the ONLY hand-rolled
+  harness component without a recorded reason — the wave scheduler (H1) and
+  the closed-world IR (H7) both document theirs. The reason is now pinned in
+  the module docstring and cannot silently return: a generic diff library
+  does not give the model-facing block FORMAT contract (the `FILE:` +
+  `<<<SEARCH/===/>>>REPLACE` grammar tolerant of marker runs >= 3), the
+  empty-SEARCH = whole-file escape hatch, the EXACTLY-ONCE refusal (0 = gone,
+  >1 = ambiguous → refuse, never a fuzzy/blind write — the opposite of
+  diff-match-patch's threshold matching), or the write-door tie-in (`allowed`
+  allowlist + per-file accumulation + staged files-to-write). The audit
+  parses the docstring and asserts BOTH a candidate library name AND the
+  domain markers are present — the reason is checked by MARKER, not one
+  sentence, so it may be reworded but never dropped.
 
 ## STAGE 20 — Universality battery: generated specs across domains (`test_universality_battery.py`)
 Node F1 (`universality-battery`) of the spec-IR rearchitecture (plan
