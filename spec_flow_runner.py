@@ -4291,6 +4291,48 @@ class Engine:
         out.update(self._decomposer_ir_route_facts()[0])
         return out
 
+    def _route_request_field_types(self) -> dict:
+        """(METHOD, path) -> {field: json_type} for request-body fields whose
+        TYPE the IR declares (H4/S12.17, principles-audit F3).
+
+        Why: the router's request gate validated presence only — a string
+        field given an integer was accepted. A type is a contract datum ONLY
+        when a machine source recorded it; the prose heuristic derives names,
+        never types, so this datum is populated EXCLUSIVELY from accepted
+        decomposer IR fragments (`_decomposer_ir_nodes`). Absent type => absent
+        row => the gate stays presence-only (the engine invents no type).
+        What: reads each fragment's requestBody json schema
+        ``properties[field].type`` for every owned (method, path); a property
+        without a ``type`` contributes no row (honest gap).
+        Test: tests/audit/test_request_field_types.py."""
+        reg = self.__dict__.get("_decomposer_ir_nodes")
+        if not isinstance(reg, dict):
+            return {}
+        out: dict = {}
+        for frag in reg.values():
+            paths = ((frag or {}).get("openapi") or {}).get("paths") or {}
+            if not isinstance(paths, dict):
+                continue
+            for path, ops in paths.items():
+                if not isinstance(ops, dict):
+                    continue
+                for method, op in ops.items():
+                    rb = op.get("requestBody") if isinstance(op, dict) else None
+                    schema = (((rb or {}).get("content") or {})
+                              .get("application/json") or {}).get("schema") or {}
+                    props = schema.get("properties") \
+                        if isinstance(schema, dict) else None
+                    if not isinstance(props, dict):
+                        continue
+                    row = {}
+                    for field, sub in props.items():
+                        t = sub.get("type") if isinstance(sub, dict) else None
+                        if isinstance(t, str) and t:
+                            row[str(field)] = t
+                    if row:
+                        out[(str(method).upper(), str(path))] = row
+        return out
+
     def _request_shape_datum_gate(self, reqf: dict, contract: dict) -> None:
         """S12.9 (v162): anti-silence for the boot-gate shape probe — a
         contracted body-method route ABSENT from the S12.1 request-shape
@@ -6144,6 +6186,17 @@ class Engine:
         required_block = "\n".join(
             '    (%r, %r): %r,' % (m, p, list(f))
             for (m, p), f in sorted(_reqf.items()) if f)
+        # H4/S12.17: request field TYPES, when the IR (a decomposer machine
+        # fragment) declared them — presence is not enough, {"text": 12345}
+        # for a string field is a client error. Absent type => no row (the
+        # gate stays presence-only; the engine invents no type).
+        try:
+            _rft = self._route_request_field_types() or {}
+        except Exception:        # noqa: BLE001 — no datum = no type rows
+            _rft = {}
+        field_types_block = "\n".join(
+            '    (%r, %r): %r,' % (m, p, dict(ft))
+            for (m, p), ft in sorted(_rft.items()) if ft)
         # Re-export each wired handler under its ORIGINAL name so a generated
         # test can `from <entry> import <handler>` (live v134: test_app.py did
         # `from app import post_notes` but the entry bound only the _hN aliases
@@ -6202,6 +6255,21 @@ _REQUIRED = {
 %(required)s
 }
 
+# contracted REQUEST-BODY field TYPES per route (engine datum, S12.17) — only
+# present when the IR declared a field's JSON type; a wrong-typed value is a
+# client error AFTER presence. Absent => no type check (engine invents none).
+_FIELD_TYPES = {
+%(field_types)s
+}
+_TYPE_OK = {
+    "string": lambda v: isinstance(v, str),
+    "integer": lambda v: isinstance(v, int) and not isinstance(v, bool),
+    "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+    "boolean": lambda v: isinstance(v, bool),
+    "object": lambda v: isinstance(v, dict),
+    "array": lambda v: isinstance(v, list),
+}
+
 
 def _send(start_response, code, body, extra=None):
     if isinstance(body, (dict, list)):
@@ -6258,6 +6326,13 @@ def %(callable)s(environ, start_response):
             if _f not in payload:
                 return _send(start_response, 400,
                              {"error": "missing required field: '%%s'" %% _f})
+        # S12.17: a present field whose contracted type does not hold is a
+        # client error (only when the IR declared the type — else no row)
+        for _f, _t in (_FIELD_TYPES.get((method, path)) or {}).items():
+            _chk = _TYPE_OK.get(_t)
+            if _f in payload and _chk is not None and not _chk(payload[_f]):
+                return _send(start_response, 400,
+                             {"error": "field '%%s' must be %%s" %% (_f, _t)})
     try:
         if abi == "health":
             status, body = 200, %(health_body)s
@@ -6282,6 +6357,7 @@ def %(callable)s(environ, start_response):
 '''
         return tmpl % {"imports": imports_block, "routes": routes_block,
                        "required": required_block,
+                       "field_types": field_types_block,
                        "callable": callable_name, "aliases": aliases_block,
                        # the inline liveness body reads the SAME single-source
                        # datum the interface contract and the binding print
