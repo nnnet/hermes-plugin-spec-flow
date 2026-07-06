@@ -61,7 +61,7 @@ graph:
   - {id: H3, needs: [],               parallel: "wave-h1", status: "[x]", files: [spec_ir.py, spec_openapi.py, spec_conformance.py]}
   - {id: H4, needs: [H3],             parallel: "wave-2",  status: "[x]", files: [spec_ir.py, spec_flow_runner.py]}
   - {id: H5, needs: [],               parallel: "",        status: "[ ]", files: [spec_ir.py, spec_skeletons.py, spec_flow_runner.py]}
-  - {id: H6, needs: [],               parallel: "wave-h1", status: "[~]"  # solo now, files: [spec_skeletons.py, spec_flow_doctor.py]}
+  - {id: H6, needs: [],               parallel: "wave-h1", status: "[x]", files: [spec_skeletons.py, spec_flow_doctor.py]}
   - {id: H7, needs: [],               parallel: "",        status: "[ ]", files: [spec_ir.py, tests/audit/]}
   - {id: H8, needs: [],               parallel: "wave-h1", status: "[x]", files: [spec_flow_runner.py]}
   - {id: G3, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/decomposition/]}
@@ -508,11 +508,21 @@ Schemathesis, awesome-ralph.
 - приёмка: спека с Flask/sqlite3 собирается; без декларации — отказ
   как сейчас; снимает главную стену принципа 3 (spec_ir.py:63)
 
-### [~] H6 `body-side-effects` — тело функции под замкнутым миром
+### [x] H6 `body-side-effects` — тело функции под замкнутым миром
 - выход: I/O-stdlib (os/subprocess/socket/urllib) в теле листа либо
   запрещён без заказа спекой, либо декларируется датумом IR
 - приёмка: эксплойт F2 (side-effect на диск/сеть/env невидим дверям)
   закрыт красным кейсом
+- заметки: ГОТОВ — коммит 4c640ea (тест написал агент H6 до лимита,
+  реализацию доделал сам; RED 16 failed до кода). body_effect_findings
+  разбирает AST тела: subprocess/network/env-write/fs-write/
+  dynamic-import — находка, если класс не в опциональном node.effects
+  (absent=deny all). Чтение зелёное (open 'r', env-read, urllib.parse),
+  запись/процессы/сокеты/env-мутация/динимпорт — находки. Общий чекер
+  с дверью доктора (apply_function_body allowed_effects). str.replace
+  не ложно флагается (v151). Регрессия 913, ноль ложных срабатываний.
+  Опциональный ключ effects в spec_ir._NODE_KEYS добавляется в H5/H2
+  волне (сейчас absent=deny работает без него)
 
 ### [ ] H7 `jsonschema-oracle-for-ir` — внешний оракул для самой IR
 - выход: jsonschema-валидация рядом с validate_ir (замкнутый мир
