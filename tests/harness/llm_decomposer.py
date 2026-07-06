@@ -86,11 +86,20 @@ immediately; prose never carries the interface.
   application/json schema with "required" field names and
   "additionalProperties": false) -> responses keyed by the contracted
   status with the content media type;
-  "symbols": {{"exposes": [{{"name", "args"}}], "consumes": [{{"from",
-  "name", "args"}}]}} — what it defines and what it imports from others;
+  "symbols": {{"exposes": [{{"name", "args", "returns", "raises"}}],
+  "consumes": [{{"from", "name", "args"}}]}} — what it defines and what it
+  imports; every exposed callable MUST carry TYPED args ("name: type"), a
+  "returns" type and a "raises" list (use [] for none) so a weak model builds
+  it with no guessing;
   "env": [{{"name", "rule"}}] for config it reads;
   "scenarios": [{{"requirement", "when": {{"method", "path", "body"}},
   "then": {{"status", "media", "body_check"}}}}] — one per acceptance line.
+- NON-HTTP leaf (storage/lib/behaviour — builds src files but OWNS NO route,
+  so NO "openapi"): its PRIMARY carrier is a MACHINE Gherkin feature in
+  "behavior" — a "Feature:" with one "Scenario:" per public callable
+  (Given the setup, When name(args) is called, Then the concrete result),
+  PLUS the complete typed "symbols.exposes" above. Prose never carries it;
+  a non-HTTP leaf with no "behavior" or untyped exposes is a refused answer.
 - every scenario on a route with required request fields MUST carry a
   CONCRETE example value object in when.body (author real values — e.g.
   {{"text": "hi"}}; the engine never invents them; a bodyless scenario

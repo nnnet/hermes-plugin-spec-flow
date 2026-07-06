@@ -1752,6 +1752,41 @@ that grammatical class was invisible to the hand check.
   stays the engine's TARGET shape; its GRAMMAR is now sourced from the library
   AST, not a home-grown splitter.
 
+## STAGE 32 — a NON-HTTP code leaf carries a COMPLETE machine behaviour spec
+(a Gherkin `behavior` feature + typed `symbols.exposes`), library-validated at
+the decomposer seam (node N3, plan 2026-07-06T17-05).
+Why: K2/S22 made the OpenAPI document the primary, library-checked carrier for
+HTTP nodes — but a non-HTTP leaf (storage/lib, like the v166 `db_layer`) owns no
+route, so it carries no `openapi` document and the K2 gate had nothing to
+validate. In run v166 `db_layer` (three SQLite functions) arrived as PROSE with
+an EMPTY `symbols.exposes`; the seam accepted it with zero errors and the hole
+only surfaced far downstream as `spec_lint FAIL #20`. A weak LLM handed that
+node must guess every signature — the "not complete for a weak LLM" failure the
+single criterion forbids. N3 makes the machine behaviour spec the PRIMARY
+carrier: a non-HTTP code leaf MUST emit a Gherkin `behavior` feature (parsed by
+`gherkin-official`, the N1/S31 oracle) and a `symbols.exposes` where every
+callable has typed args, a `returns` and a `raises` list. Absent or incomplete
+carrier = NAMED refusal on gate `decomposer_gherkin` (the `decomposer_openapi`
+precedent), never a silent pass to prose.
+- premise: `spec_gherkin.is_code_leaf` recognises a leaf with src files, no
+  `openapi`, no `children` — and rejects an HTTP node / a branch.
+- S32.1 both directions (RED half): a prose-only non-HTTP leaf (no `behavior`,
+  empty exposes) is refused at `_accept_decomposer_ir` as a `decomposer_gherkin`
+  FAIL and does NOT enter the IR registry — the pre-N3 engine passed it silent.
+- S32.2 an INCOMPLETE carrier (untyped exposes, no return/error surface, no
+  behaviour feature) reds on the same gate — completeness-for-a-weak-LLM is the
+  single criterion.
+- S32.3 both directions (GREEN half): a COMPLETE carrier (full Gherkin feature +
+  typed exposes with returns and errors) is accepted with no FAIL and journals
+  `decomposer_ir` PASS — the gate must never false-red a legitimate storage/lib
+  leaf.
+- S32.4 the `behavior` feature GRAMMAR is validated by the ready-made
+  `gherkin-official` parser (a broken feature reds, a valid one is silent);
+  absent library => the deterministic exposes-completeness check still stands
+  (the S14.7 optional-oracle contract). `spec_ir` widens the closed world to
+  admit `behavior` and the `returns`/`raises`/`signature` expose keys; the
+  PRESENCE requirement lives in `spec_gherkin`, not the closed schema.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.

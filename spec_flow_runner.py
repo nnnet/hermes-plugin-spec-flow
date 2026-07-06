@@ -7915,6 +7915,48 @@ def %(callable)s(environ, start_response):
                             "the OpenAPI 3.1 library",
                             "documents: %d" % _oa_docs,
                             "decomposer_openapi", "PASS", level=L_MILESTONE)
+                # N3 (S32.1-S32.3): a NON-HTTP code leaf (storage/lib, owns no
+                # route -> no openapi document) carries its interface as a
+                # MACHINE behaviour spec — a Gherkin `behavior` feature plus a
+                # COMPLETE `symbols.exposes` (typed args, return, error surface).
+                # The K2 openapi gate has nothing to validate for it, so the
+                # v166 db_layer degraded to prose with empty symbols and passed
+                # SILENTLY (surfacing only far downstream as spec_lint #20). This
+                # is the non-HTTP counterpart of the decomposer_openapi gate: a
+                # leaf with no machine carrier, or an incomplete one, is a NAMED
+                # refusal on gate `decomposer_gherkin`, never a silent pass.
+                if not errors:
+                    try:
+                        from . import spec_gherkin  # type: ignore
+                    except ImportError:  # flat layout: repo root on sys.path
+                        import spec_gherkin  # type: ignore
+                    gh_errors = []
+                    _gh_leaves = 0
+                    for _pnid, _pnode in nodes.items():
+                        if not spec_gherkin.is_code_leaf(str(_pnid), _pnode):
+                            continue
+                        _gh_leaves += 1
+                        gh_errors.extend(
+                            spec_gherkin.node_behavior_carrier_errors(
+                                str(_pnid), _pnode))
+                    if gh_errors:
+                        errors.extend(gh_errors)
+                        self.emit(
+                            "decompose", "engine", "", nid,
+                            "decomposer Gherkin: non-HTTP leaf carries no "
+                            "complete machine behaviour spec",
+                            "; ".join(gh_errors)[:300],
+                            "decomposer_gherkin", "FAIL", level=L_MILESTONE)
+                    elif _gh_leaves:
+                        # symmetry with M3: a leaf that cleared the behaviour
+                        # carrier oracle emits a NAMED PASS on the same gate, so
+                        # the dashboard can surface the green fact, not only red.
+                        self.emit(
+                            "decompose", "engine", "", nid,
+                            "decomposer Gherkin: non-HTTP leaf behaviour spec "
+                            "complete (feature + typed exposes)",
+                            "leaves: %d" % _gh_leaves,
+                            "decomposer_gherkin", "PASS", level=L_MILESTONE)
                 if not errors:
                     reg.update(nodes)
                     self.emit(
