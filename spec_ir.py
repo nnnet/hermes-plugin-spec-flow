@@ -13,7 +13,8 @@ What:
     datums. The builder NEVER invents: a datum the engine never recorded
     leaves the IR field ABSENT (an honest gap, reported by the validator as
     an incompleteness finding — never a guessed default).
-  * ``validate_ir(ir)`` — returns ``{"errors": [...], "incomplete": [...]}``
+  * ``validate_ir(ir)`` — returns
+    ``{"errors": [...], "incomplete": [...], "not_checked": [...]}``
     of plain strings naming the node id and the offending value (P4,
     attributable failure). Errors are closed-world violations; incomplete
     are honest gaps (absent datums).
@@ -62,6 +63,28 @@ from typing import Any, Optional
 
 IR_FORMAT = "spec-flow ir v1"
 OPENAPI_VERSION = "3.1.0"
+
+# S38/Q2 (catalog C): fail-closed marker for an oracle that could NOT run (its
+# optional library is absent, or a carrier is inactive/unknown). An oracle that
+# did not run must be distinguishable from one that ran and found nothing: it
+# emits a NOT-CHECKED error carrying this prefix, never a bare `[]` (== ok).
+# `[]` stays reserved for "the oracle ran and the datum is clean".
+NOT_CHECKED_PREFIX = "NOT-CHECKED: "
+
+
+def not_checked(reason: str) -> str:
+    """Why: absence of a check is not success — a skipped oracle must surface a
+    NAMED refusal so no consumer collapses not-checked into ok (catalog C4/C1).
+    What: wrap ``reason`` in the NOT-CHECKED marker prefix.
+    Test: tests/audit/test_fail_closed_absence.py (is_not_checked round-trip)."""
+    return NOT_CHECKED_PREFIX + str(reason)
+
+
+def is_not_checked(err: Any) -> bool:
+    """Why: consumers gate on this to tell a not-run oracle from a clean one.
+    What: True iff ``err`` is a string carrying the NOT-CHECKED marker.
+    Test: tests/audit/test_fail_closed_absence.py."""
+    return isinstance(err, str) and err.startswith(NOT_CHECKED_PREFIX)
 
 _MIME = {"json": "application/json", "html": "text/html"}
 _BODIED = ("POST", "PUT", "PATCH")
@@ -277,10 +300,20 @@ def jsonschema_errors(ir: Any) -> list:
     is itself a signal (the Specmatic/Schemathesis pattern applied to the IR).
     validate_ir keeps the closed-world semantics on top; this catches the
     structural class (unknown key, wrong type) from a maintained library
-    rather than only hand-rolled checks.
-    Test: tests/audit/test_ir_jsonschema_oracle.py."""
-    import jsonschema  # dev/test oracle, not a runtime dependency
-    validator = jsonschema.Draft202012Validator(IR_JSON_SCHEMA)
+    rather than only hand-rolled checks. The schema is strict (draft 2020-12,
+    `additionalProperties: False` throughout): empty/extra keys are errors at
+    the model level (catalog C, Pydantic-v2 `extra='forbid'` equivalent).
+    S38/Q2 (catalog C4): an ABSENT library no longer crashes the run — it
+    returns a NOT-CHECKED marker (the oracle was skipped, not passed).
+    Test: tests/audit/test_ir_jsonschema_oracle.py, test_fail_closed_absence.py."""
+    try:
+        import jsonschema  # dev/test oracle, not a runtime dependency
+    except ImportError:
+        return [not_checked(
+            "jsonschema (draft 2020-12) structural oracle skipped — the "
+            "library is not importable; IR structure went unvalidated")]
+    validator = jsonschema.Draft202012Validator(
+        IR_JSON_SCHEMA, format_checker=jsonschema.FormatChecker())
     return ["%s: %s" % ("/".join(str(p) for p in e.path) or "<root>",
                         e.message)
             for e in sorted(validator.iter_errors(ir), key=str)]
@@ -384,16 +417,27 @@ def gherkin_errors(ir: Any) -> list:
     one Feature+Scenario, or a step-keyword sequence differing from the closed
     projection), is a named error.
     What: returns a list of "node <nid>: scenario[<i>]: ..." strings; empty when
-    every scenario is grammatical. Absent library => empty (degrade, the hand
-    cross-rules in validate_ir still stand) — same optional-oracle contract as
-    the openapi-schema-validator body oracle (S14.7).
-    Test: tests/audit/test_gherkin_lib_oracle.py."""
+    every scenario is grammatical. S38/Q2 (catalog C4): when the library is
+    ABSENT but there ARE scenarios to check, the oracle no longer degrades to
+    `[]`==ok — it returns a single NOT-CHECKED marker (the check was SKIPPED,
+    not passed). A NOT-CHECKED result is not silence; validate_ir carries it as
+    a named refusal. (No scenarios to check => empty is legitimate: nothing to
+    validate is not the same as an un-run oracle.)
+    Test: tests/audit/test_gherkin_lib_oracle.py, test_fail_closed_absence.py."""
+    nodes = (ir or {}).get("nodes") if isinstance(ir, dict) else None
     parts = _gherkin_parser()
     if parts is None:
+        n_scen = sum(len(node.get("scenarios") or [])
+                     for node in (nodes or {}).values()
+                     if isinstance(node, dict))
+        if n_scen:
+            return [not_checked(
+                "gherkin grammar oracle skipped — the `gherkin-official` "
+                "library is not importable; %d scenario(s) went unvalidated "
+                "(install the oracle or treat this run as unchecked)" % n_scen)]
         return []
     Parser, TokenScanner, err_types = parts
     out: list = []
-    nodes = (ir or {}).get("nodes") if isinstance(ir, dict) else None
     for nid, node in sorted((nodes or {}).items()):
         if not isinstance(node, dict):
             continue
@@ -666,6 +710,41 @@ def spec_completeness_gaps(node: Any) -> list:
                 "Scenario) — a weak LLM will not invent the edge cases")
 
     return gaps
+
+
+def _hollow_node_reason(nid: str, node: Any) -> "Optional[str]":
+    """S38/Q2 (catalog C3): name the reason an executable node is HOLLOW, or
+    None.
+
+    Why: a syntactically valid but EMPTY spec (no behaviour carrier AND no
+    interface/typed contract) passed the closed-world oracle with zero errors —
+    the format was fine, the content absent, and absence read as success. This
+    is the strictest completeness failure (a superset-empty node, not merely one
+    missing aspect): validate_ir must BLOCK on it, not just record a gap.
+    What: returns a reason string when an executable (non-branch) node carries
+    NEITHER behaviour (scenarios / Gherkin / an error response) NOR any
+    interface/typed contract (HTTP paths for an http node, typed exposes for a
+    code node), else None. A branch delegates to children and is never hollow.
+    Test: tests/audit/test_fail_closed_absence.py."""
+    if not isinstance(node, dict):
+        return None
+    cls = _node_class(node)
+    if cls == "branch":
+        return None
+    has_behavior = bool(node.get("scenarios")
+                        or str(node.get("behavior") or "").strip())
+    if cls == "http":
+        has_contract = _http_owns_routes(node)
+    elif cls == "code":
+        has_contract = bool((node.get("symbols") or {}).get("exposes"))
+    else:  # "other": carries neither routes nor a typed public API by class
+        has_contract = False
+    if has_behavior or has_contract:
+        return None
+    return ("node %s: hollow spec — an executable node carrying neither a "
+            "behaviour carrier (scenarios/Gherkin) nor an interface/typed "
+            "contract (routes/typed exposes) has no content to build; a "
+            "valid-but-empty shell is a FAIL, not a silent PASS" % nid)
 
 
 def requirements_txt(ir: Any) -> str:
@@ -1025,16 +1104,20 @@ def validate_ir(ir: Any) -> dict:
 
     Why: postfactum pairwise-drift audits scale linearly with failure
     classes; a closed world refuses undeclared values once, for all of them.
-    What: returns {"errors": [...], "incomplete": [...]} — plain strings
-    naming the node id and the offending value. Errors are violations
-    (unknown keys, undeclared routes/symbols/env, duplicate or non-leaf
-    ownership, scenario/openapi disagreement); incomplete are honest gaps
-    (datums the engine never recorded).
-    Test: tests/audit/test_ir_closed_world.py."""
+    What: returns {"errors": [...], "incomplete": [...], "not_checked": [...]}
+    — plain strings naming the node id and the offending value. Errors are
+    violations (unknown keys, undeclared routes/symbols/env, duplicate or
+    non-leaf ownership, scenario/openapi disagreement, a hollow node — S38/Q2);
+    incomplete are honest gaps (datums the engine never recorded); not_checked
+    (S38/Q2, catalog C4) names oracles that were SKIPPED because their optional
+    library was absent — not silence (a gate refuses on it), but not a
+    structural error a hermetic runner should red on.
+    Test: tests/audit/test_ir_closed_world.py, test_fail_closed_absence.py."""
     errors: list = []
     incomplete: list = []
     if not isinstance(ir, dict):
-        return {"errors": ["ir: not a mapping"], "incomplete": []}
+        return {"errors": ["ir: not a mapping"], "incomplete": [],
+                "not_checked": []}
     _keys(ir, _TOP_KEYS, "ir", errors)
     if ir.get("format") != IR_FORMAT:
         errors.append("ir: format %r is not %r" % (ir.get("format"),
@@ -1149,6 +1232,12 @@ def validate_ir(ir: Any) -> dict:
     for nid, node in nodes.items():
         if not isinstance(node, dict):
             continue
+        # S38/Q2 (catalog C3): a valid-but-hollow executable node BLOCKS here —
+        # a spec with no behaviour and no interface is un-buildable, and the
+        # closed-world oracle must refuse it, not pass it as format-clean.
+        hollow = _hollow_node_reason(nid, node)
+        if hollow:
+            errors.append(hollow)
         for idx, sc in enumerate(node.get("scenarios") or []):
             _check_scenario(nid, idx, sc, registry, declared_env,
                             errors, incomplete)
@@ -1157,7 +1246,15 @@ def validate_ir(ir: Any) -> dict:
     # ready-made gherkin-official parser library, not the hand key-check above.
     # The library AST catches the grammatical class (an injected keyword line,
     # a step that is not a step) the closed-schema check is structurally blind
-    # to. Optional dev/test oracle: absent library => empty, hand rules stand.
-    errors.extend(gherkin_errors(ir))
+    # to. S38/Q2 (catalog C4): a NOT-CHECKED result (the optional library was
+    # absent, so the oracle was SKIPPED) is kept OUT of `errors` and surfaced in
+    # a separate `not_checked` channel — it is not silence (a completeness gate
+    # reads it and refuses), but it is not a structural error either, so a
+    # hermetic scenario runner that legitimately lacks the dev oracle is not
+    # falsely refused. Real grammatical errors still ride into `errors`.
+    not_checked_out: list = []
+    for _e in gherkin_errors(ir):
+        (not_checked_out if is_not_checked(_e) else errors).append(_e)
 
-    return {"errors": errors, "incomplete": incomplete}
+    return {"errors": errors, "incomplete": incomplete,
+            "not_checked": not_checked_out}

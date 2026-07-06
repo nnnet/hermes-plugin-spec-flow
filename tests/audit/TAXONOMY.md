@@ -1936,6 +1936,41 @@ carries the dump (S37.1, RED before the fix), the leaf arm KEEPS its dump
 (S37.2, the no-regression guard on I1 S14.6), and the incremental writer stays
 the locked alias (S37.3, no second raw writer racing the leaf dump).
 
+## STAGE 38 — FAIL-CLOSED: absence is never success (node Q2, `test_fail_closed_absence.py`)
+
+fail-open finale. The engine was built "so the flow never tears": a missing
+datum, an un-run oracle, or a silent model all resolved to the GREEN branch —
+catalog C of the 2026-07-06 systemic-design review. S38 flips absence into a
+NAMED refusal across four sites, in BOTH directions (a present-and-clean datum
+must still stay silent — fail-closed must never false-red):
+
+- S38.1 (C3, hollow spec) — a valid-but-EMPTY executable node (no behaviour
+  carrier AND no interface/typed contract) is a BLOCKING `validate_ir` error
+  (`_hollow_node_reason`), not a silent format-clean PASS. It rides into
+  `validate_ir["errors"]` for the integrate/conformance readers, and is
+  deliberately EXCLUDED from the early decomposer seam so the `standardized_spec`
+  gate keeps OWNING the refusal with attribution (RED: hollow passes validate_ir;
+  GREEN: hollow is a named error, a complete node stays silent).
+- S38.2 (C1, carrier) — `spec_registry.validate_carrier` on an UNKNOWN or
+  INACTIVE-stub format returns a NOT-CHECKED marker, never `[]`==valid: a
+  standard no live oracle covers is not-checked, not clean (RED: inactive
+  carrier == []; GREEN: NOT-CHECKED refusal, an active clean carrier still []).
+- S38.3 (C4, oracle degrade) — a library-less oracle (`gherkin_errors`,
+  `jsonschema_errors`) returns a NOT-CHECKED marker (`spec_ir.not_checked` /
+  `is_not_checked`) instead of `[]`==ok; `validate_ir` surfaces it in a SEPARATE
+  `not_checked` channel (a gate refuses on it, but a hermetic runner lacking the
+  dev oracle is not falsely refused). The IR json-schema is draft-2020-12 strict
+  (`additionalProperties: False` + FormatChecker) — Pydantic-v2 `extra='forbid'`
+  equivalent (RED: absent library == []; GREEN: NOT-CHECKED, present library
+  stays silent).
+- S38.4 (C2, silent verdict) — a reviewer/approver reply with the verdict field
+  ABSENT is no longer PASS/approved: `_review_verdict_from_reply` folds a
+  verdict-less reply to REJECT, `_approved_from_reply` requires an explicit
+  truthy `approved`. The autonomous default carries an explicit verdict, so a
+  genuine sign-off is never blocked — only silence is refused (RED: missing
+  field == PASS/approved; GREEN: missing field == REJECT/not-approved, explicit
+  PASS/approved stays green).
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.

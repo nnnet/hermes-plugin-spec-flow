@@ -98,7 +98,7 @@ openapi-core, уже частично в `CONTRACT_VALIDATORS`.
 ```yaml
 graph:
   - {id: Q1, needs: [], parallel: "",   status: "[ ]", files: [tests/harness/role_worker.py, spec_flow_runner.py, tests/audit/]}
-  - {id: Q2, needs: [], parallel: "q",   status: "[ ]", files: [spec_ir.py, spec_registry.py, spec_flow_runner.py, tests/audit/]}
+  - {id: Q2, needs: [], parallel: "q",   status: "[x]", files: [spec_ir.py, spec_registry.py, spec_flow_runner.py, tests/audit/]}
   - {id: Q3, needs: [], parallel: "q",   status: "[ ]", files: [spec_ir.py, spec_flow_runner.py, tests/audit/]}
   - {id: Q4, needs: [Q1], parallel: "",  status: "[ ]", files: [spec_conformance.py, tests/harness/, tests/requirements-dev.txt, tests/audit/]}
   - {id: Q5, needs: [Q1], parallel: "",  status: "[ ]", files: [tests/harness/role_worker.py, tests/requirements-dev.txt, tests/audit/]}
@@ -115,7 +115,7 @@ Q3 → Q2 → Q1. Q4/Q5 после Q1.
 - приёмка: RED — промпт листа несёт прозу как главный носитель / contract из
   прозы; GREEN — машинный носитель первичен, один источник; Stage
 
-### Q2 `fail-closed` — убрать «отсутствие=успех» системно
+### [x] Q2 `fail-closed` — убрать «отсутствие=успех» системно
 - выход: verdict по умолчанию **не PASS** (молчание модели = FAIL/retry, не зелёный);
   оракул без либы/носителя = статус **not-checked** (не `[]`), блокирует, не молчит;
   hollow-spec = FAIL (completeness блокирует); `validate_carrier` отсутствующий/
@@ -126,6 +126,33 @@ Q3 → Q2 → Q1. Q4/Q5 после Q1.
   `required-non-empty`, `paths-non-empty`) + jsonschema 2020-12 `strict` +
   Pydantic v2 `extra='forbid'`; поднять `spec_completeness_gaps` (N6) из
   «incomplete» в блокирующую ошибку (hollow = FAIL)
+- РЕЗУЛЬТАТ (Stage S38): реализовано в spec_ir.py + spec_registry.py +
+  spec_flow_runner.py; тест `tests/audit/test_fail_closed_absence.py` (12).
+  RED-кейсы (все краснели на pre-Q2): hollow проходил `validate_ir`; inactive/
+  unknown carrier → `[]`==valid; отсутствие либы у оракула → `[]`==ok; reply
+  без поля verdict → PASS / без `approved` → True. Что сделано fail-closed:
+  (1) **hollow** — новый `_hollow_node_reason` (исполняемый узел без поведения
+  И без интерфейса/контракта) блокирует в `validate_ir["errors"]`; на раннем
+  decomposer-seam hollow ИСКЛЮЧЁН из фильтра, чтобы гейт `standardized_spec`
+  сохранил атрибуцию отказа. (2) **carrier** — `validate_carrier` на
+  unknown/inactive-stub возвращает NOT-CHECKED-маркер, не `[]`. (3) **oracle
+  degrade** — `gherkin_errors`/`jsonschema_errors` при отсутствии либы отдают
+  NOT-CHECKED (`spec_ir.not_checked`/`is_not_checked`), а не `[]`; `validate_ir`
+  выносит их в ОТДЕЛЬНЫЙ ключ `not_checked` (гейт полноты краснит, но
+  hermetic-subprocess без dev-либы не получает ложный refused). jsonschema-схема
+  IR уже strict 2020-12 (`additionalProperties:False`) + добавлен FormatChecker;
+  import обёрнут в NOT-CHECKED (нет крэша при отсутствии либы). (4) **silent
+  verdict** — `_review_verdict_from_reply` (reply без `verdict` → REJECT) и
+  `_approved_from_reply` (approved только при явном truthy) применены в трёх
+  местах (reviewer 8250, `_hitl` approver 3279, approver-on-reject 8599);
+  автономный default кладёт явный verdict → genuine sign-off не блокируется.
+  Дополнено фикстур: 1 (общий контракт `_errors` в `test_ir_closed_world.py` —
+  добавлен ключ `not_checked`, 15 тестов файла позеленели одной правкой; это
+  расширение контракта, не ослабление — errors/incomplete по-прежнему не
+  смешиваются). Прогон `tests/audit/`: 597 passed, 11 skipped; `tests/dashboard/`
+  109 passed. Коммит `feat(S38): fail-closed ...`. НЕ push. Предупреждение:
+  worktree был создан от древнего cccbf0a — сделан `git merge --ff-only 57d6f98`
+  ПЕРЕД работой (HEAD=57d6f98).
 
 ### Q3 `contract-closure-one-point` — единая точка замыкания графа ДО реализации
 - выход: одна проверка при декомпозиции: каждый pinned/entry/route/consumed-symbol/
