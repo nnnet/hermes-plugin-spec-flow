@@ -127,8 +127,23 @@ def node_carrier_format(node: Any) -> Optional[str]:
 
 def validate_carrier(fmt: str, node: Any) -> list:
     """Run the registry adapter for ``fmt`` over ``node``; empty list == valid.
-    Unknown or inactive format => empty (an inactive adapter never fires)."""
+
+    Why (S38/Q2, catalog C1): a carrier that is UNKNOWN or an INACTIVE stub was
+    never actually validated — returning ``[]`` collapsed "not-checked" into
+    "checked-and-clean" (fail-open). A standard that no live oracle covers must
+    be a NAMED not-checked refusal, so a consumer never mistakes an un-run
+    adapter for a passing one. An empty list stays reserved for an ACTIVE
+    adapter that ran and found the node clean.
+    What: unknown/inactive ``fmt`` => a single NOT-CHECKED marker; active ``fmt``
+    => the adapter's real errors (possibly empty)."""
+    import spec_ir
     rec = FORMAT_VALIDATORS.get(fmt)
-    if not rec or not rec.get("active"):
-        return []
+    if not rec:
+        return [spec_ir.not_checked(
+            "no registry adapter for carrier %r — the standard is unknown and "
+            "went unvalidated" % fmt)]
+    if not rec.get("active"):
+        return [spec_ir.not_checked(
+            "carrier %r (%s) is a declared-but-inactive stub adapter — no live "
+            "oracle validated it" % (fmt, rec.get("standard") or fmt))]
     return list(rec["validator"](node))

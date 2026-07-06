@@ -99,10 +99,15 @@ def _valid_ir() -> dict:
 
 def _errors(ir) -> list:
     rep = spec_ir.validate_ir(ir)
-    assert set(rep) == {"errors", "incomplete"}, (
-        "validate_ir returns exactly {errors, incomplete} — closed-world "
-        "violations vs honest incompleteness findings, never mixed")
-    for s in rep["errors"] + rep["incomplete"]:
+    # S38/Q2: the report now also carries a `not_checked` channel (oracles
+    # skipped for want of an optional library). The closed-world contract is
+    # unchanged: violations (`errors`) and honest incompleteness (`incomplete`)
+    # are still never mixed; not_checked is a THIRD, distinct channel.
+    assert set(rep) == {"errors", "incomplete", "not_checked"}, (
+        "validate_ir returns exactly {errors, incomplete, not_checked} — "
+        "closed-world violations vs honest incompleteness vs skipped oracles, "
+        "never mixed")
+    for s in rep["errors"] + rep["incomplete"] + rep["not_checked"]:
         assert isinstance(s, str), "findings are plain strings (P4)"
     return rep["errors"]
 

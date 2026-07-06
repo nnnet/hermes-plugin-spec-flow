@@ -503,6 +503,36 @@ def _default_approver(ctx: dict) -> dict:
             "reason": "autonomous default approval — no human attached"}
 
 
+def _review_verdict_from_reply(out: "Optional[dict]") -> str:
+    """S38/Q2 (catalog C2): fold a reviewer reply into PASS / REJECT fail-closed.
+
+    Why: a reviewer worker that returns a dict with NO ``verdict`` field went
+    silent or drifted the schema — the old default ``verdict="PASS"`` turned a
+    silent model green. Absence of an explicit verdict must NOT pass; it is a
+    REJECT (a bounded re-ask / recorded red), never a silent approval. An
+    autonomous reviewer that means to pass says so with ``verdict: PASS``.
+    What: PASS only on an explicit case-insensitive "pass"; every other value
+    (including a missing field, empty, or "reject") => "REJECT".
+    Test: tests/audit/test_fail_closed_absence.py."""
+    if not isinstance(out, dict) or "verdict" not in out:
+        return "REJECT"
+    return "PASS" if str(out.get("verdict") or "").strip().upper() == "PASS" \
+        else "REJECT"
+
+
+def _approved_from_reply(out: "Optional[dict]") -> bool:
+    """S38/Q2 (catalog C2): fold an approver reply into approved fail-closed.
+
+    Why: an approver reply lacking ``approved`` = silence; the old default
+    ``approved=True`` let a silent model wave a checkpoint through. The
+    autonomous default approver carries an EXPLICIT ``approved: True``, so
+    requiring the field present-and-truthy never blocks a genuine sign-off —
+    it only refuses silence.
+    What: True iff ``out`` is a dict carrying a truthy ``approved`` field.
+    Test: tests/audit/test_fail_closed_absence.py."""
+    return bool(isinstance(out, dict) and out.get("approved"))
+
+
 # Autonomous default agents per role. Spec/scaffold/verify are fully handled by
 # the deterministic engine; the 'implementer' is consulted at depth 'execute',
 # the 'decomposer' whenever a node arrives without metrics (i.e. the case did
@@ -3246,7 +3276,9 @@ class Engine:
         out = self.agents["approver"]({"kind": kind, "task": task, "detail": detail,
                                        "constitution": self._constitution,
                                        "policy": getattr(self, "_policy_cfg", {})}) or {}
-        approved = bool(out.get("approved", True))
+        # S38/Q2 (catalog C2): approve ONLY on an explicit truthy `approved`; a
+        # reply lacking the field (a silent approver) is not a sign-off.
+        approved = _approved_from_reply(out)
         reason = out.get("reason", "")
         self.emit("hitl", "approver", "spec-reviewer", task,
                   f"HITL {kind} checkpoint → {'approved' if approved else 'REJECTED'}",
@@ -7983,9 +8015,16 @@ def %(callable)s(environ, start_response):
                     {"format": spec_ir.IR_FORMAT, "product": {},
                      "nodes": merged})
                 # mid-growth: a symbol consumed from a node not proposed yet
-                # is pending, not phantom — the full-tree check reds it later
+                # is pending, not phantom — the full-tree check reds it later.
+                # S38/Q2: a hollow-node error is likewise NOT collected here —
+                # the standardized_spec gate below OWNS that refusal (carrier +
+                # completeness) with proper attribution; letting the raw
+                # validate_ir hollow error short-circuit would mute that gate's
+                # named FAIL milestone. validate_ir still reports hollow for the
+                # integrate/conformance readers that have no such gate.
                 errors = [x for x in rep["errors"]
-                          if "is exposed by no node" not in x]
+                          if "is exposed by no node" not in x
+                          and "hollow spec" not in x]
                 if str(frag.get("format")) != spec_ir.IR_FORMAT:
                     errors.insert(0, "node %s: ir.format %r is not %r"
                                   % (nid, frag.get("format"),
@@ -8252,8 +8291,13 @@ def %(callable)s(environ, start_response):
                           level=L_MILESTONE)
         if out is None:
             return None, ""
-        verdict = "REJECT" if str(out.get("verdict", "PASS")).upper() == "REJECT" else "PASS"
+        # S38/Q2 (catalog C2): a reply without an explicit verdict = a silent
+        # model, not a pass — fold to REJECT, not the old PASS default.
+        verdict = _review_verdict_from_reply(out)
         reasons = "; ".join(str(r) for r in out.get("reasons") or [])
+        if verdict == "REJECT" and "verdict" not in out:
+            reasons = reasons or ("reviewer reply carried no `verdict` field "
+                                  "(silent model) — fail-closed to REJECT")
         self.emit("review", "spec-reviewer", "spec-reviewer", nid,
                   "spec review (real worker)", reasons, "spec_review", verdict,
                   level=L_MILESTONE)
@@ -8601,7 +8645,9 @@ def %(callable)s(environ, start_response):
                 "kind": "spec-review", "task": nid,
                 "detail": f"reviewer rejected the spec: {reasons}",
                 "constitution": self._constitution, "policy": {}}) or {}
-            if not out.get("approved", True):
+            # S38/Q2 (catalog C2): a REJECT is overridden ONLY by an explicit
+            # human approval; a silent approver keeps the REJECT (fail-closed).
+            if not _approved_from_reply(out):
                 raise RuntimeError(
                     f"spec review rejected for {nid} and the human declined: "
                     f"{out.get('reason', '')}")
