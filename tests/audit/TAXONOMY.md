@@ -904,6 +904,27 @@ commit.
   This makes the IR live and inspectable; the deeper inversion (IR as the
   accumulated source, datums as projections) is nodes I2/I3.
   (`test_ir_incremental_write.py`)
+- S14.7 THE LIVE BODY IS JUDGED BY THE SCHEMA LIBRARY, NOT ONLY BY HAND
+  (nodes K1b + L1, library-inventory audit; user superpriority 2026-07-06
+  "use the OpenAPI library"): when the IR declares a CLOSED response schema
+  for the scenario's route+achieved status (the S21 shape — properties /
+  required / additionalProperties:false; the honest-gap bare `{}` and a
+  `const` are NOT closed and stay on the historical paths), the runner
+  validates the LIVE response body against that schema with the THIRD-PARTY
+  `openapi-schema-validator` (OAS31Validator, wrapping jsonschema). This
+  catches what the hand-rolled equals/contains/json_subset structurally
+  CANNOT: a WRONG type on a declared field, and an EXTRA field under
+  additionalProperties:false — both of which `_json_subset` (subset-by-key,
+  leaf-by-equality) silently passes, the F1 exploit at RUNTIME. The check is
+  ADDITIVE: the hand body_check kinds a schema does not express (equals /
+  contains, and json_subset for open shapes) are UNCHANGED and remain the
+  fallback. The library is imported LAZILY as a dev/test oracle
+  (tests/requirements-dev.txt); if it is absent the runner falls back to the
+  hand check with a note and never hard-crashes. This wires
+  openapi-schema-validator into genuine use, resolving its dead pin (K1b).
+  GREEN direction: an honest body matching the closed schema stays a pass;
+  a route with no closed schema is judged exactly as before.
+  (`test_scenario_body_oracle.py`)
 ## STAGE 15 — Decomposer emits IR (`test_decomposer_emits_ir.py`)
 Node E1 of the spec-IR rearchitecture (plan 2026-07-04T00-45; Stage 14 is
 reserved by the scenario-runner node B1, developed in parallel). Until now
