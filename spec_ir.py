@@ -206,6 +206,71 @@ def _node_openapi(nid: str, routes: list, reqf: dict, media: dict,
             "paths": paths}
 
 
+# H7/S13.8: a JSON Schema (draft 2020-12) — a SECOND, third-party structural
+# oracle for the IR, run alongside the hand-rolled validate_ir. It closes the
+# same top/product/node levels; validate_ir keeps the closed-world SEMANTICS
+# (route ownership, phantom consumes) a schema cannot express.
+_REQUIREMENT_SCHEMA = {"oneOf": [
+    {"type": "string"},
+    {"type": "object", "properties": {"name": {"type": "string"},
+                                      "version": {"type": "string"}},
+     "required": ["name"], "additionalProperties": False}]}
+IR_JSON_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+        "format": {"const": IR_FORMAT},
+        "product": {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string"},
+                "entry": {"type": "string"},
+                "callable": {"type": "array"},
+                "pinned_files": {"type": "array"},
+                "requirements": {"type": "array",
+                                 "items": _REQUIREMENT_SCHEMA}},
+            "additionalProperties": False},
+        "nodes": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "object",
+                "properties": {
+                    "children": {"type": "object"},
+                    "files": {"type": "array"},
+                    "openapi": {"type": "object"},
+                    "symbols": {"type": "object",
+                                "properties": {
+                                    "exposes": {"type": "array"},
+                                    "consumes": {"type": "array"}},
+                                "additionalProperties": False},
+                    "env": {"type": "array"},
+                    "scenarios": {"type": "array"},
+                    "dependencies": {"type": "array",
+                                     "items": {"type": "string"}},
+                    "effects": {"type": "array",
+                                "items": {"enum": sorted(_EFFECT_CLASSES)}}},
+                "additionalProperties": False}}},
+    "required": ["format", "nodes"],
+    "additionalProperties": False}
+
+
+def jsonschema_errors(ir: Any) -> list:
+    """H7/S13.8: validate the IR STRUCTURE with the third-party `jsonschema`
+    oracle (draft 2020-12), returning a list of human-readable errors.
+
+    Why: a second, independent witness of structure — two oracles disagreeing
+    is itself a signal (the Specmatic/Schemathesis pattern applied to the IR).
+    validate_ir keeps the closed-world semantics on top; this catches the
+    structural class (unknown key, wrong type) from a maintained library
+    rather than only hand-rolled checks.
+    Test: tests/audit/test_ir_jsonschema_oracle.py."""
+    import jsonschema  # dev/test oracle, not a runtime dependency
+    validator = jsonschema.Draft202012Validator(IR_JSON_SCHEMA)
+    return ["%s: %s" % ("/".join(str(p) for p in e.path) or "<root>",
+                        e.message)
+            for e in sorted(validator.iter_errors(ir), key=str)]
+
+
 def requirements_txt(ir: Any) -> str:
     """H5/S13.7: compile a pip requirements.txt from `product.requirements`.
 

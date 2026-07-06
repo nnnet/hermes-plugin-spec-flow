@@ -803,6 +803,17 @@ implementation commit turned them green.
   to the workspace beside ir.json. The `effects` node key (S17.5) is also
   schema-legal now, its values checked against the known effect classes.
   (`test_ir_dependencies.py`)
+- S13.8 A THIRD-PARTY STRUCTURAL ORACLE VALIDATES THE IR (node H7,
+  principles-audit — the external-oracle pattern applied to the IR itself):
+  `spec_ir.jsonschema_errors(ir)` runs a draft-2020-12 JSON Schema
+  (`IR_JSON_SCHEMA`) over the IR as a SECOND, independent witness of
+  structure, closing the same top/product/node levels validate_ir closes
+  (unknown key, wrong type, bad requirement shape). The two oracles AGREE on
+  valid IR (both silent) and on structural garbage (both red) — a divergence
+  is the signal this node exists to catch. validate_ir keeps the closed-world
+  SEMANTICS (route ownership, phantom consumes) a schema cannot express, so
+  it stays on top; jsonschema is a dev/test oracle (imported lazily), never a
+  runtime dependency of the engine. (`test_ir_jsonschema_oracle.py`)
 
 ## STAGE 14 — Scenario runner: THE interface oracle
 (`test_scenario_runner_oracle.py`, `test_scenario_engine_wiring.py`)
