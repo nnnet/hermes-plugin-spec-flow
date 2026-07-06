@@ -1817,6 +1817,43 @@ machine completeness in the standard, never a textual description. Node N5.
   badge; the IR tab, provenance (M1) and validation (M3) badges, and every
   other tab (graph/flow/timeline/agents/hitl/idle/compare/report/ir) stand.
 
+## STAGE 34 — MACHINE model of node-spec completeness for the weak-LLM criterion
+(`tests/audit/test_spec_completeness_gaps.py`)
+The single criterion (user 2026-07-06) turns on a node carrying every MANDATORY
+content aspect a weak model needs — not merely on the aspects it carries being
+format-valid. The FORMAT oracles (`validate_ir`, `gherkin_errors`,
+`validate_openapi_library`, `jsonschema_errors`) answer "is the carrier VALID?";
+none answers the orthogonal, prior "is a MANDATORY aspect ABSENT?". A node can
+pass every format oracle and still be un-buildable: no requirements, no
+error/edge cases, untyped exposed signatures — none is a format defect, so the
+format oracles stay silent (a green-but-hollow spec). Node N6 formalises
+"complete for a weak LLM" as DATA: `spec_ir.spec_completeness_gaps(node)`, a
+pure detector. It only DETECTS — the milestone that acts on the gaps is emitted
+by a separate node (N2). It reuses `spec_gherkin.is_code_leaf` /
+`_expose_incompleteness` rather than re-deriving classification or typing.
+- S34.1 the detector exists and is a pure function over a node dict; each gap is
+  a structured `{aspect, why}` record with a non-empty reason (why the aspect is
+  mandatory and empty). RED before N6: `spec_completeness_gaps` did not exist.
+- S34.2 applicability is decided by node CLASS (`_node_class`: http / code /
+  branch / other), never guessed per-field. An INAPPLICABLE aspect is n/a and
+  NEVER a gap: a non-HTTP storage leaf owns no route (http_interface n/a); an
+  HTTP leaf's contract lives in its OpenAPI document (public_api n/a); a branch
+  executes nothing itself (behavior/interface/public_api n/a). No silent skip —
+  the class gates each aspect explicitly.
+- S34.3 GREEN direction (v151 lesson): a COMPLETE node of each class yields ZERO
+  gaps — a code leaf with behaviour + typed exposes + reqs + edge Examples, and
+  an HTTP leaf owning a typed route with an error response, must both stay
+  silent. A detector audited only for misses could sink a run on one false
+  positive.
+- S34.4 RED direction — each mandatory-yet-empty aspect is NAMED: empty
+  behaviour → `behavior`; imported dependency with no requirement →
+  `requirements`; happy-path-only Gherkin (no Examples / second Scenario) →
+  `errors_edges`; HTTP route with only success responses → `errors_edges`;
+  untyped exposed signatures → `public_api`; missing files/effects →
+  `architecture`. Presence is probed, not grammar (grammar stays with the
+  Gherkin/OpenAPI oracles). RED before N6: a valid-carrier-but-holed node was
+  not reported incomplete.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.

@@ -427,6 +427,247 @@ def gherkin_errors(ir: Any) -> list:
     return out
 
 
+# --- N6/S34: machine model of node-spec completeness for the weak-LLM -------
+# criterion. This is the DEFINITION of "complete enough for a weak model to
+# build the node" expressed as DATA (a detector), NOT a gate: the milestone
+# that consumes these gaps is emitted elsewhere (N2). It answers "is a MANDATORY
+# aspect ABSENT?", which is orthogonal to the FORMAT oracles (validate_ir /
+# gherkin_errors / validate_openapi_library) that answer "is the carrier VALID?".
+# A node can pass every format oracle and still be hollow: no requirements, no
+# error/edge cases, untyped exposed signatures.
+
+# The seven content aspects a node may have to carry (plan "Модель содержания").
+COMPLETENESS_ASPECTS = (
+    "behavior",         # WHAT IT DOES — executable behaviour (scenarios/Gherkin)
+    "http_interface",   # WHAT IT CONFORMS TO — HTTP interface (openapi.paths)
+    "data_schema",      # WHAT IT CONFORMS TO — data/body shapes (JSON Schema)
+    "public_api",       # PUBLIC API — typed exposes (signatures/returns/raises)
+    "architecture",     # ARCHITECTURE — dependencies/effects/files placement
+    "requirements",     # REQUIREMENTS — declared and traceable
+    "errors_edges",     # ERRORS/EDGE CASES — failure surface (Examples / non-2xx)
+)
+
+
+def _node_class(node: Any) -> str:
+    """Classify a node so applicability of each aspect is decided by CLASS,
+    never guessed per-field.
+
+    Why: a non-HTTP storage leaf legitimately owns no route, and a branch
+    executes nothing itself — treating a missing HTTP interface as a hole on
+    either would false-red a correct spec. Applicability is class-driven.
+    What: returns "http" (owns an ``openapi`` document), "code" (a non-HTTP
+    ``.py`` leaf per spec_gherkin.is_code_leaf), "branch" (delegates via
+    ``children``) or "other" (a leaf that is none of these — e.g. a config-only
+    node), reusing the SAME leaf test the behaviour carrier gate uses.
+    Test: tests/audit/test_spec_completeness_gaps.py."""
+    if not isinstance(node, dict):
+        return "other"
+    if node.get("openapi"):
+        return "http"
+    if node.get("children"):
+        return "branch"
+    import spec_gherkin  # local import: no module-level cycle, mirrors _gherkin_parser
+    if spec_gherkin.is_code_leaf("?", node):
+        return "code"
+    return "other"
+
+
+def _http_owns_routes(node: Any) -> bool:
+    """Whether an HTTP node actually declares at least one operation path."""
+    doc = node.get("openapi")
+    return bool(isinstance(doc, dict) and doc.get("paths"))
+
+
+def _http_has_body_schema(node: Any) -> bool:
+    """Whether any HTTP operation records a request/response body schema — the
+    node's data/form contract. Presence only; validity is jsonschema's job."""
+    paths = ((node.get("openapi") or {}).get("paths") or {})
+    for ops in paths.values():
+        if not isinstance(ops, dict):
+            continue
+        for op in ops.values():
+            if not isinstance(op, dict):
+                continue
+            rb = op.get("requestBody")
+            if isinstance(rb, dict) and rb.get("content"):
+                return True
+            for resp in (op.get("responses") or {}).values():
+                if isinstance(resp, dict) and resp.get("content"):
+                    return True
+    return False
+
+
+def _http_has_error_response(node: Any) -> bool:
+    """Whether any HTTP operation declares a non-2xx (error/edge) response.
+
+    Why: a route that lists only its success status leaves the failure surface
+    unspecified — a weak LLM will not invent the error modes."""
+    paths = ((node.get("openapi") or {}).get("paths") or {})
+    for ops in paths.values():
+        if not isinstance(ops, dict):
+            continue
+        for op in ops.values():
+            if not isinstance(op, dict):
+                continue
+            for status in (op.get("responses") or {}):
+                s = str(status)
+                if s and s[0] not in ("2", "x", "X") and s != "default":
+                    return True
+                if s == "default":
+                    return True
+    return False
+
+
+def _behavior_has_edge_cases(text: Any) -> bool:
+    """Whether a Gherkin behaviour carrier declares an error/edge case as well
+    as the happy path.
+
+    Why: presence of an ``Examples:`` table or a second ``Scenario`` is the
+    machine signal that failure/boundary behaviour was specified, not just the
+    nominal flow. This is a PRESENCE probe over the raw text — the Gherkin
+    GRAMMAR itself is validated by ``feature_library_errors``/``gherkin_errors``,
+    not here.
+    What: True iff the text carries an ``Examples:`` block or two-plus
+    ``Scenario``/``Scenario Outline`` blocks."""
+    body = str(text or "")
+    if "Examples:" in body:
+        return True
+    n_scenarios = body.count("Scenario:") + body.count("Scenario Outline:")
+    return n_scenarios >= 2
+
+
+def _requirements_of(node: Any) -> list:
+    """Requirements declared on the node itself (a decomposer node carries them
+    inline; the assembled IR later lifts them to product.requirements)."""
+    reqs = node.get("requirements")
+    return reqs if isinstance(reqs, list) else []
+
+
+def _has_architecture(node: Any) -> bool:
+    """Whether the node states its placement/side-effect envelope: source
+    ``files`` plus a declared ``effects`` class list (empty list = an explicit
+    "no side effects" decision, which is still a decision)."""
+    files = node.get("files")
+    has_files = isinstance(files, list) and bool(files)
+    has_effects = isinstance(node.get("effects"), list)
+    return has_files and has_effects
+
+
+def spec_completeness_gaps(node: Any) -> list:
+    """The MACHINE model of "complete enough for a weak LLM" for ONE node.
+
+    Why: the single build criterion turns on a node carrying every MANDATORY
+    content aspect, not merely on the aspects it does carry being format-valid.
+    The format oracles (validate_ir / gherkin_errors / validate_openapi_library
+    / jsonschema_errors) never fire on a valid-but-hollow spec — no requirements,
+    no error/edge cases, untyped exposed signatures are not format defects. This
+    detector closes that orthogonal hole; it only DETECTS — the milestone that
+    acts on the gaps is emitted by a separate node (N2).
+    What: classifies the node, decides which of COMPLETENESS_ASPECTS APPLY to
+    that class (an inapplicable aspect is n/a and NEVER a gap — no silent skip),
+    and returns the applicable-yet-empty aspects as ``{aspect, why}`` records,
+    where ``why`` states why the aspect is mandatory and empty. Reuses
+    spec_gherkin's leaf test and exposes-completeness check rather than
+    re-deriving them.
+    Test: tests/audit/test_spec_completeness_gaps.py (S34)."""
+    if not isinstance(node, dict):
+        return [{"aspect": "architecture",
+                 "why": "node is not a mapping — it carries no spec at all"}]
+
+    cls = _node_class(node)
+    gaps: list = []
+
+    def gap(aspect: str, why: str) -> None:
+        gaps.append({"aspect": aspect, "why": why})
+
+    # A branch delegates to children; behaviour, interface, data and public API
+    # are n/a for it (its children carry them). Only architecture is required.
+    if cls == "branch":
+        if not (isinstance(node.get("children"), list) and node["children"]):
+            gap("architecture",
+                "a branch must name the children it delegates to")
+        return gaps
+
+    # --- behavior — mandatory for every executable node ---------------------
+    if cls in ("http", "code", "other"):
+        if cls == "http":
+            has_behavior = bool(node.get("scenarios") or node.get("behavior"))
+        else:
+            has_behavior = bool(str(node.get("behavior") or "").strip())
+        if not has_behavior:
+            gap("behavior",
+                "an executable node with no behaviour carrier "
+                "(scenarios/Gherkin) has nothing to build against")
+
+    # --- http_interface — only if the node owns routes ----------------------
+    if cls == "http":
+        if not _http_owns_routes(node):
+            gap("http_interface",
+                "an HTTP node must declare at least one operation path")
+    # (n/a for code/branch/other — they own no routes)
+
+    # --- data_schema — if the node works with data/forms --------------------
+    if cls == "http":
+        if _http_owns_routes(node) and not _http_has_body_schema(node):
+            gap("data_schema",
+                "an HTTP route records no request/response body shape — a weak "
+                "LLM cannot infer the data contract")
+    # code/other: their data contract is the typed public API, checked below.
+
+    # --- public_api — typed exposes for a code leaf -------------------------
+    if cls == "code":
+        import spec_gherkin  # local import: no module-level cycle
+        exposes = ((node.get("symbols") or {}).get("exposes") or [])
+        if not exposes:
+            gap("public_api",
+                "a non-HTTP code leaf exposes no typed callable — a weak LLM "
+                "must guess the contract")
+        else:
+            frags: list = []
+            for ent in exposes:
+                frags.extend(spec_gherkin._expose_incompleteness(ent))
+            if frags:
+                gap("public_api",
+                    "exposed callables are not fully typed "
+                    "(untyped args / missing return type / no error surface): "
+                    "%s" % "; ".join(frags))
+    # (n/a for http — its contract lives in the OpenAPI document)
+
+    # --- architecture — placement + side-effect envelope --------------------
+    if cls in ("http", "code", "other"):
+        if not _has_architecture(node):
+            gap("architecture",
+                "no source files and/or effects declared — a weak LLM has no "
+                "placement or side-effect envelope")
+
+    # --- requirements — traceable; mandatory once the node imports a dep ----
+    if cls in ("http", "code", "other"):
+        deps = node.get("dependencies")
+        deps = deps if isinstance(deps, list) else []
+        reqs = _requirements_of(node)
+        if deps and not reqs:
+            gap("requirements",
+                "the node imports dependencies %r but declares no traceable "
+                "requirement to resolve them" % deps)
+
+    # --- errors_edges — failure/boundary surface ----------------------------
+    if cls == "http":
+        if _http_owns_routes(node) and not _http_has_error_response(node):
+            gap("errors_edges",
+                "the route declares only success responses — its error surface "
+                "is unspecified")
+    elif cls in ("code", "other"):
+        # Only a node that actually carries behaviour can carry its edge cases;
+        # an absent behaviour is already reported by the behavior aspect.
+        if str(node.get("behavior") or "").strip() \
+                and not _behavior_has_edge_cases(node.get("behavior")):
+            gap("errors_edges",
+                "the behaviour spec has only a happy path (no Examples / second "
+                "Scenario) — a weak LLM will not invent the edge cases")
+
+    return gaps
+
+
 def requirements_txt(ir: Any) -> str:
     """H5/S13.7: compile a pip requirements.txt from `product.requirements`.
 

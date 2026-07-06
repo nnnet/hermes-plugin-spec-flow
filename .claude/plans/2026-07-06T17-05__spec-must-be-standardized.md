@@ -107,7 +107,7 @@ Story Mapping/User Stories и Markdown RFC — НЕ носители (это п�
 ```yaml
 graph:
   - {id: N1, needs: [],        parallel: "",     status: "[x]", files: [spec_scenarios.py, spec_ir.py, tests/requirements-dev.txt, docs/EXTERNAL-TECH-GUIDE.md, tests/audit/]}
-  - {id: N6, needs: [N1],      parallel: "",      status: "[ ]", files: [spec_ir.py, tests/audit/]}
+  - {id: N6, needs: [N1],      parallel: "",      status: "[x]", files: [spec_ir.py, tests/audit/]}
   - {id: N2, needs: [N1, N6],  parallel: "",      status: "[ ]", files: [spec_flow_runner.py, spec_ir.py, tests/audit/]}
   - {id: N3, needs: [N1],      parallel: "wave2", status: "[x]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py, spec_gherkin.py, spec_ir.py, tests/audit/]}
   - {id: N5, needs: [N1],      parallel: "wave2", status: "[x]", files: [tests/lib/live_dashboard.py, tests/dashboard/]}
@@ -256,7 +256,27 @@ N6 (модель содержания) — фундамент для гейта 
 - приёмка: RED — узел с валидным носителем, но БЕЗ требований / крайних случаев /
   типов у symbols НЕ краснеет; GREEN — `spec_completeness_gaps` называет каждый
   недостающий аспект; неприменимый аспект не попадает в gaps; Stage
-- заметки:
+- заметки: [x] Готов. Реализован `spec_ir.spec_completeness_gaps(node)` —
+  ЧИСТЫЙ детектор (данные, не гейт-эмиссия; веху эмитит N2). Семь аспектов в
+  `COMPLETENESS_ASPECTS`: behavior / http_interface / data_schema / public_api /
+  architecture / requirements / errors_edges. ПРИМЕНИМОСТЬ по классу узла
+  (`_node_class`): http (владеет `openapi`) / code (не-HTTP `.py`-лист через
+  `spec_gherkin.is_code_leaf`) / branch (`children`) / other. Неприменимый
+  аспект помечается n/a КЛАССОМ явно, НЕ попадает в gaps (http_interface n/a для
+  storage-листа; public_api n/a для HTTP-листа — его контракт в OpenAPI;
+  behavior/interface/public_api n/a для branch). Каждый gap = `{aspect, why}`,
+  why непусто. Ошибки/крайние случаи: HTTP — не-2xx responses; код — Examples /
+  второй Scenario в Gherkin (проба ПРИСУТСТВИЯ, грамматика — у gherkin/openapi
+  оракулов, не дублирую). public_api переиспользует `spec_gherkin.
+  _expose_incompleteness` (типы args/returns/raises). Локальный импорт
+  spec_gherkin (цикла нет — spec_gherkin не тянет spec_ir). RED краснел на
+  отсутствии функции + на невыявлении дыр (13 failed). Stage S34, тест
+  tests/audit/test_spec_completeness_gaps.py — 13 passed. Регрессии: N1/S31
+  (test_ir_scenarios_schema) + N3/S32 (test_decomposer_emits_gherkin) целы.
+  Полный tests/audit/ = 564 passed, 14 skipped, 1 FAIL —
+  test_gherkin_lib_oracle::test_validate_ir_folds_in_the_gherkin_oracle,
+  PRE-EXISTING на чистой базе c20dd15 (нет либы gherkin-official в окружении),
+  НЕ мой регресс (проверено git stash). Коммит: feat(S34).
 
 ## Порядок исполнения
 
