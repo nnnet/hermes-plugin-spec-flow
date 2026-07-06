@@ -2945,6 +2945,25 @@ for _spec in (cfg.get("extra_routes") or []):
     if _st == 404:
         fail("%s %s -> 404 (declared route never wired in the entry)"
              % (_method, _path))
+# Q4 (S44): drive each schema-bearing route once and DUMP its live (status,
+# body) so the engine — which alone can import the openapi oracle — conforms
+# the assembled response against its contract. The probe stays stdlib-only:
+# it only replays and reports, it does not judge.
+_conform_dump = []
+for _rp in (cfg.get("response_probes") or []):
+    try:
+        _rm, _rpath, _payload = _rp[0], _rp[1], _rp[2]
+    except Exception:
+        continue
+    _st, _raw = call(_rm, _rpath, _payload)
+    try:
+        _parsed = json.loads(_raw) if _raw else None
+    except Exception:
+        _parsed = None
+    _conform_dump.append({"route": [_rm, _rpath], "status": _st,
+                          "body": _parsed})
+if _conform_dump:
+    print("CONFORM_DUMP " + json.dumps(_conform_dump))
 print("BOOTGATE_OK")
 '''
 
@@ -11994,6 +12013,98 @@ def %(callable)s(environ, start_response):
                                "'%s': %s" % (sym, sout.strip()[:280]))
         return True, ""
 
+    def _assembled_response_schemas(self) -> dict:
+        """Q4 (S44): (METHOD, path) -> success (2xx) JSON response SCHEMA for
+        every contracted route across the assembled product, read from the
+        accepted decomposer IR fragments. Only a REAL shape is kept (the
+        spec_conformance._response_shape filter: properties/required/
+        additionalProperties:false — a bare {} or a const is not a schema to
+        conform against). This is the integrate-level twin of the leaf oracle
+        (S42): the leaf validates its own handler in isolation, this validates
+        the ASSEMBLED app's live response after wiring/entry synthesis."""
+        try:
+            import spec_conformance as _sc
+        except Exception:            # noqa: BLE001 — oracle module absent
+            return {}
+        out: dict = {}
+        reg = self.__dict__.get("_decomposer_ir_nodes") or {}
+        for frag in reg.values():
+            paths = ((frag or {}).get("openapi") or {}).get("paths") or {}
+            if not isinstance(paths, dict):
+                continue
+            for path, item in paths.items():
+                if not isinstance(item, dict):
+                    continue
+                for method, op in item.items():
+                    if not isinstance(op, dict):
+                        continue
+                    responses = op.get("responses") or {}
+                    for status in sorted(responses):
+                        if not (str(status).isdigit()
+                                and 200 <= int(status) < 300):
+                            continue
+                        shape = _sc._response_shape(op, str(status))
+                        if shape is not None:
+                            out[(str(method).upper(), str(path))] = shape
+                        break        # the one contracted success status
+        return out
+
+    def _response_probe_rows(self, schemas: dict) -> list:
+        """Q4 (S44): [[METHOD, path, payload]] to drive each route that carries
+        a response schema. The body payload reuses the contracted request-shape
+        datum (the same example the boot-gate already sends); a bodyless method
+        sends null. Deterministic — replays contracted examples, never fuzzes."""
+        try:
+            reqf = self._route_request_fields() or {}
+        except Exception:            # noqa: BLE001
+            reqf = {}
+        rows: list = []
+        for (method, path) in sorted(schemas):
+            if method in ("GET", "DELETE", "HEAD"):
+                payload = None
+            else:
+                fields = reqf.get((method, path)) or []
+                payload = {f: "probe" for f in fields}
+            rows.append([method, path, payload])
+        return rows
+
+    def _conform_assembled_responses(self, dump: list, schemas: dict) -> str:
+        """Q4 (S44): validate each dumped (route, status, body) from the live
+        assembled app against its contracted response schema with the ready
+        openapi-schema-validator oracle (engine-side, .venv — the isolated
+        python3 probe cannot import it). Returns a root-RED message on the first
+        conforming violation, or '' when every 2xx body conforms. A drift the
+        leaf oracle cannot see (a router wiring the wrong handler, an entry
+        reshaping the body) reds HERE."""
+        try:
+            from openapi_schema_validator import OAS31Validator
+        except Exception as exc:     # noqa: BLE001 — fail-closed (Q2/S38)
+            return ("response-conformance oracle unavailable (%r) — the "
+                    "assembled contract was NOT checked" % exc)
+        owners = self.__dict__.get("_route_owners") or {}
+        for row in dump or []:
+            try:
+                method = str(row["route"][0]).upper()
+                path = str(row["route"][1])
+                status = int(row.get("status") or 0)
+                body = row.get("body")
+            except Exception:        # noqa: BLE001 — malformed dump row
+                continue
+            if not (200 <= status < 300):
+                continue             # non-2xx owned by the other boot sections
+            schema = schemas.get((method, path))
+            if schema is None or not isinstance(body, (dict, list)):
+                continue
+            errors = sorted(OAS31Validator(schema).iter_errors(body), key=str)
+            if errors:
+                owner = ", ".join(sorted(owners.get((method, path), ()))) \
+                    or "unknown"
+                return ("%s %s: assembled response violates the OpenAPI "
+                        "schema (owner leaf: %s) — %s"
+                        % (method, path, owner,
+                           "; ".join(e.message for e in errors[:3])))
+        return ""
+
     def _assembled_product_boots(self) -> "tuple":
         """Un-mockable B2 at the ROOT: boot the real assembled WSGI entry in a
         fresh subprocess and drive its frozen contract. Returns (ok, detail).
@@ -12060,6 +12171,12 @@ def %(callable)s(environ, start_response):
                          ", ".join(sorted(_rowners.get((_m, _p), ())))])
         except Exception:        # noqa: BLE001
             _media_rows = []
+        # Q4 (S44): the assembled-response conformance datum — routes that carry
+        # a real response schema, and the payloads to drive them. The probe
+        # replays them and dumps the live bodies; the engine (below) conforms
+        # each against its schema with the ready oracle it alone can import.
+        _resp_schemas = self._assembled_response_schemas()
+        _resp_probes = self._response_probe_rows(_resp_schemas)
         probe_cfg = json.dumps({
             "callable": c["callable"],
             "entry_stem": Path(c["entry"]).stem,
@@ -12069,7 +12186,8 @@ def %(callable)s(environ, start_response):
             "extra_routes": extra,
             "request_shapes": _shapes,
             "config_env_vars": _cenv,
-            "route_media": _media_rows})
+            "route_media": _media_rows,
+            "response_probes": _resp_probes})
         try:
             # -I (isolated) + a scrubbed env — same sterile-oracle boundary as
             # the capability probe and the hermetic suite: the probe prepends
@@ -12083,6 +12201,19 @@ def %(callable)s(environ, start_response):
         except Exception as exc:  # noqa: BLE001
             return False, f"boot-gate could not run the product: {exc}"
         if "BOOTGATE_OK" in sout:
+            # Q4 (S44): the boot succeeded — now conform the LIVE assembled
+            # responses against their OpenAPI schemas with the engine-side
+            # oracle (the isolated probe dumped the bodies it could not judge).
+            if _resp_schemas and "CONFORM_DUMP " in sout:
+                raw = sout.split("CONFORM_DUMP ", 1)[1].splitlines()[0]
+                try:
+                    dump = json.loads(raw)
+                except Exception:    # noqa: BLE001 — malformed dump
+                    dump = []
+                bad = self._conform_assembled_responses(dump, _resp_schemas)
+                if bad:
+                    return False, ("assembled product violates its response "
+                                   "contract: " + bad[:300])
             return True, ""
         marker = "BOOTGATE_FAIL"
         detail = sout.split(marker, 1)[1].strip() if marker in sout else sout.strip()

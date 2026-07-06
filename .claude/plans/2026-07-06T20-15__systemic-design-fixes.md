@@ -101,7 +101,7 @@ graph:
   - {id: Q2, needs: [], parallel: "q",   status: "[x]", files: [spec_ir.py, spec_registry.py, spec_flow_runner.py, tests/audit/]}
   - {id: Q3, needs: [], parallel: "q",   status: "[x]", files: [spec_ir.py, spec_flow_runner.py, tests/audit/]}
   - {id: Q4, needs: [Q1], parallel: "",  status: "[x]", files: [spec_conformance.py, tests/harness/, tests/requirements-dev.txt, tests/audit/]}
-  - {id: Q5, needs: [Q1], parallel: "",  status: "[x]", files: [tests/harness/role_worker.py, tests/requirements-dev.txt, tests/audit/]}
+  - {id: Q5, needs: [Q1], parallel: "",  status: "[~]", files: [tests/harness/role_worker.py, tests/requirements-dev.txt, tests/audit/]}
   - {id: Q6, needs: [],   parallel: "",  status: "[x]", files: [tests/harness/llm_backend.py, tests/audit/]}
 ```
 Зоны Q1/Q2/Q3 толкаются в `spec_flow_runner.py` → worktree, порядок влития
@@ -200,9 +200,19 @@ Q3 → Q2 → Q1. Q4/Q5 после Q1.
   что верхнеуровневый пин пропускает. Импорт НЕ обёрнут (fail-closed, как Q2):
   нет либы = жёсткий фейл, не skip. Новых зависимостей нет —
   openapi-schema-validator уже в requirements-dev.txt. Тест:
-  tests/audit/test_conformance_oracle.py. Отложено (не в атоме): schemathesis
-  property-fuzz + openapi-core round-trip против СОБРАННОГО приложения на
-  integrate — здесь только листовой срез (response-schema)
+  tests/audit/test_conformance_oracle.py.
+- ОТЛОЖЕННОЕ ДОДЕЛАНО: S44 (640 audit green) — конформанс СОБРАННОГО приложения
+  на integrate. `_assembled_response_schemas` (схемы ответов из IR) +
+  `_response_probe_rows` (детерминированные replay-строки) + probe печатает
+  `CONFORM_DUMP` (изолированный python3 не может импортить оракул — печатает
+  тела) + `_conform_assembled_responses` валидирует их движком (.venv,
+  openapi-schema-validator), RED с именем маршрута+владельца при дрейфе.
+  Ловит то, что листовой оракул не видит: роутер завёл не тот хендлер, entry
+  переформатировал тело. Тест: tests/audit/test_assembled_conformance.py.
+  ОСТАЁТСЯ (opt-in, записано): schemathesis property-fuzz того же приложения —
+  либа уже в deps, но hypothesis-входы недетерминированы (конфликт с правилом
+  воспроизводимого прогона) + 4.x API тяжелее; детерминированный round-trip по
+  контрактным примерам ценнее и сделан первым
 - готовое: Specmatic `--strict` (contract-tests, negative-paths) + openapi-core
   (runtime-валидация ответа против схемы) + Schemathesis (property-фаззинг) +
   pytest-bdd/behave (исполнить node Gherkin против кода) — всё уже частично в
@@ -221,6 +231,53 @@ Q3 → Q2 → Q1. Q4/Q5 после Q1.
   носителю. Ноль новых зависимостей (dspy НЕ импортируется). Тест:
   tests/audit/test_signature_prompt.py. Полный DSPy-фреймворк (LLM-оптимизатор)
   — отдельный follow-up по явному запросу пользователя
+- СТАТУС `[~]` частично: сдан детерминированный срез (signature-блок из IR без
+  зависимостей). НЕ сдан полный DSPy-путь (реальный `dspy.Signature` +
+  оптимизатор + сравнение на живом прогоне). Полный план ниже.
+
+  #### Альтернативный ПОЛНЫЙ план Q5 с DSPy (не начат — нужен явный опт-ин)
+  Цель: заменить рукописную сборку промпта исполнителя на `dspy.Signature`/
+  `dspy.Module`, где контракт узла = типизированные поля, а сам промпт
+  компилируется/оптимизируется DSPy под конкретную (слабую) модель.
+
+  Граф под-узлов (все needs: Q1 закрыт):
+  ```yaml
+  graph:
+    - {id: Q5D1, needs: [],     status: "[ ]", files: [tests/requirements-dev.txt]}
+    - {id: Q5D2, needs: [Q5D1], status: "[ ]", files: [tests/harness/dspy_signature.py]}
+    - {id: Q5D3, needs: [Q5D2], status: "[ ]", files: [tests/harness/dspy_signature.py, tests/harness/llm_backend.py]}
+    - {id: Q5D4, needs: [Q5D2], status: "[ ]", files: [tests/harness/role_worker.py]}
+    - {id: Q5D5, needs: [Q5D3, Q5D4], status: "[ ]", files: [tests/audit/, tests/eval/]}
+    - {id: Q5D6, needs: [Q5D5], status: "[ ]", files: [.claude/plans/]}
+  ```
+  - Q5D1 `dep` — добавить `dspy-ai` (тянет litellm) в requirements-dev.txt;
+    пиннинг версии; проверить оффлайн-импорт в аудит-гейте (не рвёт CI без сети).
+  - Q5D2 `signature` — `class ImplementLeaf(dspy.Signature)`: входы
+    `contract: str` (машинный носитель), `dependencies: str`, `acceptance: str`,
+    `env: str`; выходы `code: str`, `tests: str`, `exposes: str`. Билдер
+    `signature_from_ir(node, frag)` заполняет поля из IR-носителя (переиспользует
+    `machine_carrier_of`). Приёмка: детерминированное заполнение из известного IR.
+  - Q5D3 `LM-адаптер` — обернуть `llm_backend.ask` как `dspy.LM`, чтобы DSPy
+    ходил через ЕДИНЫЙ бэкенд (free OpenRouter/headers), без прямых вызовов
+    провайдера (правило: тесты только через общий бэкенд). Приёмка: dummy-LM
+    прогон возвращает структуру полей.
+  - Q5D4 `интеграция` — в `role_worker`: при `SPEC_FLOW_DSPY_IMPL=1` исполнитель
+    идёт через `dspy.Predict(ImplementLeaf)` вместо ручного промпта; иначе
+    сегодняшний путь. Взаимоисключимо с `SPEC_FLOW_SIGNATURE_PROMPT`.
+  - Q5D5 `оценка` — offline eval-набор: N листов p6, метрика реализации
+    (проходят ли скомпилированные тесты + конформанс-оракул S42) для трёх
+    режимов: baseline (проза), Q5-lite (signature-блок), Q5-DSPy. Тот же
+    llm_backend, та же слабая free-модель. Приёмка: таблица метрик, решение
+    расширять/откатить по данным, не по мнению.
+  - Q5D6 `решение` — записать вердикт в план: DSPy даёт прирост на слабой
+    модели → мигрировать основной путь; нет → оставить Q5-lite, DSPy убрать
+    из deps. Приёмка: зафиксированное решение + числа.
+
+  Риски: dspy-ai + litellm — большой транзитивный хвост (версионные конфликты
+  с текущими pinned либами); DSPy-оптимизатор недетерминирован (нужен кэш
+  скомпилированного промпта, иначе прогон невоспроизводим — конфликт с
+  правилом «прогон не зависит от сессии»); LLM-зависимая оценка требует квоты
+  free-пула. Поэтому по умолчанию — Q5-lite, полный путь только по опт-ину.
 
 ### [x] Q6 `prompt-capture` — каждый вызов ЛЛМ сохраняется в файл, связан с логом
 - выход: КАЖДЫЙ вызов модели (implementer/reviewer/decomposer/diagnoser/tester —

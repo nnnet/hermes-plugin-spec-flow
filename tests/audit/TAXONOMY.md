@@ -2034,6 +2034,31 @@ dependency (the framework's LLM optimizer is a deferred, opt-in follow-up).
 - S43.4 (zero new dep) — role_worker never imports dspy; the pilot is pure
   deterministic rendering.
 
+## S44 — conformance of the ASSEMBLED product at integrate (node Q4 deferred)
+Plan 2026-07-06T20-15. The integrate-level twin of S42: S42 validates a leaf
+handler in isolation, S44 validates the LIVE assembled app after wiring + entry
+synthesis, where a router pointing at the wrong handler or an entry reshaping a
+body first becomes visible. The isolated `python3 -I` boot probe cannot import
+the oracle, so the probe DUMPS the live bodies and the engine (under its .venv)
+judges — isolation for driving, the ready library for the verdict.
+- S44.1 (schemas from IR) — `_assembled_response_schemas` collects
+  (METHOD, path) -> success response schema across the accepted decomposer IR
+  fragments, real shapes only (the `_response_shape` filter).
+- S44.2 (deterministic replays) — `_response_probe_rows` builds one row per
+  schema-bearing route: a contracted payload for a bodied method, null for GET.
+  Replayed examples, never fuzzed — reproducible.
+- S44.3 (conform the live dump) — `_conform_assembled_responses` runs the ready
+  openapi-schema-validator over each dumped 2xx body; a violation reds with a
+  root message naming the route AND its owner leaf. A missing oracle is a hard
+  fail-closed message (Q2/S38), never a silent pass. The probe emits
+  `CONFORM_DUMP`; the boot-gate parses it after `BOOTGATE_OK` and fails the gate
+  on the first violation.
+Still deferred (recorded, opt-in): schemathesis property-fuzzing of the same
+assembled app — it is already a dep but its hypothesis-driven inputs are
+non-deterministic (conflict with the reproducible-run rule) and its 4.x API is
+heavier; the deterministic contracted-example round-trip above is the
+higher-value slice and lands first.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.
