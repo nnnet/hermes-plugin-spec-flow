@@ -59,12 +59,23 @@ def _engine(tmp_path, interface_policy="ir-required", routes=None):
 
 def _valid_openapi(nid, method, path, status="200",
                    media="application/json"):
-    """A per-node OpenAPI 3.1 document the LIBRARY accepts unmodified."""
-    op = {"responses": {str(status): {"description": "success",
-                                      "content": {media: {"schema": {}}}}}}
+    """A per-node OpenAPI 3.1 document the LIBRARY accepts unmodified. It
+    declares an error response (reusing the operation media) so the route's
+    failure surface is specified — the N6 errors_edges completeness aspect."""
+    op = {"responses": {
+        str(status): {"description": "success",
+                      "content": {media: {"schema": {}}}},
+        "404": {"description": "error", "content": {media: {"schema": {}}}}}}
     return {"openapi": spec_ir.OPENAPI_VERSION,
             "info": {"title": "node %s interface" % nid, "version": "1"},
             "paths": {path: {method.lower(): op}}}
+
+
+def _http_scenario(method, path, status):
+    """One closed behaviour scenario — the N6 behavior aspect for an http node."""
+    return {"requirement": "%s %s" % (method, path),
+            "when": {"method": method, "path": path},
+            "then": {"status": int(str(status))}}
 
 
 def _library_invalid_openapi(nid, method="GET", path="/x"):
@@ -151,7 +162,8 @@ def test_valid_node_openapi_passes_the_library_seam(tmp_path):
     decomposer_ir PASS still journals. Test: this function."""
     e = _engine(tmp_path)
     out = {"atomic": True, "ir": _machine_part({"core": {
-        "files": ["src/core.py"],
+        "files": ["src/core.py"], "effects": [],
+        "scenarios": [_http_scenario("POST", "/notes", "201")],
         "openapi": _valid_openapi("core", "POST", "/notes", "201")}})}
     assert e._accept_decomposer_ir({"id": "core"}, out) == [], (
         "a standard-valid node OpenAPI document must be accepted — the "
@@ -172,7 +184,8 @@ def test_route_lives_in_machine_openapi_from_the_first_step(tmp_path):
     assembly. Test: this function (route in doc.paths, library-clean, owned)."""
     e = _engine(tmp_path, routes=[("GET", "/ping")])
     out = {"atomic": True, "ir": _machine_part({"core": {
-        "files": ["src/core.py"],
+        "files": ["src/core.py"], "effects": [],
+        "scenarios": [_http_scenario("GET", "/ping", "200")],
         "openapi": _valid_openapi("core", "GET", "/ping", "200")}})}
     assert e._accept_decomposer_ir({"id": "core"}, out) == []
     reg = e.__dict__.get("_decomposer_ir_nodes") or {}

@@ -1854,6 +1854,45 @@ by a separate node (N2). It reuses `spec_gherkin.is_code_leaf` /
   Gherkin/OpenAPI oracles). RED before N6: a valid-carrier-but-holed node was
   not reported incomplete.
 
+## STAGE 35 — SEPARATE engine gate: every node spec is machine-standard AND
+complete, else not READY (`tests/audit/test_standardized_spec_gate.py`)
+The user's hard rule (2026-07-06): a node spec must be in a machine STANDARD
+from a registry — never prose — AND complete for a weak LLM, "checked as a
+SEPARATE gate inside the engine". K2/S22 (`decomposer_openapi`) validates only
+http nodes' OpenAPI grammar; N3/S32 (`decomposer_gherkin`) validates only
+non-HTTP code leaves' Gherkin+symbols. Two holes neither owns: (1) FORMAT
+COVERAGE — a leaf that is neither http nor a code leaf carries no machine
+carrier from the registry at all (prose-only) and slips through both gates;
+(2) COMPLETENESS — a format-VALID carrier can still be hollow (an http route
+with only success responses, a dependency with no traceable requirement). Node
+N2 adds ONE gate, `standardized_spec`, at the `_accept_decomposer_ir` seam that
+for EVERY node COLLECTS (never re-derives) both facts: the registry
+(`spec_registry.FORMAT_VALIDATORS`, a DATA table `format -> validator` — a new
+standard is a new adapter row, active adapters openapi/gherkin/jsonschema, stub
+adapters asyncapi/protobuf/graphql/smithy/typespec inert until a node of the
+class appears) answers "is there a valid machine carrier?"; `spec_ir.spec_
+completeness_gaps` (N6) answers "is it complete?". A miss is an attributable
+`standardized_spec` FAIL milestone (the decomposer_openapi/gherkin precedent)
+and the fragment does NOT enter the IR registry — the node is not READY until
+the single criterion is met.
+- S35.1 a prose-only node (no registry carrier) is a NAMED `standardized_spec`
+  FAIL, never a silent pass; the refused fragment stays out of the IR registry.
+- S35.2 a format-VALID but INCOMPLETE carrier (an http route with only a
+  success response) reds on `standardized_spec` — the milestone that finally
+  acts on the N6 gaps.
+- S35.3/S35.4 both directions: a COMPLETE http node (valid OpenAPI + error
+  response + scenario + effects) and a COMPLETE non-HTTP code leaf (typed
+  exposes + behaviour feature + edge cases) clear the gate with a NAMED PASS —
+  the gate must not false-red a conforming node.
+- REGISTRY IS DATA: `FORMAT_VALIDATORS` is asserted a `format -> {validator,
+  active}` table; active adapters resolve to a real oracle callable, stub
+  adapters are declared `active=False` — extensibility is a row, not a branch.
+NOTE (fixtures): completing this gate correctly made 8 pre-existing audit
+fixtures legitimately red — their http/code nodes predated the completeness
+invariant (missing scenarios/effects/error-response). They were COMPLETED to
+the N6 model (conformance to the new invariant, not test-softening), never the
+gate weakened.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.

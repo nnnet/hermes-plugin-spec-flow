@@ -73,13 +73,23 @@ def _doc(nid, paths):
             "paths": paths}
 
 
+def _error_op():
+    """A minimal non-2xx operation response — closes the N6 errors_edges aspect
+    (a route that lists only its success status leaves the failure surface
+    unspecified). Carries a JSON body so it is not a missing-media gap."""
+    return {"description": "error",
+            "content": {"application/json": {"schema": {}}}}
+
+
 def _notes_node():
+    post = _op("201", required=["text"])
+    post["responses"]["400"] = _error_op()
+    get = _op("200")
+    get["responses"]["404"] = _error_op()
     return {
         "files": ["src/notes_api.py"],
-        "openapi": _doc("notes_api", {
-            "/notes": {"post": _op("201", required=["text"]),
-                       "get": _op("200")},
-        }),
+        "effects": [],  # explicit placement/side-effect envelope (N6)
+        "openapi": _doc("notes_api", {"/notes": {"post": post, "get": get}}),
         "scenarios": [{
             "requirement": "notes-roundtrip",
             "given": {"state": [{"method": "POST", "path": "/notes",
@@ -92,9 +102,16 @@ def _notes_node():
 
 
 def _health_node():
-    return {"files": ["src/health.py"],
-            "openapi": _doc("health", {
-                "/health": {"get": _op("200", const={"status": "ok"})}})}
+    get = _op("200", const={"status": "ok"})
+    get["responses"]["503"] = _error_op()
+    return {"files": ["src/health.py"], "effects": [],
+            "openapi": _doc("health", {"/health": {"get": get}}),
+            "scenarios": [{
+                "requirement": "health-ok",
+                "when": {"method": "GET", "path": "/health"},
+                "then": {"status": "200", "media": "application/json",
+                         "body_check": {"json_subset": [{"status": "ok"}]}},
+            }]}
 
 
 def _ir(nodes):

@@ -55,9 +55,15 @@ def _engine(tmp_path):
 
 
 def _openapi(nid, method, path, status="200", media="application/json",
-             required=None):
+             required=None, error_status=None):
     op = {"responses": {str(status): {"description": "success",
                                       "content": {media: {"schema": {}}}}}}
+    if error_status is not None:
+        # a declared error response closes the N6 errors_edges aspect; it reuses
+        # the operation's own media so it neither reads as a missing-media
+        # incompleteness (validate_ir) nor pollutes the route media datum.
+        op["responses"][str(error_status)] = {
+            "description": "error", "content": {media: {"schema": {}}}}
     if required is not None:
         op["requestBody"] = {"required": True, "content": {
             "application/json": {"schema": {
@@ -66,6 +72,27 @@ def _openapi(nid, method, path, status="200", media="application/json",
     return {"openapi": spec_ir.OPENAPI_VERSION,
             "info": {"title": "node %s interface" % nid, "version": "1"},
             "paths": {path: {method.lower(): op}}}
+
+
+def _http_scenario(method, path, status=200):
+    """One closed behaviour scenario for an http node — the N6 behavior aspect
+    (an http node must carry scenarios, not only its OpenAPI document)."""
+    return {"requirement": "%s %s" % (method, path),
+            "when": {"method": method, "path": path},
+            "then": {"status": int(status)}}
+
+
+def _http_leaf(nid, method, path, status="200", media="application/json",
+               required=None, files=None):
+    """A COMPLETE http leaf node: OpenAPI carrier (with an error response) +
+    behaviour scenario + an explicit placement/side-effect envelope
+    (files+effects), so it satisfies every applicable N6 completeness aspect and
+    clears standardized_spec."""
+    return {"files": files or ["src/%s.py" % nid],
+            "effects": [],
+            "scenarios": [_http_scenario(method, path, status)],
+            "openapi": _openapi(nid, method, path, status, media, required,
+                                error_status=404)}
 
 
 def _machine_part(nodes):
@@ -161,17 +188,15 @@ def test_unknown_key_is_refused_naming_the_value(tmp_path):
 
 def test_duplicate_route_across_calls_is_refused(tmp_path):
     e = _engine(tmp_path)
-    first = {"atomic": True, "ir": _machine_part({"core": {
-        "files": ["src/core.py"],
-        "openapi": _openapi("core", "POST", "/notes", "201",
-                            required=["text"])}})}
+    first = {"atomic": True, "ir": _machine_part({
+        "core": _http_leaf("core", "POST", "/notes", "201",
+                           required=["text"])})}
     assert e._accept_decomposer_ir({"id": "core"}, first) == []
     assert _gate_events(e, verdict="PASS"), (
         "an accepted machine part must be journaled (attributable PASS)")
-    rival = {"atomic": True, "ir": _machine_part({"web": {
-        "files": ["src/web.py"],
-        "openapi": _openapi("web", "POST", "/notes", "201",
-                            required=["text"])}})}
+    rival = {"atomic": True, "ir": _machine_part({
+        "web": _http_leaf("web", "POST", "/notes", "201",
+                          required=["text"])})}
     errs = e._accept_decomposer_ir({"id": "web"}, rival)
     assert errs and any("core" in x and "web" in x for x in errs), (
         "the merged-document validation must red the SECOND claim naming "
@@ -189,10 +214,9 @@ def test_ir_wins_over_prose_for_route_ownership(tmp_path):
     node = {"id": "web_ui", "title": "web page over /notes",
             "requirement": "render the notes list (GET /notes data) on "
                            "GET /ui as server-side HTML"}
-    out = {"atomic": True, "ir": _machine_part({"web_ui": {
-        "files": ["src/web_ui.py"],
-        "openapi": _openapi("web_ui", "GET", "/ui", "200",
-                            media="text/html")}})}
+    out = {"atomic": True, "ir": _machine_part({
+        "web_ui": _http_leaf("web_ui", "GET", "/ui", "200",
+                             media="text/html")})}
     assert e._accept_decomposer_ir(node, out) == []
     owned = e._leaf_owned_routes(node)
     assert owned == [("GET", "/ui")], (
@@ -221,12 +245,10 @@ def test_prose_fallback_survives_and_is_journaled(tmp_path):
 def test_ir_request_fields_and_media_win(tmp_path):
     e = _engine(tmp_path)
     out = {"atomic": True, "ir": _machine_part({
-        "core": {"files": ["src/core.py"],
-                 "openapi": _openapi("core", "POST", "/notes", "201",
-                                     required=["text", "author"])},
-        "web_ui": {"files": ["src/web_ui.py"],
-                   "openapi": _openapi("web_ui", "GET", "/ui", "200",
-                                       media="text/html")}})}
+        "core": _http_leaf("core", "POST", "/notes", "201",
+                           required=["text", "author"]),
+        "web_ui": _http_leaf("web_ui", "GET", "/ui", "200",
+                             media="text/html")})}
     assert e._accept_decomposer_ir({"id": "core"}, out) == []
     reqf = e._route_request_fields()
     assert reqf.get(("POST", "/notes")) == ["text", "author"], (
@@ -254,9 +276,9 @@ def test_prompt_asks_for_machine_part_with_example_bodies():
 
 def test_missing_body_stays_an_honest_gap_never_invented(tmp_path):
     e = _engine(tmp_path)
-    frag = {"files": ["src/core.py"],
+    frag = {"files": ["src/core.py"], "effects": [],
             "openapi": _openapi("core", "POST", "/notes", "201",
-                                required=["text"]),
+                                required=["text"], error_status=404),
             "scenarios": [{"requirement": "core",
                            "when": {"method": "POST", "path": "/notes"},
                            "then": {"status": "201"}}]}

@@ -111,6 +111,7 @@ def _complete_db_layer_node():
          "returns": "list[dict]", "raises": []},
     ]
     return {"files": ["src/db_layer.py"],
+            "effects": [],  # explicit placement/side-effect envelope (N6 architecture)
             "behavior": feature,
             "symbols": {"exposes": exposes}}
 
