@@ -70,8 +70,8 @@ graph:
   - {id: K1, needs: [],               parallel: "",        status: "[~]", files: [spec_openapi.py, tests/audit/, tests/requirements-dev.txt]}
   - {id: K2, needs: [K1],             parallel: "",        status: "[ ]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py, spec_ir.py]}
   - {id: K3, needs: [K2],             parallel: "",        status: "[ ]", files: [spec_flow_runner.py]}
-  - {id: K1b, needs: [K1],            parallel: "kl",      status: "[~]", files: [spec_scenarios.py, tests/requirements-dev.txt, tests/audit/]}
-  - {id: L1, needs: [K1b],            parallel: "kl",      status: "[~]", files: [spec_scenarios.py, tests/audit/]}
+  - {id: K1b, needs: [K1],            parallel: "kl",      status: "[x]", files: [spec_scenarios.py, tests/requirements-dev.txt, tests/audit/]}
+  - {id: L1, needs: [K1b],            parallel: "kl",      status: "[x]", files: [spec_scenarios.py, tests/audit/]}
   - {id: H1b, needs: [],              parallel: "kl",      status: "[x]", files: [tests/harness/diff_repair.py, tests/audit/]}
   - {id: K4, needs: [K2],             parallel: "",        status: "[ ]", files: [tests/harness/openapi_diff.py, spec_openapi.py]}
   - {id: H8, needs: [],               parallel: "wave-h1", status: "[x]", files: [spec_flow_runner.py]}
@@ -474,20 +474,20 @@ _FallbackMachine — graceful), lint_openapi (K1 — доп-правила по�
 wsgiref/ThreadingHTTPServer/pyyaml (stdlib-first, не 3rd-party NIH).
 Реальные долги — ниже узлами.
 
-### [ ] K1b `wire-or-drop-schema-validator` — мёртвая либа в requirements
+### [x] K1b `wire-or-drop-schema-validator` — мёртвая либа в requirements
 - выход: openapi-schema-validator==0.9.0 запинен, но НИГДЕ не используется —
   либо подключить к валидации тел (L1), либо убрать из requirements-dev.txt
 - приёмка: grep находит импорт либы ИЛИ её нет в requirements (честность
   зависимостей, не мёртвый груз)
-- заметки: нулевой риск; зона не пересекается с J1
+- заметки: ГОТОВ (объединён с L1) — openapi-schema-validator теперь реально используется (OAS31Validator в spec_scenarios._schema_validator), мёртвый пин закрыт использованием
 
-### [ ] L1 `scenario-body-oracle` — тела сценариев валидировать либой
+### [x] L1 `scenario-body-oracle` — тела сценариев валидировать либой
 - выход: тела ответов сценариев (spec_scenarios _judge/_json_subset) валидируем
   openapi-schema-validator/jsonschema против contracted response-схемы; ручной
   subset остаётся фолбэком
 - приёмка: тело, нарушающее схему, ловится ЛИБОЙ (красный+зелёный); ровно то,
   подо что стоит openapi-schema-validator в requirements (закрывает K1b)
-- заметки: средний риск, зона spec_scenarios
+- заметки: ГОТОВ — коммиты a14bc2e (RED) + 886a6b6, влит. Тела ответов сценариев валидируются OAS31Validator против ЗАКРЫТОЙ схемы (типы+лишние поля под additionalProperties:false), ручной subset — фолбэк, ничего не ослаблено; либа отсутствует → note, не краш. TAXONOMY S14.7. Аудит 518, сценарии 52/52
 
 ### [x] H1b `diff-repair-nih-record` — записать причину рукописного diff
 - выход: причина рукописного SEARCH/REPLACE (контракт формата с моделью,
