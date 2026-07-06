@@ -77,6 +77,8 @@ graph:
   - {id: H8, needs: [],               parallel: "wave-h1", status: "[x]", files: [spec_flow_runner.py]}
   - {id: G3, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/decomposition/]}
   - {id: G4, needs: [G3],             parallel: "",        status: "[x]", files: [tests/]}
+  - {id: M1, needs: [I3, K3],         parallel: "dash",    status: "[x]", files: [tests/lib/live_dashboard.py]}
+  - {id: M2, needs: [K4],             parallel: "dash",    status: "[~]", files: [spec_flow_runner.py, tests/harness/openapi_diff.py, tests/audit/]}
 ```
 
 Зоны (`files`) — что узел МЕНЯЕТ; пересечение зон = последовательность
@@ -811,3 +813,22 @@ beyond this file», а контракт требует добавить get_ping
   историческое поведение без изменений. Веха MILESTONE (не шёпот
   DETAIL) с активной политикой. Регрессия 621 — ни один полный build
   не полагался на тихую прозу (все на IR-декомпозере)
+
+### M1 `dashboard-full-ir-openapi-spec` — дашборд показывает весь IR + OpenAPI-first
+- выход: `tests/lib/live_dashboard.py` — IR-таб рендерит КАЖДЫЙ датум ноды
+  (маршруты + origin-бейдж, exposes/consumes, env, deps, effects,
+  Given/When/Then сценарии, files, children); панель спеки ноды несёт
+  бейдж происхождения формата (машинный OpenAPI 3.1 — primary, проза —
+  derived / compiled from OpenAPI). ir.json перечитывается без кэша.
+- приёмка: `pytest tests/dashboard/test_dashboard_ir.py` зелёный (15);
+  Stage S28 в TAXONOMY; RED доказан на базе a419bb0 (7 упавших:
+  scenarios / files+children / given.state / provenance×3 / client-page
+  badge), GREEN только с реализацией.
+- заметки: ГОТОВ. Новое: `_ir_scenario_html` (G/W/T блок, Given
+  опускается когда пусто), scenarios/files/children блоки в
+  `_ir_node_html`, `_ir_nodes` (fresh-read ir.json, деградирует к {}),
+  `_node_spec_provenance_html` (бейдж primary/derived; пусто без
+  openapi.paths), проброс `spec_primary` в per-node state, клиентский
+  spec-таб штампует бейдж над производной прозой. `.irscn`/`.specprov`/
+  `.prov-primary`/`.prov-derived` CSS. Зона — только дашборд и его тест,
+  с M2 не пересекается. Регрессия 631 passed / 11 skipped.

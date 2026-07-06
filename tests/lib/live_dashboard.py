@@ -1177,17 +1177,66 @@ def _ir_node_routes(openapi: dict) -> str:
             + "".join(rows) + "</tbody></table>")
 
 
-def _ir_node_html(nid: str, node: dict) -> str:
-    """Render one IR node section: routes table + optional symbol/env/dep/effect
-    blocks, each omitted when absent.
+def _ir_scenario_html(sc: dict) -> str:
+    """Render one Given/When/Then scenario as a compact block.
 
-    Why: a node is the unit of ownership in the IR; its whole contracted surface
-    lives here, so the tab reads node-by-node like ir.json itself.
+    Why: scenarios are the executable meaning of a node's contracted surface
+    (the IR's closed G/W/T schema, S13.4) — a reader must see the precondition
+    (given: env + prior when-steps), the action (when: method+path) and the
+    expected outcome (then: status/media/body_check), not only the raw dump.
+    What: emits a .irscn block; Given is omitted when absent, When/Then always
+    present. given.state prior steps are rendered as METHOD path lines.
+    Test: a scenario with given.env + given.state + when + then yields text
+    containing 'Given', 'When', 'Then', the env var, both HTTP methods and the
+    status.
+    """
+    when = sc.get("when") or {}
+    then = sc.get("then") or {}
+    req = sc.get("requirement")
+    parts = ['<div class="irscn">']
+    if req:
+        parts.append('<p class=muted>сценарий · %s</p>' % _esc(req))
+    given = sc.get("given") or {}
+    if given:
+        gbits: list[str] = []
+        genv = given.get("env") or {}
+        for k in sorted(genv):
+            gbits.append("<code>%s=%s</code>" % (_esc(k), _esc(genv[k])))
+        for step in (given.get("state") or []):
+            gbits.append("<code>%s %s</code>" % (
+                _esc((step.get("method") or "").upper()),
+                _esc(step.get("path") or "")))
+        if gbits:
+            parts.append("<div><b>Given</b> " + " · ".join(gbits) + "</div>")
+    parts.append("<div><b>When</b> <code>%s %s</code></div>" % (
+        _esc((when.get("method") or "").upper()), _esc(when.get("path") or "")))
+    tbits: list[str] = []
+    if then.get("status") not in (None, ""):
+        tbits.append("статус <code>%s</code>" % _esc(then.get("status")))
+    if then.get("media"):
+        tbits.append("media <code>%s</code>" % _esc(then.get("media")))
+    bc = then.get("body_check")
+    if bc:
+        tbits.append("тело <code>%s</code>" % _esc(
+            json.dumps(bc, ensure_ascii=False, sort_keys=True)))
+    parts.append("<div><b>Then</b> " + " · ".join(tbits) + "</div>")
+    parts.append("</div>")
+    return "".join(parts)
+
+
+def _ir_node_html(nid: str, node: dict) -> str:
+    """Render one IR node section: routes table + optional symbol/env/dep/effect/
+    scenario/files/children blocks, each omitted when absent.
+
+    Why: a node is the unit of ownership in the IR; its WHOLE contracted surface
+    lives here, so the tab reads node-by-node like ir.json itself — every datum
+    the accumulator carries (routes, symbols, env, deps, effects, Given/When/Then
+    scenarios, owned files and child node ids) is visible, not just the raw dump.
     What: emits an .irnode block with a heading, the routes table, x-spec-flow-
-    gaps, exposes/consumes symbols, env, dependencies and effects — skipping any
-    block whose datum is missing.
-    Test: a node with symbols+env+deps+effects emits all four blocks; a node with
-    only routes emits just the table.
+    gaps, exposes/consumes symbols, env, dependencies, effects, scenarios, files
+    and children — skipping any block whose datum is missing.
+    Test: a node with symbols+env+deps+effects+scenarios+files+children emits all
+    blocks; a node with only routes emits just the table.
     """
     parts = ['<div class="irnode">', "<h4>%s</h4>" % _esc(nid)]
     openapi = node.get("openapi") or {}
@@ -1230,8 +1279,73 @@ def _ir_node_html(nid: str, node: dict) -> str:
         parts.append("<p class=muted>эффекты (effects):</p><ul>"
                      + "".join("<li><code>%s</code></li>" % _esc(e)
                                for e in effects) + "</ul>")
+    scenarios = node.get("scenarios") or []
+    if scenarios:
+        parts.append("<p class=muted>сценарии (Given/When/Then):</p>"
+                     + "".join(_ir_scenario_html(s) for s in scenarios))
+    files = node.get("files") or []
+    if files:
+        parts.append("<p class=muted>файлы (owned modules):</p><ul>"
+                     + "".join("<li><code>%s</code></li>" % _esc(f)
+                               for f in files) + "</ul>")
+    children = node.get("children") or []
+    if children:
+        parts.append("<p class=muted>дочерние узлы (children):</p><ul>"
+                     + "".join("<li><code>%s</code></li>" % _esc(c)
+                               for c in children) + "</ul>")
     parts.append("</div>")
     return "".join(parts)
+
+
+def _ir_nodes(run_dir: pathlib.Path) -> dict:
+    """The per-node IR map from workspace/ir.json, or {} when unreadable.
+
+    Why: _build_state needs each node's IR datums (its OpenAPI document) to
+    stamp the spec-panel provenance; ir.json is re-read without caching so the
+    accumulator's incremental states stay visible (I2/I3).
+    What: reads ir.json fresh, returns ir['nodes'] when it is a dict, else {} —
+    absent/malformed/non-object files degrade to {}, never a stack trace.
+    Test: a dir with a built ir.json -> keys include the node ids; absent or
+    malformed -> {}.
+    """
+    ir_path = run_dir / "workspace" / "ir.json"
+    if not ir_path.exists():
+        return {}
+    try:
+        ir = json.loads(ir_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    nodes = ir.get("nodes") if isinstance(ir, dict) else None
+    return nodes if isinstance(nodes, dict) else {}
+
+
+def _node_spec_provenance_html(node: dict) -> str:
+    """Badge stating the OpenAPI-first provenance of a node's interface.
+
+    Why: the new spec format (K3/S23) makes the per-node machine OpenAPI 3.1
+    document the PRIMARY interface carrier; specs/*.md prose is COMPILED FROM it
+    ('## Interface (compiled from the machine OpenAPI)'). A reader must see at a
+    glance that the spec is now machine-first and the prose is secondary.
+    What: when the node carries an OpenAPI document with paths, returns a badge
+    marking the machine document 'primary: machine OpenAPI 3.1' and the prose
+    'derived / compiled from OpenAPI'. A node with no interface document
+    (a non-service leaf) claims no provenance and returns "".
+    Test: a node with openapi.paths -> HTML has 'primary', 'OpenAPI 3.1' and
+    'derived'; a node with only files -> "".
+    """
+    openapi = node.get("openapi") or {}
+    paths = openapi.get("paths") if isinstance(openapi, dict) else None
+    if not isinstance(paths, dict) or not paths:
+        return ""
+    return (
+        '<div class="specprov">'
+        '<span class="prov-primary" '
+        'title="машинный OpenAPI-документ узла — источник интерфейса">'
+        '● primary: machine OpenAPI 3.1</span>'
+        '<span class="prov-derived" '
+        'title="проза specs/*.md компилируется из машинного OpenAPI">'
+        '○ проза — derived / compiled from OpenAPI</span>'
+        '</div>')
 
 
 def _ir_report_html(run_dir: pathlib.Path) -> str:
@@ -1307,6 +1421,7 @@ def _build_state(run_dir: pathlib.Path) -> dict:
     meta: dict = {}
     _flatten(tree, 0, meta, None)
     files = {nid: _node_files(ws, nid) for nid in meta} if ws.exists() else {}
+    ir_nodes = _ir_nodes(run_dir)
     ev_idx = _events_by_node(events, llm)
 
     # error badges: any REJECT/FAIL/ERROR verdict on the node's events marks
@@ -1534,7 +1649,11 @@ def _build_state(run_dir: pathlib.Path) -> dict:
             "events": len(events),
         },
         "tree": _tree_view(tree, meta),
+        # spec_primary: the OpenAPI-first provenance badge (K3/S23). The IR node
+        # map is re-read fresh (no cache) so incremental states stay visible.
         "nodes": {nid: {**meta[nid], "files": files.get(nid, {}),
+                        "spec_primary": _node_spec_provenance_html(
+                            ir_nodes.get(nid, {})),
                         "events": ev_idx.get(nid, [])} for nid in meta},
         "feed": feed[-60:],
         "timeline": timeline[-250:],
@@ -2531,6 +2650,11 @@ pre.code{background:var(--panel);padding:10px;border-radius:6px;overflow:auto;wh
 .gtabs{margin-top:8px}
 .irnode{border:1px solid var(--panel-2);border-radius:6px;padding:8px 10px;margin:8px 0}
 .irnode h4{margin:0 0 6px}.irnode ul{margin:4px 0 4px 18px}
+.irscn{border-left:2px solid var(--panel-2);padding:2px 0 2px 8px;margin:4px 0}
+.irscn div{margin:1px 0}
+.specprov{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 8px;font-size:12px}
+.prov-primary{background:var(--ok-soft,rgba(80,160,80,.15));border:1px solid color-mix(in srgb,var(--ok,#5a5) 40%,transparent);border-radius:6px;padding:3px 8px;font-weight:600}
+.prov-derived{background:var(--panel);border:1px dashed var(--panel-2);border-radius:6px;padding:3px 8px;color:var(--dim)}
 .irdump{background:var(--panel);padding:10px;border-radius:6px;overflow:auto;white-space:pre;max-height:60vh;font-size:12px}
 </style></head><body>
 <div class=bar>
@@ -3156,7 +3280,12 @@ async function getMD(p){if(!p)return '';const k='md:'+p;if(FILECACHE[k]!=null)re
 
 async function renderNodeBody(nd){
  const f=nd.files||{},b=$('#nbody');if(!b)return;
- if(NTAB==='spec'){b.innerHTML=await getMD(f.spec);}
+ if(NTAB==='spec'){
+   // OpenAPI-first: the machine document is primary, this prose is DERIVED
+   // (compiled from the node's OpenAPI). Stamp the provenance badge above it.
+   const prov=nd.spec_primary||'';
+   b.innerHTML=prov+(prov?'<p class=muted>ниже — проза, скомпилированная из машинного OpenAPI</p>':'')+(await getMD(f.spec));
+ }
  else if(NTAB==='code'){b.innerHTML='<pre class=code>'+esc(await getFile(f.code))+'</pre>';}
  else if(NTAB==='test'){b.innerHTML='<pre class=code>'+esc(await getFile(f.test))+'</pre>';}
  else if(NTAB==='contract'){b.innerHTML='<pre class=code>'+esc(await getFile(f.contract))+'</pre>';}

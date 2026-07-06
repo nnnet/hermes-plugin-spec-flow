@@ -1608,6 +1608,30 @@ no-OpenAPI case (S23.3) was already green.
   mention in prose is not an offender — the gate matches the call as an
   expression head, so the ratchet does not fossilize the docstring wording.
 
+## STAGE 28 — Dashboard surfaces the FULL IR accumulator + OpenAPI-first spec
+(node M1, `tests/dashboard/test_dashboard_ir.py`)
+The dashboard is the human window onto the engine's data; if a datum the IR
+accumulator carries is invisible there, a design/wiring hole hides from review.
+Two obligations, both RED-first:
+- S28.1 EVERY IR datum per node is rendered STRUCTURALLY (not only inside the
+  folded raw-json dump): routes (method/path/status/media/handler + origin
+  badge, H2 `x-spec-flow-status-source`), exposes/consumes symbols with
+  signatures, env, dependencies, effects, Given/When/Then scenarios (given.env
+  + given.state prior steps, when, then status/media/body_check), owned files
+  and child node ids. A `_structural()` slice (HTML minus the raw dump) proves
+  the block is a real render, never a hit inside the dump. A thin node (routes
+  only) emits NO empty scenario/files/children block — the IR's own "missing
+  datum => absent field" law mirrored on the dashboard. ir.json is re-read
+  fresh (no cache) so incremental accumulator states stay visible (I2/I3).
+- S28.2 OPENAPI-FIRST provenance is stated at a glance: a node whose IR carries
+  an OpenAPI document with paths marks the machine document
+  'primary: machine OpenAPI 3.1' and the specs/*.md prose
+  'derived / compiled from OpenAPI' (K3/S23). The badge is engine data
+  (`_node_spec_provenance_html`), threaded into per-node state as `spec_primary`
+  and rendered by the client spec tab above the (derived) markdown. A node with
+  no interface document claims no provenance (empty badge). GREEN direction: a
+  non-service leaf's spec panel carries no false primary/derived claim.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.

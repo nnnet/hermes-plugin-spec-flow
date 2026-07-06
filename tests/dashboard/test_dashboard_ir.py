@@ -70,6 +70,15 @@ _RICH = {
                     "consumes": [{"from": "store", "name": "all_notes",
                                   "args": []}]},
         "env": [{"name": "MAX_ITEMS", "rule": "int, default 100"}],
+        "files": ["src/core.py"],
+        "children": ["store", "web_ui"],
+        "scenarios": [
+            {"requirement": "core",
+             "given": {"env": {"MAX_ITEMS": "5"},
+                       "state": [{"method": "POST", "path": "/list"}]},
+             "when": {"method": "GET", "path": "/list"},
+             "then": {"status": 200, "media": "text/html",
+                      "body_check": {"contains": "<ul"}}}],
         "dependencies": ["httpx"],
         "effects": ["network", "fs-write"]}}}
 
@@ -105,8 +114,54 @@ def test_rich_ir_shows_gaps_and_all_datum_blocks(tmp_path):
     assert "network" in h and "fs-write" in h, "effects missing"
 
 
+def _structural(html):
+    """The rendered IR minus the folded raw-json dump — so an assertion proves
+    a STRUCTURAL render, never a hit inside the raw dump.
+
+    Why: every datum also appears in the <details>сырой ir.json dump; testing
+    against that would green a missing structural block.
+    What: returns the HTML up to the raw-dump <details> marker.
+    Test: the returned text lacks the 'irdump' pre and keeps the node blocks.
+    """
+    cut = html.find("<details><summary>сырой ir.json")
+    return html if cut < 0 else html[:cut]
+
+
+def test_rich_ir_shows_scenarios_given_when_then(tmp_path):
+    # a node's Given/When/Then scenarios are the executable meaning of the
+    # contracted surface — the IR tab must render them structurally, not hide
+    # them in the raw dump only (M1: full IR accumulator on the dashboard).
+    h = _structural(dash._ir_report_html(_run_dir(tmp_path, _RICH)))
+    assert "Given" in h, "scenario Given clause not rendered"
+    assert "When" in h, "scenario When clause not rendered"
+    assert "Then" in h, "scenario Then clause not rendered"
+    # the concrete GWT content of the fixture scenario must be visible
+    assert "MAX_ITEMS" in h  # given.env
+    assert "GET" in h and "/list" in h  # when
+    assert "200" in h  # then.status
+
+
+def test_rich_ir_shows_files_and_children(tmp_path):
+    # files (owned modules) and children (sub-nodes) are IR datums the
+    # accumulator carries per node — the tab must surface both structurally.
+    h = _structural(dash._ir_report_html(_run_dir(tmp_path, _RICH)))
+    assert "src/core.py" in h, "node files not rendered"
+    assert "store" in h and "web_ui" in h, "node children not rendered"
+    assert "файлы" in h, "files block has no label"
+    assert "children" in h or "дочерние" in h, "children block has no label"
+
+
+def test_ir_scenario_given_state_prior_steps(tmp_path):
+    # given.state carries prior when-steps (e.g. a POST before a GET); the
+    # scenario block must show them so a reader sees the precondition chain.
+    h = _structural(dash._ir_report_html(_run_dir(tmp_path, _RICH)))
+    assert "POST" in h, "given.state prior step (POST) not rendered"
+
+
 def test_absent_datum_blocks_are_omitted(tmp_path):
-    # a node with only routes must NOT emit empty symbol/env/dep/effect blocks
+    # a node with only routes must NOT emit empty symbol/env/dep/effect/
+    # scenario/files/children blocks (the IR's own "missing datum => absent"
+    # law mirrored on the dashboard)
     thin = {"format": "spec-flow ir v1", "product": {"entry": "src/app.py"},
             "nodes": {"core": {"openapi": {"paths": {"/x": {"get": {
                 "x-spec-flow-handler": "h",
@@ -114,6 +169,7 @@ def test_absent_datum_blocks_are_omitted(tmp_path):
     h = dash._ir_report_html(_run_dir(tmp_path, thin))
     assert "exposes" not in h and "consumes" not in h
     assert "dependencies" not in h and "effects" not in h
+    assert "сценарии" not in h and "children" not in h and "файлы" not in h
 
 
 # ── honest handling of missing / broken artifacts ────────────────────────────
@@ -139,6 +195,51 @@ def test_non_object_ir_reports_note(tmp_path):
     (ws / "ir.json").write_text("[1, 2, 3]", encoding="utf-8")
     h = dash._ir_report_html(tmp_path / "run")
     assert "не является" in h
+
+
+# ── OpenAPI-first: the machine document is primary, prose is derived ──────────
+# The new spec format (K3/S23) makes the per-node OpenAPI 3.1 document the
+# primary interface carrier; specs/*.md is COMPILED FROM it (section
+# "## Interface (compiled from the machine OpenAPI)"). The dashboard must say
+# so with one glance: the node's spec panel labels the OpenAPI document
+# "primary: machine OpenAPI 3.1" and the prose "derived / compiled from OpenAPI".
+
+def test_spec_provenance_marks_openapi_primary_prose_derived():
+    # a node whose IR carries an OpenAPI document with paths -> the panel
+    # marks the machine document primary and the prose derived
+    node = _RICH["nodes"]["core"]
+    h = dash._node_spec_provenance_html(node)
+    assert "primary" in h.lower(), "OpenAPI document not marked primary"
+    assert "OpenAPI 3.1" in h, "machine OpenAPI 3.1 label missing"
+    assert "derived" in h.lower(), "prose not marked derived"
+    assert "OpenAPI" in h, "'compiled from OpenAPI' provenance missing"
+
+
+def test_spec_provenance_absent_without_openapi():
+    # a node with no OpenAPI document (a non-service leaf) carries no interface
+    # document, so no primary/derived badge is claimed
+    assert dash._node_spec_provenance_html({"files": ["src/l0.py"]}) == ""
+
+
+def test_node_state_carries_spec_provenance(tmp_path):
+    # the per-node state must expose the provenance badge so the client spec
+    # tab can show it above the (derived) markdown prose
+    rd = _run_dir(tmp_path, _RICH)
+    # place a matching tree so _build_state has a 'core' node
+    (rd / "tree.json").write_text(
+        json.dumps({"id": "core", "children": []}), encoding="utf-8")
+    st = dash._build_state(rd)
+    core = st["nodes"].get("core")
+    assert core is not None, "core node missing from state"
+    assert "spec_primary" in core, "node state lacks spec_primary provenance"
+    assert "OpenAPI" in core["spec_primary"], "provenance badge lost OpenAPI"
+
+
+def test_client_spec_tab_shows_provenance_marker():
+    # the client renderNodeBody spec branch must inject the provenance badge
+    # (nd.spec_primary) before the derived markdown
+    assert "spec_primary" in dash._PAGE, (
+        "client page never reads spec_primary; prose is not marked derived")
 
 
 # ── _build_state wiring ───────────────────────────────────────────────────────
