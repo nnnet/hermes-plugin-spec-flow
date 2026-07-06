@@ -7590,6 +7590,41 @@ def %(callable)s(environ, start_response):
         # merged machine IR once so every run carries the artifact.
         self._write_ir()
 
+        # S39 (catalog B, Q3): ONE early contract-closure gate. The realized
+        # plan just closed decomposition; BEFORE any assembly starts, close the
+        # graph over the merged IR — every pinned file, product entry,
+        # contracted route, consumed symbol, and human requirement must have an
+        # OWNER NODE. v167 went green through decomposition and only blew up at
+        # integrate_verify because connectivity was checked in three scattered
+        # late places, none of them here. This is the single point that turns
+        # an unowned obligation into a NAMED refusal at decomposition close
+        # (a milestone sibling of the decomposer_* gates), not a late surprise.
+        try:
+            from . import spec_ir as _spec_ir_clo
+        except ImportError:  # flat layout: repo root on sys.path
+            import spec_ir as _spec_ir_clo  # type: ignore
+        try:
+            _clo_gaps = _spec_ir_clo.contract_closure_gaps(
+                self._held_ir(), self._constitution)
+        except Exception:  # noqa: BLE001 — closure is a gate, never fatal itself
+            _clo_gaps = []
+        if _clo_gaps:
+            _clo_detail = "; ".join(_clo_gaps)
+            self.emit("decompose", "engine", "spec-ir",
+                      "L0:decompose",
+                      "contract graph is not closed: an obligation has no "
+                      "owner node",
+                      _clo_detail[:400], "decomposition_closure", "FAIL",
+                      level=L_MILESTONE)
+            _rid_clo = str((project.get("tree") or {}).get("id", "L0"))
+            self.loops.append({
+                "type": "closure-fail", "task": _rid_clo,
+                "detail": f"contract graph not closed: {_clo_detail}"})
+            self._doctor_advise(
+                {"id": "L0:decompose"}, "L0:decompose", 0,
+                "decomposition_closure", "FAIL",
+                {"reasons": f"contract graph not closed: {_clo_detail}"})
+
         # B2 mechanism 3 — BACKSTOP emit: the engine now synthesizes an
         # assembly leaf (see _assembly_node, injected at the depth-0 placement
         # seam) that BUILDS the declared entry from the feature modules. This
