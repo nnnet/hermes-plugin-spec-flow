@@ -10636,6 +10636,11 @@ def %(callable)s(environ, start_response):
                 "ir.json",
                 json.dumps(ir, indent=2, sort_keys=True) + "\n",
                 "contract")
+            # H5/S13.7: materialise the requested third-party deps as a pip
+            # manifest — nothing written when the spec requested nothing.
+            _reqs = spec_ir.requirements_txt(ir)
+            if _reqs:
+                self.workspace._write("requirements.txt", _reqs, "contract")
             self._ir_dumped_routes = self._ir_route_set()
             self._refresh_ir_skeletons(ir)
             self.emit(

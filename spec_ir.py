@@ -60,8 +60,14 @@ _OA_METHODS = ("get", "post", "put", "delete", "patch")
 
 # closed key sets — everything else is an error (S13.2)
 _TOP_KEYS = {"format", "product", "nodes"}
-_PRODUCT_KEYS = {"kind", "entry", "callable", "pinned_files"}
-_NODE_KEYS = {"children", "files", "openapi", "symbols", "env", "scenarios"}
+_PRODUCT_KEYS = {"kind", "entry", "callable", "pinned_files", "requirements"}
+_NODE_KEYS = {"children", "files", "openapi", "symbols", "env", "scenarios",
+              "dependencies", "effects"}
+# H5/S13.7: a requirement is a bare name or {name, version?}.
+_REQUIREMENT_KEYS = {"name", "version"}
+# H6/S17.5: the effect classes a node may declare it is contracted to perform.
+_EFFECT_CLASSES = {"subprocess", "network", "env-write", "fs-write",
+                   "dynamic-import"}
 _SYMBOLS_KEYS = {"exposes", "consumes"}
 _EXPOSE_KEYS = {"name", "args"}
 _CONSUME_KEYS = {"from", "name", "args"}
@@ -198,6 +204,27 @@ def _node_openapi(nid: str, routes: list, reqf: dict, media: dict,
             "info": {"title": "spec-flow node %s interface" % nid,
                      "version": "1"},
             "paths": paths}
+
+
+def requirements_txt(ir: Any) -> str:
+    """H5/S13.7: compile a pip requirements.txt from `product.requirements`.
+
+    Why: once the spec can REQUEST a third-party library the product build
+    needs a materialised manifest — the requested deps, nothing invented.
+    What: one line per requirement; `{name, version}` -> `name==version`,
+    a bare name -> `name`. Empty when the spec requested nothing (stdlib-only
+    stays the default). Deterministic order = declaration order.
+    Test: tests/audit/test_ir_dependencies.py."""
+    product = (ir or {}).get("product") if isinstance(ir, dict) else None
+    lines = []
+    for req in ((product or {}).get("requirements") or []):
+        if isinstance(req, str) and req:
+            lines.append(req)
+        elif isinstance(req, dict) and req.get("name"):
+            ver = req.get("version")
+            lines.append("%s==%s" % (req["name"], ver) if ver
+                         else str(req["name"]))
+    return "\n".join(lines) + ("\n" if lines else "")
 
 
 def build_ir(engine: Any) -> dict:
@@ -520,9 +547,25 @@ def validate_ir(ir: Any) -> dict:
         errors.append("ir: format %r is not %r" % (ir.get("format"),
                                                    IR_FORMAT))
     product = ir.get("product")
+    requirements: set = set()      # H5/S13.7: declared third-party deps
     if product is not None:
         if isinstance(product, dict):
             _keys(product, _PRODUCT_KEYS, "product", errors)
+            for req in (product.get("requirements") or []):
+                if isinstance(req, str):
+                    requirements.add(req)
+                elif isinstance(req, dict):
+                    _keys(req, _REQUIREMENT_KEYS, "product: requirement",
+                          errors)
+                    if req.get("name"):
+                        requirements.add(str(req["name"]))
+                    else:
+                        errors.append(
+                            "product: requirement has no name: %r" % req)
+                else:
+                    errors.append(
+                        "product: requirement is neither a name nor a "
+                        "{name, version}: %r" % req)
         else:
             errors.append("product: not a mapping")
     nodes = ir.get("nodes")
@@ -543,6 +586,19 @@ def validate_ir(ir: Any) -> dict:
             errors.append(where + ": not a mapping")
             continue
         _keys(node, _NODE_KEYS, where, errors)
+        # H5/S13.7: a node may only import a dependency the PRODUCT requested
+        # (closed world — you cannot pull in what the spec never declared).
+        for dep in (node.get("dependencies") or []):
+            if str(dep) not in requirements:
+                errors.append(
+                    "%s: dependency %r is not in product.requirements — "
+                    "declare it at the product level first" % (where, dep))
+        # H6/S17.5: a declared effect class must be a known one.
+        for eff in (node.get("effects") or []):
+            if str(eff) not in _EFFECT_CLASSES:
+                errors.append(
+                    "%s: effect %r is not a known class %s"
+                    % (where, eff, sorted(_EFFECT_CLASSES)))
         symbols = node.get("symbols")
         names: set = set()
         if symbols is not None:

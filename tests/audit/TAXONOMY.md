@@ -789,6 +789,20 @@ implementation commit turned them green.
   operation (the IR path never flows through `_node_openapi`), so it carries
   no marker — absence reads as spec-declared. (`test_status_source_
   provenance.py`)
+- S13.7 THE SPEC CAN REQUEST A THIRD-PARTY LIBRARY (node H5, principles-audit
+  finding F8 — the wall blocking the third-party-first principle from
+  products): `product.requirements` is a list of deps (a bare name or
+  `{name, version?}`); `node.dependencies` names, per node, which of them
+  that node imports; an undeclared node dependency (not in
+  product.requirements) is a closed-world error. The import door
+  (`_allowed_modules`) admits a declared dependency — `import flask` is no
+  longer a phantom-import finding when the spec requested flask — while the
+  wall still stands for anything undeclared. `requirements_txt(ir)` compiles
+  a pip manifest from the requested deps (versions pinned, bare names kept;
+  empty when nothing was requested — stdlib-only stays the default), written
+  to the workspace beside ir.json. The `effects` node key (S17.5) is also
+  schema-legal now, its values checked against the known effect classes.
+  (`test_ir_dependencies.py`)
 
 ## STAGE 14 — Scenario runner: THE interface oracle
 (`test_scenario_runner_oracle.py`, `test_scenario_engine_wiring.py`)

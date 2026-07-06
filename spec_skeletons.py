@@ -136,6 +136,11 @@ def _allowed_modules(ir: Any, node_id: str) -> set:
     for ent in ((node.get("symbols") or {}).get("consumes") or []):
         if isinstance(ent, dict) and ent.get("from"):
             out.add(str(ent["from"]))
+    # H5/S13.7: a declared third-party dependency is an admitted import — the
+    # spec REQUESTED it (product.requirements + node.dependencies). The wall
+    # still stands for anything undeclared.
+    for dep in (node.get("dependencies") or []):
+        out.add(str(dep))
     return out
 
 
