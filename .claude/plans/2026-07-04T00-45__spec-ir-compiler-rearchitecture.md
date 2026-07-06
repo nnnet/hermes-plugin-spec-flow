@@ -59,11 +59,11 @@ graph:
   - {id: H1, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py]}
   - {id: H2, needs: [],               parallel: "",        status: "[ ]", files: [spec_ir.py, spec_flow_runner.py]}
   - {id: H3, needs: [],               parallel: "wave-h1", status: "[x]", files: [spec_ir.py, spec_openapi.py, spec_conformance.py]}
-  - {id: H4, needs: [H3],             parallel: "wave-2",  status: "[~]", files: [spec_ir.py, spec_flow_runner.py]}
+  - {id: H4, needs: [H3],             parallel: "wave-2",  status: "[x]", files: [spec_ir.py, spec_flow_runner.py]}
   - {id: H5, needs: [],               parallel: "",        status: "[ ]", files: [spec_ir.py, spec_skeletons.py, spec_flow_runner.py]}
   - {id: H6, needs: [],               parallel: "wave-h1", status: "[~]", files: [spec_skeletons.py, spec_flow_doctor.py]}
   - {id: H7, needs: [],               parallel: "",        status: "[ ]", files: [spec_ir.py, tests/audit/]}
-  - {id: H8, needs: [],               parallel: "wave-h1", status: "[~]", files: [spec_flow_runner.py]}
+  - {id: H8, needs: [],               parallel: "wave-h1", status: "[~]"  # solo next, files: [spec_flow_runner.py]}
   - {id: G3, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/decomposition/]}
   - {id: G4, needs: [G3],             parallel: "",        status: "[x]", files: [tests/]}
 ```
@@ -492,9 +492,15 @@ Schemathesis, awesome-ralph.
   (зеркало media-gap). Эксплойт закрыт поведенчески (exec). Регрессия
   645 зелёных + батарея чистая
 
-### [~] H4 `typed-request-fields` — поля запроса типизированы
+### [x] H4 `typed-request-fields` — поля запроса типизированы
 - выход: IR несёт типы полей, 400-гейт роутера отвергает неверный тип
 - приёмка: эксплойт F3 ({"text": 12345} проходит) закрыт
+- заметки: ГОТОВ — коммиты 611720d (S12.17 красные) + 2e3a84c.
+  _route_request_field_types читает типы ТОЛЬКО из машинных фрагментов
+  декомпозера (_decomposer_ir_nodes) — проза несёт имена, не типы, так
+  что незаписанный тип = честный пробел (только присутствие). Роутер
+  печёт _FIELD_TYPES и после присутствия 400-ит неверный тип с именем
+  поля; JSON→Python точное (integer не берёт bool). Регрессия 567
 
 ### [ ] H5 `ir-dependencies` — спека может заказать стороннюю либу
 - выход: product.requirements/node.dependencies в схеме IR + seeding
