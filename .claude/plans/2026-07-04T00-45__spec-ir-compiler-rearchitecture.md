@@ -66,6 +66,7 @@ graph:
   - {id: I1, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/audit/]}
   - {id: I2, needs: [I1],             parallel: "",        status: "[ ]", files: [spec_ir.py, spec_flow_runner.py]}
   - {id: I3, needs: [I2],             parallel: "",        status: "[ ]", files: [spec_flow_runner.py]}
+  - {id: J1, needs: [],               parallel: "",        status: "[ ]", files: [spec_flow_runner.py, spec_skeletons.py, tests/audit/]}
   - {id: H8, needs: [],               parallel: "wave-h1", status: "[x]", files: [spec_flow_runner.py]}
   - {id: G3, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/decomposition/]}
   - {id: G4, needs: [G3],             parallel: "",        status: "[x]", files: [tests/]}
@@ -456,6 +457,43 @@ HITL-инъекции посреди прогона. Недостающее бе
 
 Sources: github/spec-kit, spec-driven.md, Specmatic: MCP as guardrails,
 Schemathesis, awesome-ralph.
+
+### Узлы J — разбор провала p6 v165: вброшенный маршрут не реализуется (2026-07-06)
+
+Факт из прогона v165 (p6-micro-notes): вброс `ping_text` (GET /ping -> "pong")
+получил ОТЛИЧНУЮ детализацию — спека
+workspace/specs/ping_text.md несёт чёткое требование + engine-declared
+route->handler contract (`GET /ping -> def get_ping(payload, query)`, статус
+200), interface.json содержит handler get_ping. Команда дана ясно. И всё
+равно продукт NOT READY: delta gate/handler gate вечно «no handler for
+/ping», doctor rework не помогает. Юзер прав: корень НЕ в модели и НЕ в
+детализации — в МЕХАНИКЕ движка для вброса нового маршрута на edit-in-place
+модуль.
+
+Гипотеза (проверить в J1): скелет core.py скомпилирован ДО вброса, БЕЗ
+get_ping; write-door скелета (C1) отвергает «adds a public function/route
+beyond this file», а контракт требует добавить get_ping → deadlock. Плюс
+подозрение: ping_text дошёл до to_done при красном handler-гейте (tick 154)
+— возможен баг lifecycle. Плюс tier понижен до weak/solo на задачу нового
+хендлера.
+
+### [ ] J1 `late-route-on-edit-in-place-deadlock` — разбор и починка вброса маршрута
+- выход: точный корень (write-door skeleton refusal? отсутствие пере-
+  компиляции скелета core.py с новым маршрутом? lifecycle пускает DONE без
+  хендлера?) + фикс: при вбросе нового маршрута на edit-in-place модуль его
+  скелет ПЕРЕ-компилируется с новым хендлером (get_ping попадает в
+  контракт-скелет), дверь пускает контрактный хендлер, и лист НЕ может стать
+  DONE пока хендлер отсутствует
+- приёмка: красный кейс — вброс GET /ping на owner-модуль → движок
+  синтезирует/расширяет скелет с get_ping, реализатор добавляет тело, лист
+  красный пока get_ping нет, зелёный когда есть; воспроизведение v165-сценария
+  из фикстуры зелёное. Никакого deadlock delta/handler-gate. Классы в аудит
+  (храповик): «вброс нового маршрута на edit-in-place не может стать DONE без
+  контрактного хендлера» + «скелет edit-in-place модуля пере-компилируется
+  под поздний маршрут»
+- заметки: рождён разбором v165 2026-07-06 по требованию юзера. Сначала
+  ДИАГНОСТИКА (читать trace v165 + write-door/skeleton код + lifecycle
+  DONE-гейт), потом фикс. НЕ облегчать: чинить движок, не подгонять тест
 
 ### Узлы I — переворот: IR первичен, а не отчёт (2026-07-06, по запросу юзера)
 
