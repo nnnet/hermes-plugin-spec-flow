@@ -102,7 +102,7 @@ def _snake(s: str) -> str:
 
 _EPISODE_BADGE = {
     "spike": "🔬", "clarify": "❓", "contract": "📐", "drift": "🌀",
-    "hitl": "✋", "review_fails": "⚖️",
+    "hitl": "✋", "review_fails": "⚖️", "validated": "✅",
 }
 
 
@@ -1224,6 +1224,68 @@ def _ir_scenario_html(sc: dict) -> str:
     return "".join(parts)
 
 
+def _node_spec_validation(nid: str, node: dict) -> dict:
+    """Run the spec oracles over ONE IR node, returning its validation verdict.
+
+    Why: a spec that passed validation must be VISIBLE as validated when a
+    reader looks at the spec itself (M3). The dashboard already re-reads
+    ir.json; here it re-runs the same maintained oracles the engine uses —
+    the per-node closed world (spec_ir.validate_ir over a one-node IR) and the
+    OpenAPI 3.1 library (spec_openapi.validate_openapi_library over the node's
+    document) — so the green fact is witnessed at the point of display, never
+    merely asserted.
+    What: returns {"errors": [...], "ok": bool}; errors name the failing
+    oracle. An oracle that is not installed degrades to a note, never a crash.
+    Test: tests/dashboard/test_dashboard_spec_validation.py — a valid node ->
+    ok True, empty errors; a closed-world- or library-invalid node -> ok False.
+    """
+    errors: list = []
+    try:
+        import spec_ir  # ROOT is on sys.path (see module header)
+        one = {"format": spec_ir.IR_FORMAT, "product": {},
+               "nodes": {nid: node}}
+        rep = spec_ir.validate_ir(one)
+        # a symbol consumed from a SIBLING node is phantom only across the whole
+        # tree; over a single node it is a false positive, so drop that class.
+        errors.extend(x for x in rep.get("errors") or []
+                      if "is exposed by no node" not in x)
+    except Exception as exc:  # noqa: BLE001 — oracle absent/failing, report it
+        errors.append("closed-world oracle unavailable: %s" % str(exc)[:120])
+    doc = node.get("openapi") if isinstance(node, dict) else None
+    if isinstance(doc, dict) and doc:
+        try:
+            import spec_openapi
+            errors.extend(spec_openapi.validate_openapi_library(doc))
+        except Exception as exc:  # noqa: BLE001
+            errors.append("openapi oracle unavailable: %s" % str(exc)[:120])
+    return {"errors": errors, "ok": not errors}
+
+
+def _node_spec_validation_html(nid: str, node: dict) -> str:
+    """Badge stating whether a node's spec passed validation (M3).
+
+    Why: origin/provenance badges say WHERE a datum came from; this says
+    whether the spec is VALID — the missing 'validated' signal. A green check
+    at the node means the closed-world + OpenAPI-library oracles found nothing;
+    a red count means N concrete violations, listed so review has the reason.
+    What: returns a <div class="specvalid"> badge; '✓ validated' when clean,
+    'N errors' plus the list when not. Never empty — every rendered node states
+    its validation status so a silent node cannot be mistaken for a valid one.
+    Test: tests/dashboard/test_dashboard_spec_validation.py.
+    """
+    rep = _node_spec_validation(nid, node)
+    if rep["ok"]:
+        return ('<div class="specvalid ok" '
+                'title="спека узла прошла проверку оракулами '
+                '(closed-world + OpenAPI 3.1)">'
+                '✓ validated</div>')
+    errs = rep["errors"]
+    items = "".join("<li>%s</li>" % _esc(e) for e in errs)
+    return ('<div class="specvalid bad" '
+            'title="спека узла НЕ прошла проверку — перечень ниже">'
+            '✗ %d errors<ul>%s</ul></div>' % (len(errs), items))
+
+
 def _ir_node_html(nid: str, node: dict) -> str:
     """Render one IR node section: routes table + optional symbol/env/dep/effect/
     scenario/files/children blocks, each omitted when absent.
@@ -1239,6 +1301,9 @@ def _ir_node_html(nid: str, node: dict) -> str:
     blocks; a node with only routes emits just the table.
     """
     parts = ['<div class="irnode">', "<h4>%s</h4>" % _esc(nid)]
+    # M3: state the node's spec-validation status at the top of its section —
+    # a reader of the spec itself sees at a glance whether it is validated.
+    parts.append(_node_spec_validation_html(nid, node))
     openapi = node.get("openapi") or {}
     routes = _ir_node_routes(openapi)
     if routes:
@@ -1348,6 +1413,47 @@ def _node_spec_provenance_html(node: dict) -> str:
         '</div>')
 
 
+def _spec_validation_summary_html(ir: dict) -> str:
+    """Run-level spec-validation summary line for the IR tab head (M3).
+
+    Why: 'in other places' the run must show the spec was validated, not only
+    per node. This is the one-glance roll-up: how many closed-world errors, how
+    many OpenAPI-library errors across all node documents, how many jsonschema
+    (H7) structural errors over the whole IR. All zero == the whole spec is
+    validated; a non-zero count is the count the reviewer must chase.
+    What: returns a <p class="specsummary"> line
+    'Spec validation: closed-world N · openapi-lib K · jsonschema M'; each
+    counter is green at 0, red otherwise. Oracles that are absent degrade to a
+    note, never a crash.
+    Test: tests/dashboard/test_dashboard_spec_validation.py.
+    """
+    cw = ol = js = 0
+    try:
+        import spec_ir
+        cw = len((spec_ir.validate_ir(ir) or {}).get("errors") or [])
+        js = len(spec_ir.jsonschema_errors(ir))
+    except Exception:  # noqa: BLE001 — oracle absent; leave counters at 0-note
+        pass
+    try:
+        import spec_openapi
+        for n in (ir.get("nodes") or {}).values():
+            doc = n.get("openapi") if isinstance(n, dict) else None
+            if isinstance(doc, dict) and doc:
+                ol += len(spec_openapi.validate_openapi_library(doc))
+    except Exception:  # noqa: BLE001
+        pass
+
+    def _cell(label, n):
+        cls = "sv-ok" if n == 0 else "sv-bad"
+        return '<span class="%s">%s %d</span>' % (cls, label, n)
+
+    return ('<p class="specsummary">Spec validation: '
+            + " · ".join([_cell("closed-world", cw),
+                          _cell("openapi-lib", ol),
+                          _cell("jsonschema", js)])
+            + "</p>")
+
+
 def _ir_report_html(run_dir: pathlib.Path) -> str:
     """Render the whole ir.json view; "" when the artifact is absent.
 
@@ -1387,6 +1493,9 @@ def _ir_report_html(run_dir: pathlib.Path) -> str:
         head.append("callable <code>%s</code>"
                     % _esc(", ".join(str(c) for c in callable_)))
     out = ['<p class=muted>%s</p>' % " · ".join(head)] if head else []
+    # M3: run-level spec-validation roll-up, shown at the head of the tab so
+    # the whole-spec 'validated' fact is visible before the per-node sections.
+    out.append(_spec_validation_summary_html(ir))
 
     nodes = ir.get("nodes") or {}
     for nid in sorted(nodes):
@@ -1480,6 +1589,20 @@ def _build_state(run_dir: pathlib.Path) -> dict:
             owner = task[:-6]
             if owner in meta and "spike" not in meta[owner]["episodes"]:
                 meta[owner]["episodes"].insert(0, "spike")
+
+    # M3: a node whose spec passed validation gets a green 'validated' episode
+    # badge on the tree/graph — success is observable, not only failure. The
+    # badge is suppressed when the node already carries an 'error' (a red spec
+    # is not validated) so the two views never contradict.
+    for nid in meta:
+        node_ir = ir_nodes.get(nid)
+        if not node_ir:
+            continue
+        eps = meta[nid]["episodes"]
+        if "error" in eps:
+            continue
+        if _node_spec_validation(nid, node_ir)["ok"] and "validated" not in eps:
+            eps.append("validated")
 
     feed = []
     for e in llm:
@@ -1651,9 +1774,15 @@ def _build_state(run_dir: pathlib.Path) -> dict:
         "tree": _tree_view(tree, meta),
         # spec_primary: the OpenAPI-first provenance badge (K3/S23). The IR node
         # map is re-read fresh (no cache) so incremental states stay visible.
+        # spec_validated: the M3 'validated ✓ / N errors' badge, computed by
+        # re-running the oracles over the node's fresh IR — the spec panel shows
+        # whether the spec is VALID, not only where it came from.
         "nodes": {nid: {**meta[nid], "files": files.get(nid, {}),
                         "spec_primary": _node_spec_provenance_html(
                             ir_nodes.get(nid, {})),
+                        "spec_validated": (
+                            _node_spec_validation_html(nid, ir_nodes[nid])
+                            if nid in ir_nodes else ""),
                         "events": ev_idx.get(nid, [])} for nid in meta},
         "feed": feed[-60:],
         "timeline": timeline[-250:],
@@ -2655,6 +2784,13 @@ pre.code{background:var(--panel);padding:10px;border-radius:6px;overflow:auto;wh
 .specprov{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 8px;font-size:12px}
 .prov-primary{background:var(--ok-soft,rgba(80,160,80,.15));border:1px solid color-mix(in srgb,var(--ok,#5a5) 40%,transparent);border-radius:6px;padding:3px 8px;font-weight:600}
 .prov-derived{background:var(--panel);border:1px dashed var(--panel-2);border-radius:6px;padding:3px 8px;color:var(--dim)}
+.specvalid{font-size:12px;margin:0 0 8px;border-radius:6px;padding:3px 8px;display:inline-block}
+.specvalid.ok{background:var(--ok-soft,rgba(80,160,80,.15));border:1px solid color-mix(in srgb,var(--ok,#5a5) 40%,transparent);color:var(--ok,#5a5);font-weight:600}
+.specvalid.bad{background:var(--err-bg,rgba(200,60,60,.12));border:1px solid var(--err,#c33);color:var(--err,#c33)}
+.specvalid.bad ul{margin:4px 0 0;padding-left:18px}
+.specsummary{font-size:12px;margin:2px 0 8px}
+.specsummary .sv-ok{color:var(--ok,#5a5);font-weight:600}
+.specsummary .sv-bad{color:var(--err,#c33);font-weight:600}
 .irdump{background:var(--panel);padding:10px;border-radius:6px;overflow:auto;white-space:pre;max-height:60vh;font-size:12px}
 </style></head><body>
 <div class=bar>
@@ -2759,8 +2895,8 @@ function withScroll(el,fn){if(!el){fn();return;}
  el.scrollTop=top;el.scrollLeft=left;
  el.querySelectorAll('.keepscroll[id]').forEach(k=>{const s=keep[k.id];
   if(s){k.scrollTop=s.t;k.scrollLeft=s.l;}});}
-const BADGE_ICON={spike:'🔬',clarify:'❓',contract:'📐',drift:'🌀',hitl:'✋',review_fails:'⚖️',error:'❌',pruned:'✂️',reworked:'🔧'};
-const BADGE_TIP={spike:'было исследование (spike) перед решением',clarify:'было уточнение',contract:'есть контракт',drift:'зафиксирован дрейф',hitl:'вмешивался человек',review_fails:'ревью не прошло',error:'НЕзакрытая ошибка — подробности на странице узла',pruned:'дубль отрезан dedup-гейтом',reworked:'был REJECT — доработан, повторное ревью PASS'};
+const BADGE_ICON={spike:'🔬',clarify:'❓',contract:'📐',drift:'🌀',hitl:'✋',review_fails:'⚖️',error:'❌',pruned:'✂️',reworked:'🔧',validated:'✅'};
+const BADGE_TIP={spike:'было исследование (spike) перед решением',clarify:'было уточнение',contract:'есть контракт',drift:'зафиксирован дрейф',hitl:'вмешивался человек',review_fails:'ревью не прошло',error:'НЕзакрытая ошибка — подробности на странице узла',pruned:'дубль отрезан dedup-гейтом',reworked:'был REJECT — доработан, повторное ревью PASS',validated:'спека узла прошла проверку оракулами'};
 function badgeStr(eps){return (eps||[]).map(e=>BADGE_ICON[e]||'').join('');}
 function badgeTips(eps){return (eps||[]).map(e=>(BADGE_ICON[e]||'')+' '+(BADGE_TIP[e]||e)).join('\n');}
 function badgeHTML(eps){return (eps||[]).map(e=>BADGE_ICON[e]?`<span title="${BADGE_TIP[e]||e}">${BADGE_ICON[e]}</span>`:'').join('');}
@@ -3284,7 +3420,10 @@ async function renderNodeBody(nd){
    // OpenAPI-first: the machine document is primary, this prose is DERIVED
    // (compiled from the node's OpenAPI). Stamp the provenance badge above it.
    const prov=nd.spec_primary||'';
-   b.innerHTML=prov+(prov?'<p class=muted>ниже — проза, скомпилированная из машинного OpenAPI</p>':'')+(await getMD(f.spec));
+   // M3: whether the spec is VALIDATED (green ✓ / N errors), shown above the
+   // spec prose so the reader sees validation status on the spec itself.
+   const valid=nd.spec_validated||'';
+   b.innerHTML=valid+prov+(prov?'<p class=muted>ниже — проза, скомпилированная из машинного OpenAPI</p>':'')+(await getMD(f.spec));
  }
  else if(NTAB==='code'){b.innerHTML='<pre class=code>'+esc(await getFile(f.code))+'</pre>';}
  else if(NTAB==='test'){b.innerHTML='<pre class=code>'+esc(await getFile(f.test))+'</pre>';}

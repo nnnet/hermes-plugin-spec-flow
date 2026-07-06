@@ -79,7 +79,7 @@ graph:
   - {id: G4, needs: [G3],             parallel: "",        status: "[x]", files: [tests/]}
   - {id: M1, needs: [I3, K3],         parallel: "dash",    status: "[x]", files: [tests/lib/live_dashboard.py]}
   - {id: M2, needs: [K4],             parallel: "dash",    status: "[x]", files: [spec_flow_runner.py, tests/harness/openapi_diff.py, tests/audit/]}
-  - {id: M3, needs: [M1, K1, H7],     parallel: "",        status: "[~]", files: [tests/lib/live_dashboard.py, spec_flow_runner.py, spec_ir.py, tests/audit/, tests/dashboard/]}
+  - {id: M3, needs: [M1, K1, H7],     parallel: "",        status: "[x]", files: [tests/lib/live_dashboard.py, spec_flow_runner.py, spec_ir.py, tests/audit/, tests/dashboard/]}
 ```
 
 Зоны (`files`) — что узел МЕНЯЕТ; пересечение зон = последовательность
@@ -551,6 +551,33 @@ wsgiref/ThreadingHTTPServer/pyyaml (stdlib-first, не 3rd-party NIH).
   details); precondition-тест дрейф-эпизода зелёный всегда. GREEN после
   реализации: 3 passed. Зона openapi_diff.py не менялась (K4-контракт
   stdout+exit сохранён, S24 зелёный).
+
+### M3 `spec-validation-visible` — дашборд показывает, что спека валидирована
+- выход: (а) при просмотре САМОЙ спеки — бейдж «validated ✓ / N errors» на
+  каждый узел IR-вкладки (`_ir_node_html` через `_node_spec_validation_html`) +
+  сводная строка в шапке вкладки «Spec validation: closed-world N · openapi-lib
+  K · jsonschema M» (`_spec_validation_summary_html`); (б) в дереве узлов —
+  зелёный бейдж-эпизод «validated ✅» для узла с прошедшей спекой
+  (`_build_state`, подавляется если у узла уже «error»); node-state несёт
+  `spec_validated`, клиентская страница рендерит его в spec-панели; (в) движок:
+  веха `decomposer_openapi` эмитит PASS (не только FAIL), веха `ir_jsonschema`
+  реально гоняет H7-оракул на живом пути `_write_ir`, веха `ir_written` несёт
+  PASS/FAIL вместо пустого verdict
+- приёмка: аудиты tests/dashboard/test_dashboard_spec_validation.py и
+  tests/audit/test_spec_validation_milestones.py зелёные; наборы audit/
+  dashboard/lib/nodes/journal не сломаны (749 passed, 11 skipped)
+- заметки: СДЕЛАНО. Дашборд ПЕРЕ-ПРОГОНЯЕТ те же оракулы, что и движок
+  (`spec_ir.validate_ir`, `spec_ir.jsonschema_errors`,
+  `spec_openapi.validate_openapi_library`) над свежим ir.json — зелёный факт
+  свидетельствуется в точке показа, отсутствие оракула деградирует в пометку,
+  не крэш. Мёртвый H7-оракул (0 caller'ов) подключён в живой путь. Веха
+  `decomposer_openapi` раньше эмитила только FAIL — «прошло openapi-валидацию»
+  было ненаблюдаемо; добавлен PASS. Stage: S29 (S29.1-S29.8) в
+  tests/audit/TAXONOMY.md. RED (ратчет проверен откатом реализации через git
+  stash spec_flow_runner.py + live_dashboard.py): все 8 тестов краснели —
+  бейджа «validated» нет, `decomposer_openapi` PASS/`ir_jsonschema`/`ir_written`
+  verdict не эмитятся. GREEN после реализации: 8 passed. Существующие вехи S22/
+  S27/S28 не ослаблены (FAIL-пути и M1-провенанс на месте).
 
 ### Узлы K — OpenAPI 3.1 БИБЛИОТЕКОЙ, спека первична машинной (2026-07-06, СУПЕРПРИОРИТЕТ)
 
