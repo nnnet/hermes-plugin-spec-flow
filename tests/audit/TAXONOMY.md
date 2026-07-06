@@ -878,6 +878,17 @@ commit.
   red-then-green is evidence, not narrative. GREEN direction: a pure
   refinement that binds no route triggers no re-dump; a conforming product
   passes the gate with no scenario-fail loops.
+- S14.6 ir.json IS A WORKING ARTIFACT, NOT AN END-OF-RUN REPORT (node I1,
+  user request 2026-07-06 "переворот" — the first rung of inverting the IR to
+  be the source): (a) `_write_ir` is guarded by `_ir_write_lock` so parallel
+  leaves cannot interleave a build+write; (b) the on-disk ir.json is replaced
+  ATOMICALLY (tmp + os.replace) — a concurrent reader (the live dashboard)
+  always parses a complete document, never the empty truncate window of a
+  `write_text('w')`; (c) `_write_ir_incremental` re-dumps after each realized
+  leaf so ir.json GROWS during the run instead of appearing only at the end.
+  This makes the IR live and inspectable; the deeper inversion (IR as the
+  accumulated source, datums as projections) is nodes I2/I3.
+  (`test_ir_incremental_write.py`)
 ## STAGE 15 — Decomposer emits IR (`test_decomposer_emits_ir.py`)
 Node E1 of the spec-IR rearchitecture (plan 2026-07-04T00-45; Stage 14 is
 reserved by the scenario-runner node B1, developed in parallel). Until now
