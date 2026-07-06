@@ -39,11 +39,23 @@ def _engine(tmp_path, routes=None):
 
 def _valid_openapi(nid, method, path, status="200",
                    media="application/json"):
-    op = {"responses": {str(status): {"description": "success",
-                                      "content": {media: {"schema": {}}}}}}
+    # an error response (reusing the operation media) specifies the failure
+    # surface — the N6 errors_edges completeness aspect the standardized_spec
+    # gate now enforces on every http node.
+    op = {"responses": {
+        str(status): {"description": "success",
+                      "content": {media: {"schema": {}}}},
+        "404": {"description": "error", "content": {media: {"schema": {}}}}}}
     return {"openapi": spec_ir.OPENAPI_VERSION,
             "info": {"title": "node %s interface" % nid, "version": "1"},
             "paths": {path: {method.lower(): op}}}
+
+
+def _http_scenario(method, path, status):
+    """One closed behaviour scenario — the N6 behavior aspect for an http node."""
+    return {"requirement": "%s %s" % (method, path),
+            "when": {"method": method, "path": path},
+            "then": {"status": int(str(status))}}
 
 
 def _machine_part(nodes):
@@ -69,7 +81,8 @@ def test_valid_node_openapi_emits_a_decomposer_openapi_PASS(tmp_path):
         pytest.skip("openapi-spec-validator oracle not installed")
     e = _engine(tmp_path, routes=[("GET", "/notes")])
     out = {"atomic": True, "ir": _machine_part({"core": {
-        "files": ["src/core.py"],
+        "files": ["src/core.py"], "effects": [],
+        "scenarios": [_http_scenario("GET", "/notes", "200")],
         "openapi": _valid_openapi("core", "GET", "/notes", "200")}})}
     assert e._accept_decomposer_ir({"id": "core"}, out) == [], (
         "a library-valid node must be accepted")

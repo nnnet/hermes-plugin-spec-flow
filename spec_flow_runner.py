@@ -7957,6 +7957,74 @@ def %(callable)s(environ, start_response):
                             "complete (feature + typed exposes)",
                             "leaves: %d" % _gh_leaves,
                             "decomposer_gherkin", "PASS", level=L_MILESTONE)
+                # N2 (S35): the SEPARATE standardized-spec gate the user asked
+                # for — a single verdict over EVERY node that COLLECTS (never
+                # re-derives) two orthogonal facts the format-specific gates
+                # above each own only a slice of:
+                #   (a) is there a VALID machine carrier from the registry
+                #       (spec_registry.FORMAT_VALIDATORS)? A leaf that is neither
+                #       http nor a code-leaf-with-behaviour carries no machine
+                #       standard at all — prose-only — which decomposer_openapi
+                #       and decomposer_gherkin both skip. Prose is never a carrier
+                #       (the single criterion), so this is a NAMED refusal.
+                #   (b) is the carrier COMPLETE for a weak LLM? spec_completeness
+                #       _gaps (N6) is a pure detector; NO milestone acted on its
+                #       gaps until now. A format-valid but hollow carrier (an
+                #       http route with only success responses, a dependency with
+                #       no traceable requirement) is un-buildable and must red.
+                # A miss is an attributable `standardized_spec` FAIL milestone
+                # (the decomposer_openapi/gherkin precedent); the fragment does
+                # NOT enter the IR registry — the node is not READY until the
+                # single criterion is met.
+                if not errors:
+                    try:
+                        from . import spec_registry  # type: ignore
+                    except ImportError:  # flat layout: repo root on sys.path
+                        import spec_registry  # type: ignore
+                    std_errors = []
+                    _std_checked = 0
+                    for _pnid, _pnode in nodes.items():
+                        if not isinstance(_pnode, dict):
+                            continue
+                        if _pnode.get("children"):
+                            continue  # a branch delegates; its children carry specs
+                        _std_checked += 1
+                        _node_with_id = dict(_pnode)
+                        _node_with_id.setdefault("id", str(_pnid))
+                        # (a) registry carrier presence + validity
+                        _fmt = spec_registry.node_carrier_format(_node_with_id)
+                        if _fmt is None:
+                            std_errors.append(
+                                "node %s: no machine standard carrier from the "
+                                "registry (prose-only is never a carrier)"
+                                % _pnid)
+                        else:
+                            for _e in spec_registry.validate_carrier(
+                                    _fmt, _node_with_id):
+                                std_errors.append("node %s: %s" % (_pnid, _e))
+                        # (b) completeness for a weak LLM (N6 model)
+                        for _gap in spec_ir.spec_completeness_gaps(_pnode):
+                            std_errors.append(
+                                "node %s: incomplete spec [%s]: %s"
+                                % (_pnid, _gap.get("aspect"), _gap.get("why")))
+                    if std_errors:
+                        errors.extend(std_errors)
+                        self.emit(
+                            "decompose", "engine", "", nid,
+                            "standardized spec: a node spec is not in a machine "
+                            "standard or is incomplete for a weak LLM",
+                            "; ".join(std_errors)[:300],
+                            "standardized_spec", "FAIL", level=L_MILESTONE)
+                    elif _std_checked:
+                        # symmetry with decomposer_openapi/gherkin M3: a node that
+                        # cleared the standard+completeness gate emits a NAMED
+                        # PASS, so the dashboard surfaces the green fact too.
+                        self.emit(
+                            "decompose", "engine", "", nid,
+                            "standardized spec: every node carries a valid "
+                            "machine standard and is complete for a weak LLM",
+                            "nodes: %d" % _std_checked,
+                            "standardized_spec", "PASS", level=L_MILESTONE)
                 if not errors:
                     reg.update(nodes)
                     self.emit(

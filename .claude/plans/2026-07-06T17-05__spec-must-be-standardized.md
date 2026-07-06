@@ -108,7 +108,7 @@ Story Mapping/User Stories и Markdown RFC — НЕ носители (это п�
 graph:
   - {id: N1, needs: [],        parallel: "",     status: "[x]", files: [spec_scenarios.py, spec_ir.py, tests/requirements-dev.txt, docs/EXTERNAL-TECH-GUIDE.md, tests/audit/]}
   - {id: N6, needs: [N1],      parallel: "",      status: "[x]", files: [spec_ir.py, tests/audit/]}
-  - {id: N2, needs: [N1, N6],  parallel: "",      status: "[ ]", files: [spec_flow_runner.py, spec_ir.py, tests/audit/]}
+  - {id: N2, needs: [N1, N6],  parallel: "",      status: "[x]", files: [spec_flow_runner.py, spec_registry.py, tests/audit/]}
   - {id: N3, needs: [N1],      parallel: "wave2", status: "[x]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py, spec_gherkin.py, spec_ir.py, tests/audit/]}
   - {id: N5, needs: [N1],      parallel: "wave2", status: "[x]", files: [tests/lib/live_dashboard.py, tests/dashboard/]}
   - {id: N4, needs: [N2, N3],  parallel: "",      status: "[ ]", files: [spec_flow_runner.py, tests/audit/]}
@@ -157,6 +157,7 @@ N6 (модель содержания) — фундамент для гейта 
   - Коммит: см. лог ветки (feat commit S31).
 
 ### N2 `node-spec-standard-required` — гейт: спека узла ОБЯЗАНА быть в стандарте
+
 - выход: (а) РЕЕСТР адаптеров `format → validator` (OpenAPI/Gherkin/JSON Schema
   активны; AsyncAPI/Protobuf/GraphQL/Smithy/TypeSpec — заглушки-адаптеры,
   расширяемо); (б) гейт `standardized_spec` в движке (`_product_check`/шов узла):
@@ -167,7 +168,46 @@ N6 (модель содержания) — фундамент для гейта 
   (2) машинный, но НЕПОЛНЫЙ носитель (нет типов/ошибок/примеров) тоже краснеет;
   GREEN — полный носитель из реестра зелёный; узел не READY пока не выполнен
   единственный критерий. Отдельная проверка «внутри движка» как требует юзер; Stage
-- заметки:
+- заметки: [x] Готов. Stage **S35** (`tests/audit/test_standardized_spec_gate.py`,
+  5 тестов).
+  - **Реестр** — новый модуль `spec_registry.py`, таблица-ДАННЫЕ
+    `FORMAT_VALIDATORS: format → {standard, validator, active}`. Активные адаптеры
+    (openapi/gherkin/jsonschema) резолвятся в ГОТОВЫЕ оракулы, уже живущие в коде
+    (`spec_openapi.node_openapi_library_errors`, `spec_ir.gherkin_errors`,
+    `spec_ir.jsonschema_errors`) — реестр их СОБИРАЕТ, не переписывает. Заглушки
+    (asyncapi/protobuf/graphql/smithy/typespec) объявлены `active=False` + no-op
+    валидатор; активируются строкой, не веткой гейта. `node_carrier_format(node)`
+    по классу узла (тот же `spec_ir._node_class`/`spec_gherkin.is_code_leaf`)
+    отвечает какой АКТИВНЫЙ стандарт несёт узел или None (проза-only).
+  - **Где встроил гейт** — шов `_accept_decomposer_ir` в `spec_flow_runner.py`,
+    новый блок `if not errors:` СРАЗУ после блока Gherkin (`decomposer_gherkin`
+    PASS) и ПЕРЕД `reg.update(nodes)` — точный аналог decomposer_openapi/gherkin.
+    Для КАЖДОГО не-branch узла: (а) `spec_registry.node_carrier_format` → None =
+    проза-only = ошибка; иначе `validate_carrier` (валидность носителя); (б)
+    `spec_ir.spec_completeness_gaps(node)` (N6) — любой gap = ошибка. Есть ошибки
+    → веха `standardized_spec` FAIL (узел не входит в IR-реестр); чисто → веха
+    `standardized_spec` PASS (симметрия с M3). НЕ дублирую: валидность формата —
+    оракулы реестра, полнота — N6-детектор; гейт СОБИРАЕТ вердикт.
+  - RED краснел (5 тестов): (1) нет модуля `spec_registry`; (2) проза-only узел
+    класса `other` шёл через шов с ZERO ошибок и без вехи (ни openapi- ни
+    gherkin-гейт его не трогают); (3) http-узел с валидным OpenAPI, но только
+    2xx-ответом (неполный error surface по N6) не краснел ни на одном гейте;
+    (4) полный узел не эмитил PASS-веху `standardized_spec`.
+  - **Фикстуры дополнены до полноты (8 тестов, 4 файла)** — не подгонка, а
+    соответствие новому инварианту: их http/code-узлы предшествовали модели
+    полноты (не было `scenarios`/`effects`/error-response). Дополнены до N6
+    (`test_decomposer_emits_gherkin` +effects; `test_decomposer_emits_ir` — helper
+    `_http_leaf` + error_status; `test_decomposer_emits_openapi`,
+    `test_spec_validation_milestones` — error-response в media маршрута +
+    scenarios/effects; `test_ir_compiled_tests` — error_op + effects + health
+    scenarios). Гейт НЕ ослаблен.
+  - Зелёные: `tests/audit` = **569 passed, 14 skipped, 1 FAIL** —
+    `test_gherkin_lib_oracle::test_validate_ir_folds`, PRE-EXISTING на чистой базе
+    8ffc2c9 (нет либы `gherkin-official` в окружении), доказан `git stash` — не
+    мой регресс. nodes+decomposition+gates = **219 passed**;
+    spec+coverage+contracts = **436 passed**.
+  - Коммит: `feat(S35): standardized_spec gate — every node spec must be
+    machine-standard AND complete, else not READY (N2)`.
 
 ### N3 `decomposer-emits-gherkin` — декомпозер эмитит машинный носитель не-HTTP узла
 - выход: декомпозер выдаёт машинный Gherkin feature (+ при необходимости JSON
