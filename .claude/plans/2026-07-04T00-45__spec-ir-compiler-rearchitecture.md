@@ -62,7 +62,7 @@ graph:
   - {id: H4, needs: [H3],             parallel: "wave-2",  status: "[x]", files: [spec_ir.py, spec_flow_runner.py]}
   - {id: H5, needs: [],               parallel: "",        status: "[x]", files: [spec_ir.py, spec_skeletons.py, spec_flow_runner.py]}
   - {id: H6, needs: [],               parallel: "wave-h1", status: "[x]", files: [spec_skeletons.py, spec_flow_doctor.py]}
-  - {id: H7, needs: [],               parallel: "",        status: "[~]", files: [spec_ir.py, tests/audit/]}
+  - {id: H7, needs: [],               parallel: "",        status: "[x]", files: [spec_ir.py, tests/audit/]}
   - {id: H8, needs: [],               parallel: "wave-h1", status: "[x]", files: [spec_flow_runner.py]}
   - {id: G3, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/decomposition/]}
   - {id: G4, needs: [G3],             parallel: "",        status: "[x]", files: [tests/]}
@@ -529,10 +529,16 @@ Schemathesis, awesome-ralph.
   Опциональный ключ effects в spec_ir._NODE_KEYS добавляется в H5/H2
   волне (сейчас absent=deny работает без него)
 
-### [~] H7 `jsonschema-oracle-for-ir` — внешний оракул для самой IR
+### [x] H7 `jsonschema-oracle-for-ir` — внешний оракул для самой IR
 - выход: jsonschema-валидация рядом с validate_ir (замкнутый мир
   остаётся поверх)
 - приёмка: расхождение двух валидаторов = красный тест
+- заметки: ГОТОВ — коммит 78e3839 (RED 5 failed до кода).
+  spec_ir.jsonschema_errors + IR_JSON_SCHEMA (draft 2020-12) — второй
+  независимый структурный оракул рядом с validate_ir; оба согласны на
+  валидном IR и на структурном мусоре, расхождение = красный.
+  validate_ir держит семантику замкнутого мира поверх; jsonschema —
+  ленивый dev/test-оракул, не рантайм-зависимость движка
 
 ### [~] H8 `prose-fallback-honest-fail` — тихий prose-derived закрыт
 - выход: декомпозер с emits_ir=False — честная FAIL-ветка (или явный
