@@ -66,13 +66,13 @@ graph:
   - {id: I1, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/audit/]}
   - {id: I2, needs: [I1],             parallel: "",        status: "[ ]", files: [spec_ir.py, spec_flow_runner.py]}
   - {id: I3, needs: [I2],             parallel: "",        status: "[ ]", files: [spec_flow_runner.py]}
-  - {id: J1, needs: [],               parallel: "",        status: "[ ]", files: [spec_flow_runner.py, spec_skeletons.py, tests/audit/]}
+  - {id: J1, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, spec_skeletons.py, tests/audit/]}
   - {id: K1, needs: [],               parallel: "",        status: "[~]", files: [spec_openapi.py, tests/audit/, tests/requirements-dev.txt]}
   - {id: K2, needs: [K1],             parallel: "",        status: "[ ]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py, spec_ir.py]}
   - {id: K3, needs: [K2],             parallel: "",        status: "[ ]", files: [spec_flow_runner.py]}
-  - {id: K1b, needs: [K1],            parallel: "",        status: "[ ]", files: [spec_scenarios.py, tests/requirements-dev.txt, tests/audit/]}
-  - {id: L1, needs: [K1b],            parallel: "",        status: "[ ]", files: [spec_scenarios.py, tests/audit/]}
-  - {id: H1b, needs: [],              parallel: "",        status: "[ ]", files: [tests/harness/diff_repair.py, tests/audit/]}
+  - {id: K1b, needs: [K1],            parallel: "kl",      status: "[~]", files: [spec_scenarios.py, tests/requirements-dev.txt, tests/audit/]}
+  - {id: L1, needs: [K1b],            parallel: "kl",      status: "[~]", files: [spec_scenarios.py, tests/audit/]}
+  - {id: H1b, needs: [],              parallel: "kl",      status: "[~]", files: [tests/harness/diff_repair.py, tests/audit/]}
   - {id: K4, needs: [K2],             parallel: "",        status: "[ ]", files: [tests/harness/openapi_diff.py, spec_openapi.py]}
   - {id: H8, needs: [],               parallel: "wave-h1", status: "[x]", files: [spec_flow_runner.py]}
   - {id: G3, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/decomposition/]}
@@ -558,7 +558,7 @@ beyond this file», а контракт требует добавить get_ping
 — возможен баг lifecycle. Плюс tier понижен до weak/solo на задачу нового
 хендлера.
 
-### [ ] J1 `late-route-on-edit-in-place-deadlock` — разбор и починка вброса маршрута
+### [x] J1 `late-route-on-edit-in-place-deadlock` — разбор и починка вброса маршрута
 - выход: точный корень (write-door skeleton refusal? отсутствие пере-
   компиляции скелета core.py с новым маршрутом? lifecycle пускает DONE без
   хендлера?) + фикс: при вбросе нового маршрута на edit-in-place модуль его
@@ -572,9 +572,16 @@ beyond this file», а контракт требует добавить get_ping
   (храповик): «вброс нового маршрута на edit-in-place не может стать DONE без
   контрактного хендлера» + «скелет edit-in-place модуля пере-компилируется
   под поздний маршрут»
-- заметки: рождён разбором v165 2026-07-06 по требованию юзера. Сначала
-  ДИАГНОСТИКА (читать trace v165 + write-door/skeleton код + lifecycle
-  DONE-гейт), потом фикс. НЕ облегчать: чинить движок, не подгонять тест
+- заметки: ГОТОВ — коммиты d9c7b9f (RED) + 3a9c1ce, влит. Все 4 гипотезы
+  ПОДТВЕРЖДЕНЫ: (H1) дверь скелета отвергала get_ping т.к. co-owned модуль
+  core не пере-регистрировался с вброшенным маршрутом → S17.6
+  _module_surface_ir + _refresh_ir_skeletons пере-регистрирует объединённую
+  поверхность; (H2) handler-гейт возвращал False, но GATES_LEAF его не
+  включал → лист уходил в DONE без хендлера → S12.18 _leaf_ready_for_done
+  блокирует DONE пока контрактный хендлер должен; (H3) tier занижен до
+  weak/solo; (H4) edit-in-place пропускал компиляцию IR-теста → S18.7
+  компилирует test_<nid>_conformance.py. Аудит 525. Открытый вопрос: rework
+  требует specs/<owner>.md — проверить живым p6
 
 ### Узлы I — переворот: IR первичен, а не отчёт (2026-07-06, по запросу юзера)
 
