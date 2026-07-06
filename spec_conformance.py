@@ -182,6 +182,15 @@ def _shape_body_asserts(shape: dict, label: str) -> list:
     return lines
 
 
+def _conform_assert(shape: dict, label: str) -> list:
+    """Q4 (S42): the FULL-schema library oracle for a shaped response — runs
+    the ready openapi-schema-validator over the whole response schema so a body
+    that slips past the shallow top-level pin (a nested field, an enum value, a
+    string format, an array item type) still reds. Complements, never replaces,
+    the named field-level asserts above."""
+    return ["    _conform(%s, body, %s)" % (_literal(shape), _literal(label))]
+
+
 def _iter_steps(sc: dict):
     """Every when-shaped step of one scenario, given.state first."""
     given = sc.get("given") if isinstance(sc.get("given"), dict) else {}
@@ -310,6 +319,10 @@ def _emit_route_tests(em: _Emitter, method: str, path: str, op: dict,
             shape = _response_shape(op, status)
             if shape is not None:
                 lines += _shape_body_asserts(shape, label)
+                # Q4 (S42): the ready full-schema oracle catches what the
+                # shallow pin cannot (enums, nested, formats, array items).
+                lines += _conform_assert(shape, label)
+                em.needs.add("conform")
         em.live(name, "%s answers the contracted status %s (%s)."
                 % (label, status, media or "media not recorded in the IR"),
                 lines, {handler})
@@ -449,6 +462,23 @@ def _json_subset(expected, got):
     return expected == got
 '''
 
+# Q4 (S42): the response body is conformed against the FULL OpenAPI response
+# schema by the maintained openapi-schema-validator (Draft 2020-12 / OAS 3.1) —
+# nested objects, enums, string formats and array item schemas are all enforced
+# by the library oracle, not the shallow top-level hand-rolled shape check. The
+# import is deliberately UNGUARDED: a missing oracle is a HARD error (fail-closed,
+# Q2/S38) — conformance was NOT checked, so the leaf must never pass in silence.
+_HELPER_CONFORM = '''\
+def _conform(schema, body, label):
+    """Validate a response body against its OpenAPI response schema with the
+    ready openapi-schema-validator oracle (full Draft 2020-12 semantics)."""
+    from openapi_schema_validator import OAS31Validator
+    errors = sorted(OAS31Validator(schema).iter_errors(body), key=str)
+    assert not errors, (
+        label + ": response violates the OpenAPI schema — "
+        + "; ".join(e.message for e in errors))
+'''
+
 # the S14.4 rule-token pattern — generic filesystem flavour, never a
 # whitelist of product names
 _ENV_PREAMBLE = '''\
@@ -572,6 +602,8 @@ def compile_leaf_tests(ir: Any, node_id: str) -> str:
         blocks.append(_HELPER_TEXT)
     if "subset" in em.needs:
         blocks.append(_HELPER_SUBSET)
+    if "conform" in em.needs:
+        blocks.append(_HELPER_CONFORM)
     blocks += em.tests
     text = "\n".join(out) + "\n"
     for block in blocks:

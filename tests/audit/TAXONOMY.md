@@ -1994,6 +1994,29 @@ S41 hands the carrier as DATA and makes it the authoritative lead of the prompt.
   with the machine block BEFORE the prose spec body (RED: prose leads; GREEN:
   the MACHINE CONTRACT marker index < the prose body index).
 
+## S42 — conformance from the machine contract via a READY oracle
+Node Q4 (plan 2026-07-06T20-15), catalog A / conformance. The compiled leaf
+test pinned a shaped response with a shallow hand-rolled top-level check
+(required present, primitive types, additionalProperties:false). A body that
+satisfied that pin but violated a NESTED constraint — an enum value, a string
+format, an array item type — slipped through green. S42 conforms the body
+against the FULL OpenAPI response schema with the maintained
+openapi-schema-validator (already a dev dep; no new dependency).
+- S42.1 (oracle wired) — every shaped response emits `_conform(schema, body,
+  label)`; the helper runs `OAS31Validator(schema).iter_errors(body)`. The
+  shallow field-level asserts stay for their named messages; the oracle is the
+  catch-all (RED: no `_conform`/`OAS31Validator` in the compiled source).
+- S42.2 (catches what the pin misses) — an out-of-enum value (still the right
+  primitive type, so the shallow pin passes) reds through the library oracle;
+  the shallow asserts provably never encode the enum (GREEN: valid body passes,
+  bad body raises).
+- S42.3 (fail-closed) — the `from openapi_schema_validator import …` is
+  UNGUARDED: a missing oracle is a HARD error (Q2/S38), never a `pytest.skip`
+  that would let an unchecked leaf pass in silence.
+Follow-up (not in this atom): schemathesis property-fuzzing and openapi-core
+request/response round-trip against the ASSEMBLED app at integrate — the
+response-schema oracle here is the leaf-level slice.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.

@@ -100,7 +100,7 @@ graph:
   - {id: Q1, needs: [], parallel: "",   status: "[x]", files: [tests/harness/role_worker.py, spec_flow_runner.py, tests/audit/]}
   - {id: Q2, needs: [], parallel: "q",   status: "[x]", files: [spec_ir.py, spec_registry.py, spec_flow_runner.py, tests/audit/]}
   - {id: Q3, needs: [], parallel: "q",   status: "[x]", files: [spec_ir.py, spec_flow_runner.py, tests/audit/]}
-  - {id: Q4, needs: [Q1], parallel: "",  status: "[ ]", files: [spec_conformance.py, tests/harness/, tests/requirements-dev.txt, tests/audit/]}
+  - {id: Q4, needs: [Q1], parallel: "",  status: "[x]", files: [spec_conformance.py, tests/harness/, tests/requirements-dev.txt, tests/audit/]}
   - {id: Q5, needs: [Q1], parallel: "",  status: "[ ]", files: [tests/harness/role_worker.py, tests/requirements-dev.txt, tests/audit/]}
   - {id: Q6, needs: [],   parallel: "",  status: "[x]", files: [tests/harness/llm_backend.py, tests/audit/]}
 ```
@@ -193,6 +193,16 @@ Q3 → Q2 → Q1. Q4/Q5 после Q1.
   готовыми либами, не рукописно; ЛЛМ-угадывание исключено
 - приёмка: RED — код, нарушающий OpenAPI/Gherkin но совпадающий с прозой,
   проходит; GREEN — краснеет от либы-оракула; Stage
+- заметки: S42 (629 audit green). `spec_conformance`: скомпилированный тест
+  листа конформит тело против ПОЛНОЙ OpenAPI-схемы готовым
+  `openapi-schema-validator` (`_HELPER_CONFORM` + `_conform(schema, body,
+  label)` рядом с рукописным `_shape_body_asserts`). Ловит enum/nested/format,
+  что верхнеуровневый пин пропускает. Импорт НЕ обёрнут (fail-closed, как Q2):
+  нет либы = жёсткий фейл, не skip. Новых зависимостей нет —
+  openapi-schema-validator уже в requirements-dev.txt. Тест:
+  tests/audit/test_conformance_oracle.py. Отложено (не в атоме): schemathesis
+  property-fuzz + openapi-core round-trip против СОБРАННОГО приложения на
+  integrate — здесь только листовой срез (response-schema)
 - готовое: Specmatic `--strict` (contract-tests, negative-paths) + openapi-core
   (runtime-валидация ответа против схемы) + Schemathesis (property-фаззинг) +
   pytest-bdd/behave (исполнить node Gherkin против кода) — всё уже частично в
