@@ -1971,6 +1971,29 @@ must still stay silent — fail-closed must never false-red):
   field == PASS/approved; GREEN: missing field == REJECT/not-approved, explicit
   PASS/approved stays green).
 
+## S41 — single source → consumer: the LLM implementer reads the MACHINE carrier
+Node Q1 (plan 2026-07-06T20-15), catalog A (A1/A2) of the systemic review.
+The router, the compiled interface tests and the conformance oracle already
+ride the machine IR, while the coder still led its prompt with the prose
+specs/*.md — two carriers for one node, the consumer reading the derived one.
+S41 hands the carrier as DATA and makes it the authoritative lead of the prompt.
+- S41.1 (engine derives the carrier) — `machine_carrier_of(node, frag)` unions
+  the node's machine fields (openapi/behavior/scenarios/symbols/env) with the
+  decomposer IR fragment's data `schema`; node value wins, empty fields drop.
+  A bare node yields an EMPTY carrier (RED: a machine node yields nothing;
+  GREEN: openapi+behaviour+symbols+env present, prose-only node stays empty).
+  `Engine._leaf_machine_carrier` reads `_decomposer_ir_nodes` for the fragment
+  and `ictx["carrier"]` is populated at leaf build.
+- S41.2 (worker renders it authoritative) — `_machine_carrier_block` emits a
+  "MACHINE CONTRACT (authoritative … prose is SECONDARY)" block carrying the
+  OpenAPI paths+document, the Gherkin behaviour, the typed exposes/consumes,
+  the data schema and the env vars; empty block when no carrier (RED: block
+  empty on a real carrier; GREEN: all fields present, no-carrier → empty).
+- S41.3 (carrier precedes prose) — the assembled coder prompt
+  (`_coder_chat_prompt`, shared by the single-call and orchestra paths) leads
+  with the machine block BEFORE the prose spec body (RED: prose leads; GREEN:
+  the MACHINE CONTRACT marker index < the prose body index).
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.

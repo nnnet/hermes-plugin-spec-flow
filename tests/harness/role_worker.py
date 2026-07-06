@@ -1199,6 +1199,77 @@ def _skeleton_block(ctx: dict) -> str:
             "```python\n" + str(skel).rstrip() + "\n```")
 
 
+def _machine_carrier_block(ctx: dict) -> str:
+    """Q1 (S41): render the leaf's MACHINE carrier as the LEADING, authoritative
+    contract block. The engine hands the carrier as data (``ctx['carrier']`` —
+    openapi/behavior/scenarios/symbols/env/schema, see
+    ``spec_flow_runner.machine_carrier_of``); this block states the machine
+    contract is authoritative and the prose spec is secondary, so a weak model
+    builds to the structured surface instead of guessing from prose. Empty when
+    the engine handed no carrier (prose-only leaf keeps its historical prompt).
+    Test: tests/audit/test_machine_carrier_primary.py."""
+    car = ctx.get("carrier")
+    if not isinstance(car, dict) or not car:
+        return ""
+    parts = ["\n\nMACHINE CONTRACT (authoritative — build to satisfy THIS"
+             " exactly; the prose spec below is SECONDARY human context, not"
+             " the source of truth):"]
+    oa = car.get("openapi")
+    if isinstance(oa, dict) and oa:
+        paths = oa.get("paths") or {}
+        if isinstance(paths, dict) and paths:
+            parts.append("\nHTTP interface (routes this module owns):")
+            for p, methods in paths.items():
+                verbs = ", ".join(sorted(
+                    str(m).upper() for m in (methods or {})
+                    if isinstance(methods, dict))) if isinstance(methods, dict) else ""
+                parts.append("\n  - %s %s" % (verbs or "?", p))
+        parts.append("\nOpenAPI document (verbatim — conform to it):\n"
+                     "```json\n" + json.dumps(oa, indent=2, sort_keys=True)
+                     + "\n```")
+    beh = car.get("behavior")
+    if beh:
+        parts.append("\nBehaviour (Gherkin — every scenario MUST hold end to"
+                     " end through the public surface):\n```gherkin\n"
+                     + str(beh).rstrip() + "\n```")
+    scen = car.get("scenarios")
+    if scen:
+        parts.append("\nExecutable scenarios (input -> expected):\n```json\n"
+                     + json.dumps(scen, indent=2, sort_keys=True) + "\n```")
+    syms = car.get("symbols")
+    if isinstance(syms, dict):
+        exposes = syms.get("exposes")
+        if exposes:
+            parts.append("\nPublic symbols this module MUST expose EXACTLY"
+                         " (by these names): "
+                         + ", ".join(str(s) for s in exposes))
+        consumes = syms.get("consumes")
+        if consumes:
+            parts.append("\nSymbols it consumes from siblings (import EXACTLY"
+                         " these): " + ", ".join(str(s) for s in consumes))
+    schema = car.get("schema")
+    if schema:
+        parts.append("\nData schema (entity / request shape — fields and"
+                     " types):\n```json\n"
+                     + json.dumps(schema, indent=2, sort_keys=True) + "\n```")
+    env = car.get("env")
+    if env:
+        parts.append("\nEnvironment variables it reads: "
+                     + ", ".join(str(e) for e in env))
+    return "".join(parts)
+
+
+def _coder_chat_prompt(ctx: dict, ws_root: str, nid: str, fn: str) -> str:
+    """Q1 (S41): the coder's base prompt HEAD — the MACHINE carrier LEADS
+    (authoritative), then the prose spec body. Shared by the single-call chat
+    path and the orchestra so both lead with the SAME machine source; each site
+    appends its own derived blocks (interfaces / card / skeleton) after."""
+    spec_body = _inline_file(ws_root, ctx.get("spec", ""))
+    return _machine_carrier_block(ctx) + _IMPLEMENT_CHAT_TASK.format(
+        title=ctx["title"], id=nid, spec=ctx.get("spec", ""),
+        spec_body=spec_body, fn=fn)
+
+
 _ARCHITECT_TASK = """You are the ARCHITECT sub-role of the implementer team for
 ONE leaf of a Spec-Driven Development run.
 
@@ -1228,10 +1299,9 @@ def _orchestra_run(ctx: dict, ws_root: str, nid: str, fn: str, *,
     specialty = str(ctx.get("specialty", "") or "")
     ws = ctx["workspace"]
     spec_body = _inline_file(ws_root, ctx.get("spec", ""))
-    base_prompt = _IMPLEMENT_CHAT_TASK.format(
-        title=ctx["title"], id=nid, spec=ctx.get("spec", ""),
-        spec_body=spec_body, fn=fn) + _interfaces_block(ctx) \
-        + _card_block(ctx) + _skeleton_block(ctx)
+    # Q1 (S41): lead with the machine carrier (authoritative), prose secondary.
+    base_prompt = _coder_chat_prompt(ctx, ws_root, nid, fn) \
+        + _interfaces_block(ctx) + _card_block(ctx) + _skeleton_block(ctx)
     handoff: dict[str, Any] = {"architect_plan": "", "test_output": ""}
     passed, test_out, wrote = False, "(no files written)", False
     baseline = 0
@@ -1882,8 +1952,11 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         specialty = str(ctx.get("specialty", "") or "")
         tier = str(ctx.get("tier", "") or "")
         model = _model_for("implementer", specialty, tier)
-        prompt = _IMPLEMENT_TASK.format(title=ctx["title"], id=nid,
-                                        spec=ctx["spec"], fn=fn) \
+        # Q1 (S41): the machine carrier LEADS (authoritative) even on the
+        # file-reading path — the prose specs/*.md the task names is secondary.
+        prompt = _machine_carrier_block(ctx) \
+            + _IMPLEMENT_TASK.format(title=ctx["title"], id=nid,
+                                     spec=ctx["spec"], fn=fn) \
             + _interfaces_block(ctx) + _card_block(ctx) \
             + _skeleton_block(ctx) \
             + memory.recall_block_for("implementer", ctx["title"]) \
@@ -1917,10 +1990,9 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         specialty = str(ctx.get("specialty", "") or "")
         tier = str(ctx.get("tier", "") or "")
         model = _model_for("implementer", specialty, tier)
-        spec_body = _inline_file(ws_root, ctx["spec"])
-        prompt = _IMPLEMENT_CHAT_TASK.format(
-            title=ctx["title"], id=nid, spec=ctx["spec"],
-            spec_body=spec_body, fn=fn) + _skeleton_block(ctx) + _ASK_RULE
+        # Q1 (S41): lead with the machine carrier (authoritative), prose secondary.
+        prompt = _coder_chat_prompt(ctx, ws_root, nid, fn) \
+            + _skeleton_block(ctx) + _ASK_RULE
         from . import pytest_verifier, repo_map
         protected = sorted(pytest_verifier.protected_files())
         rmap = repo_map.build_map(ws_root, exclude=set(protected))

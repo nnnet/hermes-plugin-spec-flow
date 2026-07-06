@@ -1567,6 +1567,42 @@ def _symbols_api_markdown(symbols: "Optional[dict]") -> "list":
     return out
 
 
+# Q1 (S41): the leaf's MACHINE carrier as DATA. Catalog A of the 2026-07-06
+# systemic review found that the router, the compiled tests and the conformance
+# oracle already ride the machine IR, while the LLM coder still read the prose
+# specs/*.md as its LEADING intent — two carriers for one node, and the consumer
+# reads the derived (prose) one. This unions the node's machine fields with its
+# decomposer IR fragment into a single dict the worker renders FIRST (authoritative);
+# the prose is demoted to secondary context. A node with no machine field yields
+# an EMPTY dict, so a prose-only leaf keeps its historical prompt (back-compat).
+_CARRIER_FIELDS = ("openapi", "behavior", "scenarios", "symbols", "env")
+
+
+def machine_carrier_of(node: "Optional[dict]",
+                       frag: "Optional[dict]" = None) -> dict:
+    """Union the node's machine carrier: OpenAPI document, Gherkin behaviour,
+    executable scenarios, typed symbols (exposes/consumes), env, and the data
+    schema from its decomposer IR fragment. Node value wins over the fragment
+    (the plan node is the placed, engine-owned copy); the fragment fills a field
+    the node lacks and contributes the data ``schema``. Only non-empty fields
+    are carried, so an absent carrier is an empty dict — never a phantom section."""
+    node = node if isinstance(node, dict) else {}
+    frag = frag if isinstance(frag, dict) else {}
+    out: dict = {}
+    for k in _CARRIER_FIELDS:
+        v = node.get(k)
+        if not v and frag:
+            v = frag.get(k)
+        if v:
+            out[k] = v
+    # the data schema lives on the IR fragment (request/entity shape), not on
+    # the placed node — carry it so a storage/entity leaf gets its typed shape.
+    schema = frag.get("schema")
+    if schema:
+        out["schema"] = schema
+    return out
+
+
 def _route_success_status(method: str) -> int:
     """The ONE contracted success status for a route, by HTTP method — the
     single source BOTH the coder (via the route binding text) and the leaf
@@ -5017,6 +5053,14 @@ class Engine:
                 "keep EVERY handler defined at module level. A delivery that "
                 "drops one is refused at the write door (the route would 404 "
                 "at assembly):\n%s" % (stem, lines))
+
+    def _leaf_machine_carrier(self, node: dict, nid: str) -> dict:
+        """Q1 (S41): the leaf's machine carrier for THIS node, unioning its
+        placed machine fields with its decomposer IR fragment (data schema).
+        The worker renders this FIRST as the authoritative contract; the prose
+        spec is secondary. Empty for a prose-only leaf (back-compat)."""
+        frag = (self.__dict__.get("_decomposer_ir_nodes") or {}).get(nid)
+        return machine_carrier_of(node, frag if isinstance(frag, dict) else None)
 
     def _leaf_exposed_symbols(self, node: dict) -> list:
         """#113 Phase 0: the public symbol(s) THIS leaf exposes, as DATA — the
@@ -10550,6 +10594,14 @@ def %(callable)s(environ, start_response):
                 _skel = self._ir_skeleton_for(nid, f"src/{code_fn}.py")
                 if _skel:
                     ictx["skeleton"] = _skel
+                # Q1 (S41): hand the node's MACHINE carrier (openapi/behavior/
+                # symbols/env/schema) as DATA, so the worker leads its prompt
+                # with the authoritative machine contract and reads the prose
+                # spec only as secondary context. Empty => prose-only leaf,
+                # prompt unchanged.
+                _carrier = self._leaf_machine_carrier(node, nid)
+                if _carrier:
+                    ictx["carrier"] = _carrier
                 # B3 (S18.5): a leaf with an accepted IR fragment gets its
                 # interface tests COMPILED by the engine — the LLM tester
                 # is retired for interface coverage (leaf_tests_source).

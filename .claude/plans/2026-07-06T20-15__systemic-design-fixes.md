@@ -97,7 +97,7 @@ openapi-core, уже частично в `CONTRACT_VALIDATORS`.
 
 ```yaml
 graph:
-  - {id: Q1, needs: [], parallel: "",   status: "[ ]", files: [tests/harness/role_worker.py, spec_flow_runner.py, tests/audit/]}
+  - {id: Q1, needs: [], parallel: "",   status: "[x]", files: [tests/harness/role_worker.py, spec_flow_runner.py, tests/audit/]}
   - {id: Q2, needs: [], parallel: "q",   status: "[x]", files: [spec_ir.py, spec_registry.py, spec_flow_runner.py, tests/audit/]}
   - {id: Q3, needs: [], parallel: "q",   status: "[x]", files: [spec_ir.py, spec_flow_runner.py, tests/audit/]}
   - {id: Q4, needs: [Q1], parallel: "",  status: "[ ]", files: [spec_conformance.py, tests/harness/, tests/requirements-dev.txt, tests/audit/]}
@@ -114,6 +114,15 @@ Q3 → Q2 → Q1. Q4/Q5 после Q1.
   из прозы (добить K2-миграцию на исполнителя)
 - приёмка: RED — промпт листа несёт прозу как главный носитель / contract из
   прозы; GREEN — машинный носитель первичен, один источник; Stage
+- заметки: S41 (625 audit green). Движок: `machine_carrier_of(node, frag)` +
+  `Engine._leaf_machine_carrier` → `ictx["carrier"]` (openapi/behavior/
+  scenarios/symbols/env/schema, union узел+IR-фрагмент, node wins). Воркер:
+  `_machine_carrier_block` рендерит «MACHINE CONTRACT (authoritative … prose
+  SECONDARY)» ПЕРВЫМ; `_coder_chat_prompt` — общий head для chat+orchestra;
+  добавлено во все 3 сайта (orchestra/chat/claude). Носитель предшествует
+  прозе. Тест: tests/audit/test_machine_carrier_primary.py. Остаток (не в этом
+  атоме, отдельный узел при надобности): router/media на `_product_contract`
+  из прозы (A4/I2 частично закрыты)
 
 ### [x] Q2 `fail-closed` — убрать «отсутствие=успех» системно
 - выход: verdict по умолчанию **не PASS** (молчание модели = FAIL/retry, не зелёный);
