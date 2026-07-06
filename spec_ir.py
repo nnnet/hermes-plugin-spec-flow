@@ -176,12 +176,20 @@ def _node_openapi(nid: str, routes: list, reqf: dict, media: dict,
                     "required": list(shape),
                     "additionalProperties": False}}}}
         status = str(status_fn(method))
+        # H2/S13.6: this status is the engine's REST convention (POST->201,
+        # else 200), not a spec datum — mark its origin so ir.json shows what
+        # the spec asked for vs what the engine invented (F5). A decomposer
+        # machine fragment replaces the whole operation and carries no marker.
+        op["x-spec-flow-status-source"] = "convention"
         resp: dict = {"description": "contracted success response"}
         md = media.get(path)
         fixed = fixed_fn(method, path)
         if fixed is not None:
             resp["content"] = {"application/json": {"schema": {
                 "const": fixed}}}
+            # H2/S13.6: the engine inlined this body (e.g. /health ->
+            # {"status": "ok"}) — an engine convention, not a spec datum.
+            op["x-spec-flow-body-source"] = "convention"
         elif md in _MIME:
             resp["content"] = {_MIME[md]: {"schema": {}}}
         op["responses"] = {status: resp}

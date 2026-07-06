@@ -778,6 +778,17 @@ implementation commit turned them green.
   a JSON dict against contracted text/html) reds as a scenario/openapi
   media mismatch carrying BOTH medias; v149's status guess (a scenario
   asserting a status the interface never declares) reds naming the status.
+- S13.6 THE ENGINE MARKS ITS OWN INVENTIONS (node H2, principles-audit F5):
+  a success status derived from the engine's REST convention
+  (`_route_success_status`: POST->201, else 200) carries
+  `x-spec-flow-status-source: convention` on the operation, and a body the
+  engine inlined (`_route_fixed_body`, e.g. /health -> {"status": "ok"})
+  carries `x-spec-flow-body-source: convention`. Reading ir.json the invented
+  bits are now VISIBLE — separable from spec-declared facts, and later
+  demandable from the spec. A decomposer machine fragment replaces the whole
+  operation (the IR path never flows through `_node_openapi`), so it carries
+  no marker — absence reads as spec-declared. (`test_status_source_
+  provenance.py`)
 
 ## STAGE 14 — Scenario runner: THE interface oracle
 (`test_scenario_runner_oracle.py`, `test_scenario_engine_wiring.py`)
