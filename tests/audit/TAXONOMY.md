@@ -1212,6 +1212,35 @@ the implementation commit turned it green.
   no battery spec smuggles cross-run project memory (memory.project.mode,
   when present, is `fresh`).
 
+## STAGE 21 — Closed response body shape (`test_closed_response_schemas.py`)
+
+Node H3 (plan 2026-07-04T00-45), principles-audit finding F1. `compile_openapi`
+emitted `{"schema": {}}` for a media-only success response and
+`compile_leaf_tests` asserted only `isinstance(body, dict)` — a weak model
+could return invented fields and stay GREEN. The empty schema READ like a
+closed "any object" contract while it was an unrecorded GAP. Stage 21 closes
+the response body the way Stage 13/16 closed the request body: declared shape
+is pinned, undeclared shape is a VISIBLE gap.
+
+- S21.1 A success response whose IR entry carries a CLOSED object schema
+  (`type: object` + `properties`/`required`/`additionalProperties: false`)
+  compiles to asserts that the required fields are PRESENT, each declared
+  field type holds (`isinstance(body[f], <pytype>)`), and — when
+  additionalProperties is false — `set(body)` carries no field outside the
+  declared union. Field types map JSON→Python once (string→str, integer→int,
+  number→(int,float), boolean→bool, object→dict, array→list); an unknown type
+  is skipped, never guessed.
+- S21.2 The F1 exploit is dead BY CONSTRUCTION, proven behaviourally: a
+  handler returning the contracted fields plus an invented one fails the
+  compiled test in-process; the honest handler passes.
+- S21.3 A media-only response with NO recorded body shape stays an honest
+  `isinstance` check AND is NAMED in the compiled document's
+  `x-spec-flow-gaps` ("... response <status> body shape not recorded") — the
+  engine invents no fields but the silence is made visible (S13.1 discipline
+  carried to the response body; mirrors the media gap).
+- S21.4 A `const` fixed body keeps its exact `== body` assert — the S18
+  contract is not weakened by the new shape path (GREEN direction).
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.
