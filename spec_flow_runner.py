@@ -2872,6 +2872,9 @@ class Engine:
         # П1: set True when a run ends via a cooperative STOP (partial result)
         self._stopped = False
         self._checkpoint_lock = threading.Lock()
+        # I1/S14.6: serialize IR dumps so parallel leaves cannot interleave a
+        # build+write, and make ir.json a working (live) artifact.
+        self._ir_write_lock = threading.Lock()
         # auto-checkpoint cadence: the engine snapshots ITSELF every N node
         # boundaries when set (a run/engine parameter, like the decomposer type)
         self._nodes_since_ckpt = 0
@@ -9533,6 +9536,14 @@ def %(callable)s(environ, start_response):
             self._completed += 1
         else:
             self._leaf_pipeline(node, contract_ctx, depth, parent, drv, ancestors)
+            # I1/S14.6c: the IR is a LIVE artifact — re-dump after each leaf
+            # is realized so ir.json grows during the run (best-effort: a dump
+            # failure must never sink the leaf).
+            try:
+                self._write_ir_incremental("leaf realized: %s"
+                                           % node.get("id"))
+            except Exception:  # noqa: BLE001 — live snapshot is non-fatal
+                pass
 
         # close the node lifecycle — the guard refuses DONE if a mandatory gate
         # for this node kind was skipped (raises GateViolation in both engines).
@@ -10623,8 +10634,56 @@ def %(callable)s(environ, start_response):
         late-bound route triggers a re-dump via _maybe_redump_ir). Also
         snapshots the realized route set for the growth check. Read-only
         over the datums — no gate behaviour changes.
+        I1/S14.6: guarded by _ir_write_lock (parallel leaves serialize) and
+        ir.json is replaced ATOMICALLY (tmp + os.replace) so a live reader
+        never catches the truncate window of a plain write_text.
         Test: tests/audit/test_ir_scenarios_schema.py,
-        tests/audit/test_scenario_engine_wiring.py."""
+        tests/audit/test_scenario_engine_wiring.py,
+        tests/audit/test_ir_incremental_write.py."""
+        lock = self.__dict__.get("_ir_write_lock")
+        if lock is None:
+            lock = self.__dict__.setdefault("_ir_write_lock", threading.Lock())
+        with lock:
+            self._write_ir_locked(reason)
+
+    def _write_ir_incremental(self, reason: str = "leaf realized") -> None:
+        """I1/S14.6c: re-dump ir.json as the tree is built (per realized
+        leaf) so the IR is a LIVE artifact, not an end-of-run report. Thin
+        alias over the locked writer; kept as a named seam so call sites read
+        as incremental and a future throttle lands in one place."""
+        self._write_ir(reason)
+
+    def _atomic_write(self, rel: str, content: str) -> None:
+        """I1/S14.6b: write a workspace file atomically (tmp + os.replace) so
+        a concurrent reader sees the whole file or the previous one — never a
+        half/truncated write. Registers the artifact like workspace._write."""
+        ws = self.workspace
+        if not getattr(ws, "enabled", True):
+            return
+        root = Path(ws.root)
+        dest = root / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(dest.name + ".tmp-%d" % threading.get_ident())
+        tmp.write_text(content, encoding="utf-8")
+        os.replace(str(tmp), str(dest))
+        # Register the artifact in the SAME dict shape workspace._write uses;
+        # incremental re-dumps UPDATE the existing row instead of piling up
+        # duplicate entries (this file is rewritten many times per run).
+        rec = {"path": rel, "type": "contract",
+               "bytes": len(content.encode("utf-8"))}
+        try:
+            arts = ws.artifacts
+            for i, a in enumerate(arts):
+                if isinstance(a, dict) and a.get("path") == rel:
+                    arts[i] = rec
+                    break
+            else:
+                arts.append(rec)
+        except Exception:  # noqa: BLE001 — artifact bookkeeping is best-effort
+            pass
+
+    def _write_ir_locked(self, reason: str = "plan realized") -> None:
+        """The body of _write_ir, run under _ir_write_lock (I1/S14.6a)."""
         try:
             try:
                 from . import spec_ir  # type: ignore
@@ -10632,15 +10691,14 @@ def %(callable)s(environ, start_response):
                 import spec_ir  # type: ignore
             ir = spec_ir.build_ir(self)
             rep = spec_ir.validate_ir(ir)
-            self.workspace._write(
+            self._atomic_write(
                 "ir.json",
-                json.dumps(ir, indent=2, sort_keys=True) + "\n",
-                "contract")
+                json.dumps(ir, indent=2, sort_keys=True) + "\n")
             # H5/S13.7: materialise the requested third-party deps as a pip
             # manifest — nothing written when the spec requested nothing.
             _reqs = spec_ir.requirements_txt(ir)
             if _reqs:
-                self.workspace._write("requirements.txt", _reqs, "contract")
+                self._atomic_write("requirements.txt", _reqs)
             self._ir_dumped_routes = self._ir_route_set()
             self._refresh_ir_skeletons(ir)
             self.emit(
