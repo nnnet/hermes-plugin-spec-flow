@@ -67,7 +67,7 @@ graph:
   - {id: I2, needs: [I1],             parallel: "",        status: "[ ]", files: [spec_ir.py, spec_flow_runner.py]}
   - {id: I3, needs: [I2],             parallel: "",        status: "[ ]", files: [spec_flow_runner.py]}
   - {id: J1, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, spec_skeletons.py, tests/audit/]}
-  - {id: K1, needs: [],               parallel: "",        status: "[~]", files: [spec_openapi.py, tests/audit/, tests/requirements-dev.txt]}
+  - {id: K1, needs: [],               parallel: "",        status: "[x]", files: [spec_openapi.py, tests/audit/, tests/requirements-dev.txt]}
   - {id: K2, needs: [K1],             parallel: "",        status: "[ ]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py, spec_ir.py]}
   - {id: K3, needs: [K2],             parallel: "",        status: "[ ]", files: [spec_flow_runner.py]}
   - {id: K1b, needs: [K1],            parallel: "kl",      status: "[x]", files: [spec_scenarios.py, tests/requirements-dev.txt, tests/audit/]}
@@ -517,14 +517,15 @@ openapi-spec-validator 0.9.0 установлен, зафиксирован в
 tests/requirements-dev.txt; проверено — библиотека ЕСТ наш compile_openapi
 без правок.
 
-### [~] K1 `openapi-lib-validator` — валидация спеки библиотекой, не рукописно
+### [x] K1 `openapi-lib-validator` — валидация спеки библиотекой, не рукописно
 - выход: spec_openapi валидирует документ через openapi-spec-validator
   (стандарт-оракул) рядом с рукописным lint_openapi (наши доп-правила
   поверх); либа ловит нарушения OpenAPI 3.1, которых рукописный lint не знает
 - приёмка: красный кейс — сломанный OpenAPI (bad $ref/тип) ловится
   библиотекой; наш compile_openapi проходит; расхождение lib↔lint = сигнал
-- заметки: первый шаг, зона spec_openapi не пересекается с J1
-  (runner/skeletons). Начат 2026-07-06
+- заметки: ГОТОВ — validate_openapi_library через openapi-spec-validator
+  (S16.7), либа ест наш compile_openapi без правок, ловит сломанный
+  OpenAPI (bad type/missing field). Влит. Зона не пересекалась с J1
 
 ### [ ] K2 `decomposer-emits-openapi` — декомпозер выдаёт OpenAPI-документ ноды
 - выход: декомпозер эмитит машинный OpenAPI 3.1 фрагмент ноды как ПЕРВИЧНЫЙ
