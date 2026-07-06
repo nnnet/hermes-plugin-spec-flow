@@ -1436,6 +1436,59 @@ is pinned, undeclared shape is a VISIBLE gap.
 - S21.4 A `const` fixed body keeps its exact `== body` assert — the S18
   contract is not weakened by the new shape path (GREEN direction).
 
+## STAGE 22 — Decomposer emits OpenAPI as the PRIMARY node interface,
+library-validated (`test_decomposer_emits_openapi.py`)
+
+Node K2 of the spec-IR rearchitecture (plan 2026-07-04T00-45; user
+superpriority 2026-07-06 — "use the OpenAPI library; the machine document is
+the primary interface carrier, prose .md a derived fallback"). E1 (Stage 15)
+made the decomposer emit a MACHINE part — per-node `openapi` fragments (a real
+OpenAPI 3.1 document each) — validated at `_accept_decomposer_ir` with
+`spec_ir.validate_ir`, the engine's HAND-ROLLED closed-world check. K1
+(Stage 16.7) added `spec_openapi.validate_openapi_library` — a maintained
+third-party OpenAPI 3.1 oracle — but only over the COMPILED product document,
+never over the per-node fragment at the decomposer seam. So a node whose
+OpenAPI document was invalid by the STANDARD (a wrong-typed `schema`, a dangling
+local `$ref`, a list where the 3.1 spec wants an object) passed the seam
+SILENTLY — validate_ir had nothing to say and the library never ran. That is
+the v165 lost-route class one layer up: an interface fact accepted as truth
+without ever being library-checked.
+Ratchet evidence (RED before code): `test_decomposer_emits_openapi.py` was
+committed against the pre-K2 engine and PROVEN RED — 1 failed, 5 passed: a node
+with a library-invalid OpenAPI document was accepted by `_accept_decomposer_ir`
+with ZERO errors (`assert errs` -> `assert []`) — before the seam library-check
+turned it green.
+- S22.1 A NODE'S OpenAPI DOCUMENT IS LIBRARY-VALIDATED AT THE SEAM: when
+  `spec_ir.validate_ir` is satisfied, `_accept_decomposer_ir` additionally runs
+  EVERY proposed node's `openapi` document through the third-party
+  openapi-spec-validator (`spec_openapi.node_openapi_library_errors`); a
+  standard violation is a NAMED refusal (P4 — the error string names the node),
+  a MILESTONE FAIL on its OWN gate `decomposer_openapi` (the `decomposer_ir`
+  precedent), and the fragment NEVER enters the `_decomposer_ir_nodes` registry
+  — a later consumer can never read a document that failed the standard oracle.
+  Known-answer RED: a response `schema` that is a string, not a JSON Schema
+  object, slips past validate_ir (premise pinned by
+  `test_library_invalid_doc_slips_past_hand_rolled_validate_ir`) and is caught
+  only here.
+- S22.2 NO FALSE REFUSAL, ORACLE-OPTIONAL: a standard-valid node document is
+  accepted with zero errors, no `decomposer_openapi` FAIL, and the
+  `decomposer_ir` PASS still journals (GREEN direction). The library is a
+  dev/test oracle (tests/requirements-dev.txt) imported lazily; when it is
+  ABSENT `node_openapi_library_errors` returns `[]` (probed via
+  `openapi_library_available`) — the seam skips the extra check, never a false
+  refusal, and the engine keeps no hard runtime dependency.
+- S22.3 THE ROUTE LIVES IN THE MACHINE DOCUMENT FROM THE FIRST STEP (the v165
+  class impossible): an accepted node's route is present in its library-valid
+  `openapi` document at acceptance, and `_leaf_owned_routes` binds ownership
+  from that document (`interface_source: ir`) — never a prose guess deferred to
+  assembly. A route can no longer travel as prose only to be dropped later.
+- S22.4 PROSE-AS-CARRIER IS A REFUSAL UNDER ir-required (H8/S15.8 connective):
+  a node whose interface was prose-derived (no accepted machine OpenAPI
+  document) surfaces as a FAILING product check naming the node under
+  `interface_policy: ir-required`; under `allow-prose` the historical fallback
+  runs clean (GREEN direction) — the policy connective is symmetric, K2 keeps
+  it honest.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.

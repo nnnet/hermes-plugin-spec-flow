@@ -68,7 +68,7 @@ graph:
   - {id: I3, needs: [I2],             parallel: "",        status: "[ ]", files: [spec_flow_runner.py]}
   - {id: J1, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, spec_skeletons.py, tests/audit/]}
   - {id: K1, needs: [],               parallel: "",        status: "[x]", files: [spec_openapi.py, tests/audit/, tests/requirements-dev.txt]}
-  - {id: K2, needs: [K1],             parallel: "",        status: "[ ]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py, spec_ir.py]}
+  - {id: K2, needs: [K1],             parallel: "",        status: "[x]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py, spec_ir.py]}
   - {id: K3, needs: [K2],             parallel: "",        status: "[ ]", files: [spec_flow_runner.py]}
   - {id: K1b, needs: [K1],            parallel: "kl",      status: "[x]", files: [spec_scenarios.py, tests/requirements-dev.txt, tests/audit/]}
   - {id: L1, needs: [K1b],            parallel: "kl",      status: "[x]", files: [spec_scenarios.py, tests/audit/]}
@@ -527,7 +527,7 @@ tests/requirements-dev.txt; проверено — библиотека ЕСТ �
   (S16.7), либа ест наш compile_openapi без правок, ловит сломанный
   OpenAPI (bad type/missing field). Влит. Зона не пересекалась с J1
 
-### [ ] K2 `decomposer-emits-openapi` — декомпозер выдаёт OpenAPI-документ ноды
+### [x] K2 `decomposer-emits-openapi` — декомпозер выдаёт OpenAPI-документ ноды
 - выход: декомпозер эмитит машинный OpenAPI 3.1 фрагмент ноды как ПЕРВИЧНЫЙ
   носитель интерфейса (не прозу); движок читает/валидирует его библиотекой;
   E1 (decomposer-emits-ir) расширяется до полного OpenAPI-документа
@@ -536,7 +536,24 @@ tests/requirements-dev.txt; проверено — библиотека ЕСТ �
   краснеет на прозе. Класс v165 (потерянный get_ping) невозможен —
   маршрут в машинном контракте с первого шага
 - заметки: сердце требования; зона декомпозер+runner пересекается с J1 —
-  порядок влития J1 → K2
+  порядок влития J1 → K2.
+  СДЕЛАНО (Stage S22, tests/audit/test_decomposer_emits_openapi.py):
+  на шве `_accept_decomposer_ir` каждый машинный OpenAPI-документ ноды
+  валидируется библиотекой openapi-spec-validator (новая тонкая обёртка
+  `spec_openapi.node_openapi_library_errors` + `openapi_library_available`);
+  невалидный по стандарту документ = именованный отказ, отдельная веха
+  `decomposer_openapi` FAIL, фрагмент не входит в реестр `_decomposer_ir_nodes`
+  (S22.1). Библиотека — dev/test-оракул, при отсутствии проверка пропускается,
+  ложного отказа нет (S22.2). Маршрут ноды присутствует в машинном OpenAPI с
+  первого шага, ownership читает документ — класс v165 невозможен (S22.3).
+  Связка с H8: под ir-required проза-нода без машинного OpenAPI краснеет в
+  `_interface_policy_failures`, под allow-prose — чисто (S22.4).
+  RED-тест краснел на pre-K2: нода с битым `schema` (строка вместо объекта)
+  проходила молча (`assert errs` -> `assert []`); хэнд-роллед `validate_ir`
+  её не ловит, ловит только библиотека.
+  Аудит: 527 passed, 11 skipped (skip — отсутствие исторических runs-out в
+  fresh-worktree, не связано с K2); S22-набор 6 зелёных.
+  Коммит: см. ветку node-k2-decomposer-openapi.
 
 ### [ ] K3 `prose-is-derived` — .md генерируется ИЗ OpenAPI, не наоборот
 - выход: specs/*.md компилируются из машинного OpenAPI-документа ноды

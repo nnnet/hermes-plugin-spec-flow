@@ -7755,6 +7755,34 @@ def %(callable)s(environ, start_response):
                     errors.insert(0, "node %s: ir.format %r is not %r"
                                   % (nid, frag.get("format"),
                                      spec_ir.IR_FORMAT))
+                # K2 (S22.1): the node's OpenAPI document is the PRIMARY
+                # interface carrier — validate EACH proposed node's document
+                # with the maintained third-party openapi-spec-validator, not
+                # only the engine's hand-rolled closed world. A document invalid
+                # by the OpenAPI 3.1 STANDARD is a NAMED refusal on its own gate
+                # (decomposer_openapi), never a silent pass to prose. The check
+                # is skipped when the oracle is absent (dev-optional).
+                if not errors:
+                    try:
+                        from . import spec_openapi  # type: ignore
+                    except ImportError:  # flat layout: repo root on sys.path
+                        import spec_openapi  # type: ignore
+                    oa_errors = []
+                    for _pnid, _pnode in nodes.items():
+                        _doc = (_pnode or {}).get("openapi")
+                        if _doc is None:
+                            continue
+                        oa_errors.extend(
+                            spec_openapi.node_openapi_library_errors(
+                                str(_pnid), _doc))
+                    if oa_errors:
+                        errors.extend(oa_errors)
+                        self.emit(
+                            "decompose", "engine", "", nid,
+                            "decomposer OpenAPI: node document invalid by "
+                            "the OpenAPI 3.1 library",
+                            "; ".join(oa_errors)[:300],
+                            "decomposer_openapi", "FAIL", level=L_MILESTONE)
                 if not errors:
                     reg.update(nodes)
                     self.emit(
