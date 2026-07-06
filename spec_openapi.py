@@ -275,6 +275,50 @@ def validate_openapi_library(doc: dict) -> list:
         return ["%s: %s" % (type(exc).__name__, str(exc).splitlines()[0])]
 
 
+def openapi_library_available() -> bool:
+    """K2: is the third-party openapi-spec-validator importable here?
+
+    Why: the decomposer seam library-validates each node's OpenAPI document,
+    but the library is a dev/test oracle (tests/requirements-dev.txt) — the
+    engine must NOT hard-depend on it. A caller distinguishes "library says the
+    document is invalid" (a real refusal) from "library is absent" (skip the
+    extra check, never a false refusal) with this probe.
+    What: True when both symbols import, False otherwise.
+    Test: tests/audit/test_decomposer_emits_openapi.py (the seam falls back
+    cleanly when the oracle is absent)."""
+    try:
+        from openapi_spec_validator import validate as _validate  # noqa: F401
+        from openapi_spec_validator.validation.exceptions import (  # noqa: F401
+            OpenAPIValidationError)
+        return True
+    except ImportError:
+        return False
+
+
+def node_openapi_library_errors(nid: str, doc: dict) -> list:
+    """K2: library-validate ONE node's OpenAPI document at the decomposer seam.
+
+    Why: E1 made every node carry a machine OpenAPI document but validated it
+    only with the engine's hand-rolled closed-world check (spec_ir.validate_ir);
+    a document invalid by the OpenAPI 3.1 STANDARD (wrong-typed schema, dangling
+    $ref, list-where-object) slipped through silently — the v165 class one layer
+    up. This runs the maintained third-party oracle over the node's document so
+    a standard violation is an attributable, NAMED value, never a silent pass.
+    What: returns a list of plain error strings, each naming ``nid`` and the
+    library complaint ([] == standard-valid). When the library is ABSENT the
+    check is skipped ([]), never a false refusal (the engine stays dev-optional).
+    Test: tests/audit/test_decomposer_emits_openapi.py (S22.1 named refusal,
+    S22.2 valid document passes)."""
+    if not openapi_library_available():
+        return []
+    if not isinstance(doc, dict) or not doc:
+        # a node with no machine OpenAPI document is a prose carrier — that is
+        # the interface_policy seam's concern (S15.8), not a library error.
+        return []
+    return ["node %s: openapi document rejected by openapi-spec-validator: %s"
+            % (nid, err) for err in validate_openapi_library(doc)]
+
+
 def lint_openapi(doc: dict) -> list:
     """Why: shipping a structurally broken document means the external
     oracles reject it before testing anything — self-check first, stdlib
