@@ -30,13 +30,22 @@ IR top-level shape (format "spec-flow ir v1")::
          scenarios?: [{requirement, given?, when, then}]
      }}}
 
-Scenarios are FIRST-CLASS with a tiny CLOSED schema the engine owns — not
-Gherkin, no free grammar, no parser surface::
+Scenarios are FIRST-CLASS with a tiny CLOSED schema the engine owns — this is
+the engine's TARGET shape, not a free grammar::
 
     given {env: {NAME: value}, state: [prior when-steps]}
     when  {method, path, body}
     then  {status, media, body_check = exactly one of
            equals | contains | json_subset}
+
+The GRAMMAR of these scenarios is validated against the Gherkin STANDARD by a
+ready-made parser LIBRARY (`gherkin-official`), not by our own string logic
+(S31/N1, `gherkin_errors`): each closed scenario is projected to a canonical
+`.feature` document and parsed, so a malformed carrier is caught by the library
+AST, exactly as `jsonschema` (S13.8) and `openapi-schema-validator` (S14.7) sit
+beside the hand checks. The hand `_check_scenario` keeps only the CLOSED
+cross-rules a grammar cannot express (declared routes/env, then/openapi
+agreement).
 
 Phase A only BUILDS and VALIDATES the IR (and the engine dumps ir.json at
 plan time); compiling specs / skeletons / conformance tests from it is
@@ -269,6 +278,147 @@ def jsonschema_errors(ir: Any) -> list:
     return ["%s: %s" % ("/".join(str(p) for p in e.path) or "<root>",
                         e.message)
             for e in sorted(validator.iter_errors(ir), key=str)]
+
+
+def _scenario_to_gherkin(nid: str, idx: int, sc: dict) -> str:
+    """Render ONE closed Given/When/Then scenario to a canonical Gherkin
+    `.feature` document — the standard machine carrier the parser library reads.
+
+    Why (S31): the engine owns a closed `{given, when, then}` structure; to hand
+    its GRAMMAR to a ready-made oracle the structure is projected into the
+    standard Gherkin surface. `given.state` when-steps become `Given` steps,
+    the `when` becomes the `When`, and `then` becomes `Then` (+ optional `And`
+    for media / body_check). The scenario title is the requirement id; a
+    requirement carrying newlines is deliberately NOT sanitised here, so a
+    malformed carrier reaches the parser and is caught as a grammar break
+    rather than silently smoothed over.
+    What: returns the feature text (always exactly one Feature, one Scenario).
+    Test: tests/audit/test_gherkin_lib_oracle.py."""
+    title = str(sc.get("requirement") or nid)
+    lines = ["Feature: node %s" % nid, "  Scenario: %s" % title]
+    given = sc.get("given") if isinstance(sc.get("given"), dict) else {}
+    for st in (given.get("state") or []):
+        if isinstance(st, dict):
+            lines.append("    Given a %s request to %s"
+                         % (st.get("method"), st.get("path")))
+    when = sc.get("when") if isinstance(sc.get("when"), dict) else {}
+    lines.append("    When a %s request to %s"
+                 % (when.get("method"), when.get("path")))
+    then = sc.get("then") if isinstance(sc.get("then"), dict) else {}
+    lines.append("    Then the response status is %s" % then.get("status"))
+    if then.get("media") is not None:
+        lines.append("    And the response media type is %s" % then["media"])
+    bc = then.get("body_check")
+    if isinstance(bc, dict) and len(bc) == 1:
+        kind, expected = next(iter(bc.items()))
+        lines.append("    And the response body %s %s" % (kind, expected))
+    return "\n".join(lines) + "\n"
+
+
+def _expected_step_keywords(sc: dict) -> list:
+    """The keyword sequence the closed structure implies for its Gherkin
+    projection: one Given per given.state step, one When, one Then, one And per
+    optional then clause (media / body_check). The parser AST must reproduce
+    exactly this — any drift means the rendered carrier was ungrammatical
+    (an injected keyword line stole or spawned a step)."""
+    given = sc.get("given") if isinstance(sc.get("given"), dict) else {}
+    kws = ["Given" for st in (given.get("state") or [])
+           if isinstance(st, dict)]
+    kws.append("When")
+    kws.append("Then")
+    then = sc.get("then") if isinstance(sc.get("then"), dict) else {}
+    if then.get("media") is not None:
+        kws.append("And")
+    bc = then.get("body_check")
+    if isinstance(bc, dict) and len(bc) == 1:
+        kws.append("And")
+    return kws
+
+
+# Lazily-loaded gherkin-official parser pieces. None until first lookup, a tuple
+# (Parser, TokenScanner, error-classes) when present, False when the library is
+# genuinely absent — so a missing dev dependency degrades to the hand check
+# instead of hard-crashing validation (the S14.7 optional-oracle contract).
+_GHERKIN_PARSER: Any = None
+
+
+def _gherkin_parser() -> Any:
+    """The gherkin-official (Parser, TokenScanner, (error types)) if importable,
+    else None.
+
+    Why: the parser LIBRARY is the oracle of Gherkin grammar; it is a dev/test
+    dependency (tests/requirements-dev.txt), not a hard runtime dependency of
+    the shipped engine. Imported lazily and tolerating absence keeps validate_ir
+    usable in a bare environment (grammar oracle skipped, hand cross-rules run).
+    What: imports once, memoises the tuple (or False on ImportError)."""
+    global _GHERKIN_PARSER
+    if _GHERKIN_PARSER is None:
+        try:
+            from gherkin.parser import Parser
+            from gherkin.token_scanner import TokenScanner
+            from gherkin.errors import ParserError, CompositeParserException
+            _GHERKIN_PARSER = (Parser, TokenScanner,
+                               (ParserError, CompositeParserException))
+        except Exception:  # noqa: BLE001 — optional dev/test oracle
+            _GHERKIN_PARSER = False
+    return _GHERKIN_PARSER or None
+
+
+def gherkin_errors(ir: Any) -> list:
+    """S31/N1: validate the Gherkin GRAMMAR of every scenario with the ready-made
+    `gherkin-official` Cucumber parser, returning human-readable errors.
+
+    Why (user 2026-07-06, hard rule): a spec must be in a machine STANDARD whose
+    grammar is enforced by a maintained oracle LIBRARY, never by a home-grown
+    splitter. The closed key-check (`_check_scenario`) is grammar-blind: a
+    closed-valid scenario can still render to a broken Gherkin document (a
+    requirement id that opens a second `Scenario:`, a value injecting a keyword
+    line). This projects each scenario to canonical Gherkin and PARSES it — a
+    parse error, or an AST that disagrees with the closed structure (not exactly
+    one Feature+Scenario, or a step-keyword sequence differing from the closed
+    projection), is a named error.
+    What: returns a list of "node <nid>: scenario[<i>]: ..." strings; empty when
+    every scenario is grammatical. Absent library => empty (degrade, the hand
+    cross-rules in validate_ir still stand) — same optional-oracle contract as
+    the openapi-schema-validator body oracle (S14.7).
+    Test: tests/audit/test_gherkin_lib_oracle.py."""
+    parts = _gherkin_parser()
+    if parts is None:
+        return []
+    Parser, TokenScanner, err_types = parts
+    out: list = []
+    nodes = (ir or {}).get("nodes") if isinstance(ir, dict) else None
+    for nid, node in sorted((nodes or {}).items()):
+        if not isinstance(node, dict):
+            continue
+        for idx, sc in enumerate(node.get("scenarios") or []):
+            if not isinstance(sc, dict):
+                continue
+            where = "node %s: scenario[%d]" % (nid, idx)
+            text = _scenario_to_gherkin(str(nid), idx, sc)
+            try:
+                doc = Parser().parse(TokenScanner(text))
+            except err_types as exc:  # a broken Gherkin document
+                out.append("%s: gherkin grammar error: %s" % (where, exc))
+                continue
+            feat = doc.get("feature") if isinstance(doc, dict) else None
+            children = (feat or {}).get("children") or []
+            scen_children = [c for c in children if c.get("scenario")]
+            if len(scen_children) != 1:
+                out.append(
+                    "%s: gherkin AST has %d scenarios, expected exactly 1 "
+                    "(an injected keyword line spawned or stole a scenario)"
+                    % (where, len(scen_children)))
+                continue
+            steps = (scen_children[0].get("scenario") or {}).get("steps") or []
+            got = [str(s.get("keyword") or "").strip() for s in steps]
+            want = _expected_step_keywords(sc)
+            if got != want:
+                out.append(
+                    "%s: gherkin step keywords %s disagree with the closed "
+                    "structure %s (the carrier was ungrammatical)"
+                    % (where, got, want))
+    return out
 
 
 def requirements_txt(ir: Any) -> str:
@@ -755,5 +905,12 @@ def validate_ir(ir: Any) -> dict:
         for idx, sc in enumerate(node.get("scenarios") or []):
             _check_scenario(nid, idx, sc, registry, declared_env,
                             errors, incomplete)
+
+    # S31/N1: the GRAMMAR of the Given/When/Then scenarios is validated by the
+    # ready-made gherkin-official parser library, not the hand key-check above.
+    # The library AST catches the grammatical class (an injected keyword line,
+    # a step that is not a step) the closed-schema check is structurally blind
+    # to. Optional dev/test oracle: absent library => empty, hand rules stand.
+    errors.extend(gherkin_errors(ir))
 
     return {"errors": errors, "incomplete": incomplete}

@@ -1718,6 +1718,40 @@ The tree already navigated to a node's spec on click, but that door was ad-hoc
   reachable via the tree (no standalone endpoint→node drift table exists here to
   hook); the graph tab's double-click-into-spec is a distinct gesture, untouched.
 
+## STAGE 31 — the Gherkin behavioural spec is validated by a READY-MADE parser
+library (the `gherkin-official` Cucumber parser), not a home-grown scenario
+splitter (node N1, `tests/audit/test_gherkin_lib_oracle.py`)
+The user (2026-07-06, hard rule) forbade prose specs and, crucially, forbade a
+HAND-WRITTEN parser for the standard: a spec must be in a machine STANDARD and
+its grammar must be enforced by a maintained oracle library, never by our own
+string logic. The Given/When/Then scenario schema (`spec_ir._check_scenario`)
+was closed and typed but grammatically UNGUARDED — it checked dict keys by hand
+and consciously declared "not Gherkin, no parser surface". A scenario whose
+closed structure is well-formed can still be a broken Gherkin document (a step
+text carrying an embedded keyword line, a value injecting a `Feature:` line) —
+that grammatical class was invisible to the hand check.
+- S31.1 `spec_ir` renders each closed G/W/T scenario to a canonical Gherkin
+  `.feature` document and parses it with `gherkin-official`; a parse error or an
+  AST that disagrees with the closed structure (missing When/Then step, an
+  unabsorbed extra line) is a named validation error. The parser LIBRARY is the
+  oracle of Gherkin grammar — the hand `_check_scenario` keeps only the closed
+  cross-rules (declared routes/env, then/openapi agreement) that a grammar
+  cannot express, exactly as `jsonschema` sits beside `validate_ir` (S13.8) and
+  `openapi-schema-validator` sits beside the hand body_check (S14.7).
+- S31.2 both directions: a closed-valid but grammatically-broken scenario reds
+  through the library (it catches what the hand check misses); every
+  engine-built scenario renders to VALID Gherkin and stays silent (the oracle
+  never false-flags a legitimate node — the S28/v151 both-directions clause).
+- S31.3 the parser library is a declared dev/test dependency
+  (`tests/requirements-dev.txt`) and degrades honestly when absent (a note, the
+  hand cross-rules still run) — same optional-oracle contract as S14.7.
+- Consciously left: `behave`/`pytest-bdd` step EXECUTION is not adopted — the
+  `spec_scenarios` runner already executes the closed structure against the WSGI
+  surface; only the GRAMMAR oracle is taken from the library. The internal
+  closed `{when{method,path,body}, then{status,media,body_check}}` structure
+  stays the engine's TARGET shape; its GRAMMAR is now sourced from the library
+  AST, not a home-grown splitter.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.

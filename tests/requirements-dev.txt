@@ -4,5 +4,12 @@ fastapi==0.139.0
 jsonschema==4.26.0
 openapi-spec-validator==0.9.0
 openapi-schema-validator==0.9.0
+# gherkin-official: the ready-made Cucumber Gherkin parser (pure AST, no runner).
+# Oracle of the Gherkin GRAMMAR for behavioural node specs (S31): the closed
+# Given/When/Then scenario schema is rendered to a canonical .feature and parsed
+# by this library instead of a home-grown splitter. behave/pytest-bdd were NOT
+# taken — only the grammar oracle is needed; step execution stays in the engine's
+# own spec_scenarios runner.
+gherkin-official==41.0.0
 uvicorn==0.50.0
 schemathesis==4.22.3
