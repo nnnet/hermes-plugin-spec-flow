@@ -232,6 +232,146 @@ def _module_surface(tree: ast.Module) -> tuple:
     return defs, bound
 
 
+# H6/S17.5: effectful surfaces inside a delivered body. Import of these
+# modules IS the capability (flagged even if unused, like a loaded weapon).
+_IMPORT_EFFECT = {
+    "subprocess": "subprocess",
+    "socket": "network", "ssl": "network", "ftplib": "network",
+    "smtplib": "network", "socketserver": "network",
+    "http.client": "network", "urllib.request": "network",
+    "shutil": "fs-write", "tempfile": "fs-write",
+}
+# os.<name> calls: process control and filesystem/env mutation.
+_OS_PROC = {"system", "popen", "fork", "kill", "killpg", "execv", "execve",
+            "execl", "execle", "execlp", "execvp", "execvpe", "spawnl",
+            "spawnv", "spawnve", "spawnvp"}
+_OS_FS = {"remove", "unlink", "rename", "replace", "mkdir", "makedirs",
+          "rmdir", "removedirs", "chmod", "chown", "symlink", "link",
+          "truncate", "mknod"}
+_OS_ENV = {"putenv", "unsetenv"}
+# pathlib write methods (names chosen to NOT collide with str/other methods:
+# no `replace`/`rename` here — str.replace must stay green, v151 lesson).
+_PATH_WRITE = {"write_text", "write_bytes", "mkdir", "unlink", "touch",
+               "rmdir"}
+_ENV_MUT_METHODS = {"pop", "update", "setdefault", "clear", "popitem"}
+
+
+def _node_effects(ir: Any, node_id: str) -> set:
+    """Effect classes the node is CONTRACTED to perform (optional `effects`
+    datum). Absent => empty set => deny all (the safe closed-world default)."""
+    nodes = (ir or {}).get("nodes") if isinstance(ir, dict) else None
+    node = (nodes or {}).get(str(node_id)) if isinstance(nodes, dict) else None
+    eff = node.get("effects") if isinstance(node, dict) else None
+    return {str(e) for e in eff} if isinstance(eff, (list, tuple, set)) else set()
+
+
+def _import_effect(dotted: str) -> Optional[str]:
+    if dotted in _IMPORT_EFFECT:
+        return _IMPORT_EFFECT[dotted]
+    return None
+
+
+def _open_mode_is_write(call: "ast.Call") -> bool:
+    """open(path[, mode]) — a write iff the mode is a write/append/create/
+    update literal OR a mode the AST cannot prove read-only (closed world)."""
+    mode = None
+    if len(call.args) >= 2:
+        mode = call.args[1]
+    else:
+        for kw in call.keywords:
+            if kw.arg == "mode":
+                mode = kw.value
+    if mode is None:
+        return False                        # open(path) — read
+    if isinstance(mode, ast.Constant) and isinstance(mode.value, str):
+        return any(c in mode.value for c in "waxate+") \
+            and set(mode.value) - set("rbtU") != set()
+    return True                              # unprovable mode -> deny
+
+
+def body_effect_findings(tree: "ast.AST", node_id: str, allowed: set) -> list:
+    """H6/S17.5: the function BODY lives in a closed EFFECT world.
+
+    Why: the skeleton door closed the import world and the public surface,
+    but a delivered body could still spawn processes, open sockets, mutate
+    the process environment or write arbitrary files (finding F2, proven:
+    such a body passed with ZERO findings). Nothing is invented at the
+    product surface — but observable SIDE EFFECTS the spec never asked for
+    are exactly the model inventing behaviour.
+    What: walks the body AST; an effectful stdlib surface is a finding unless
+    its class is in the node's declared `effects`. Reads are green (a read
+    mutates nothing observable and leaves may read their own data files);
+    writes, process control, network, env mutation and dynamic import are
+    findings. Classes: subprocess, network, env-write, fs-write,
+    dynamic-import.
+    Test: tests/audit/test_body_effect_door.py."""
+    nid = str(node_id)
+    out: list = []
+
+    def flag(cls, detail):
+        if cls in allowed:
+            return
+        out.append("node %s: body performs %s (%s) — not in the node's "
+                   "declared effects (closed effect world)" % (nid, cls, detail))
+
+    for st in ast.walk(tree):
+        # capability imports
+        if isinstance(st, ast.Import):
+            for a in st.names:
+                cls = _import_effect(a.name)
+                if cls:
+                    flag(cls, "import %s" % a.name)
+        elif isinstance(st, ast.ImportFrom) and not st.level:
+            mod = st.module or ""
+            cls = _import_effect(mod)
+            if cls is None:
+                for a in st.names:
+                    cls = _import_effect("%s.%s" % (mod, a.name))
+                    if cls:
+                        break
+            if cls:
+                flag(cls, "from %s import ..." % mod)
+        # calls
+        elif isinstance(st, ast.Call):
+            f = st.func
+            # open(..., write-mode)
+            if isinstance(f, ast.Name) and f.id == "open" \
+                    and _open_mode_is_write(st):
+                flag("fs-write", "open() in a write mode")
+            elif isinstance(f, ast.Name) and f.id == "__import__":
+                flag("dynamic-import", "__import__()")
+            elif isinstance(f, ast.Attribute):
+                attr = f.attr
+                base = f.value.id if isinstance(f.value, ast.Name) else None
+                if base == "os":
+                    if attr in _OS_PROC:
+                        flag("subprocess", "os.%s" % attr)
+                    elif attr in _OS_FS:
+                        flag("fs-write", "os.%s" % attr)
+                    elif attr in _OS_ENV:
+                        flag("env-write", "os.%s" % attr)
+                elif attr in _PATH_WRITE:
+                    flag("fs-write", "pathlib .%s()" % attr)
+                elif attr == "import_module" and base == "importlib":
+                    flag("dynamic-import", "importlib.import_module()")
+                # os.environ.<mutator>(...)
+                elif attr in _ENV_MUT_METHODS \
+                        and isinstance(f.value, ast.Attribute) \
+                        and f.value.attr == "environ":
+                    flag("env-write", "os.environ.%s" % attr)
+        # os.environ[...] = / del os.environ[...]
+        elif isinstance(st, (ast.Assign, ast.AugAssign, ast.Delete)):
+            targets = st.targets if isinstance(st, ast.Assign) \
+                else ([st.target] if isinstance(st, ast.AugAssign)
+                      else st.targets)
+            for tgt in targets:
+                if isinstance(tgt, ast.Subscript) \
+                        and isinstance(tgt.value, ast.Attribute) \
+                        and tgt.value.attr == "environ":
+                    flag("env-write", "os.environ[] mutation")
+    return out
+
+
 def skeleton_conformance(ir: Any, node_id: str, code: str) -> list:
     """Why: the skeleton is only a contract if the door can HOLD it — every
     finding is attributable (node id + offending symbol, P4).
@@ -321,4 +461,8 @@ def skeleton_conformance(ir: Any, node_id: str, code: str) -> list:
                 findings.append(
                     "node %s: skeleton anchor for '%s' stripped — anchors"
                     " are part of the contract" % (nid, ent["name"]))
+    # (e) H6/S17.5: the body lives in a closed effect world — an observable
+    # side effect the node never declared is behaviour the spec never asked
+    # for (finding F2). Shares the checker with the doctor's repair door.
+    findings += body_effect_findings(tree, nid, _node_effects(ir, node_id))
     return findings

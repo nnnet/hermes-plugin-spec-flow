@@ -473,20 +473,33 @@ def _reply_body(reply: str, function: str, want_args: list) -> str:
     return body
 
 
-def apply_function_body(module_src: str, function: str, reply: str) -> str:
+def apply_function_body(module_src: str, function: str, reply: str,
+                        allowed_effects: Any = ()) -> str:
     """The WRITE DOOR: splice a reply into EXACTLY ONE function's body.
 
     Why: acceptance of node D1 — a full-file rewrite is impossible BY
     CONSTRUCTION because only the named function's body region is ever
     replaced; the def line and the C1 anchor comments are engine-kept and
-    every byte outside the block is carried over verbatim.
+    every byte outside the block is carried over verbatim. H6/S17.5: a repair
+    body is also under the closed EFFECT world — `open(path,'w')` needs no
+    import, so the module-shape refusal never fired and the repair door was a
+    second silent F2 hole.
     What: returns the new module text; ValueError (named) for an unknown
-    function or a reply that is not one plain body.
-    Test: tests/audit/test_counterexample_repair.py (S19.3).
+    function, a reply that is not one plain body, or a body performing an
+    observable side effect not declared in `allowed_effects`.
+    Test: tests/audit/test_counterexample_repair.py (S19.3),
+    tests/audit/test_body_effect_door.py (S17.5).
     """
     _tree, fdef = _module_fdef(module_src, function)
     want_args = [a.arg for a in fdef.args.args]
     body = _reply_body(reply, function, want_args)
+    # H6/S17.5: the same effect door a skeleton delivery passes through.
+    from spec_skeletons import body_effect_findings
+    eff = body_effect_findings(ast.parse(body), function,
+                               {str(e) for e in (allowed_effects or ())})
+    if eff:
+        raise ValueError("repair body performs an undeclared side effect — "
+                         "refused: %s" % "; ".join(eff))
     lines = (module_src or "").splitlines()
     header = lines[fdef.lineno - 1:fdef.body[0].lineno - 1]
     if not header:

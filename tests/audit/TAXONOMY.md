@@ -1042,6 +1042,27 @@ RED — pytest collection fails with `ModuleNotFoundError: No module named
   per-node registration on the IR re-dump — otherwise the honest rework
   that ADDS the late handler would be refused as "uncontracted" (a
   self-made deadlock); the S12.2 erasure gate owns the co-owned surface.
+- S17.5 THE BODY LIVES IN A CLOSED EFFECT WORLD (node H6, principles-audit
+  finding F2): the skeleton door closed the import world and the public
+  surface, but a delivered body could still spawn processes, open sockets,
+  mutate the process environment or write arbitrary files — an effectful
+  body passed with ZERO findings. `spec_skeletons.body_effect_findings`
+  walks the body AST; an effectful stdlib surface is a finding unless its
+  class is in the node's optional `effects` datum (ABSENT = deny all).
+  Classes: `subprocess` (subprocess import, os.system/exec*/spawn*/fork/kill/
+  popen), `network` (socket/ssl/ftplib/smtplib/socketserver/http.client/
+  urllib.request imports — urllib.parse stays green), `env-write`
+  (os.environ mutation, os.putenv/unsetenv — env READS are the C1-anchored
+  access pattern and stay green), `fs-write` (open() in a write/unprovable
+  mode, os fs mutators, pathlib write methods, shutil/tempfile imports),
+  `dynamic-import` (__import__/importlib — the trivial bypass of BOTH closed
+  worlds). READ is green, WRITE is a finding; the checker is SHARED with the
+  doctor's repair door (`apply_function_body(..., allowed_effects=...)`) —
+  `open(path,'w')` needs no import, so the module-shape refusal never fired
+  and the repair door was a second silent hole. Both directions: the honest
+  leaf vocabulary (json/datetime/uuid/math/re/sqlite3 + env-read persistence)
+  yields ZERO findings, and str.replace is not a pathlib false positive (the
+  v151 lesson). (`test_body_effect_door.py`)
 
 ## STAGE 18 — Conformance tests compiled from the IR (`test_ir_compiled_tests.py`)
 Phase B node B3 (`retire-llm-tester`) of the spec-IR rearchitecture (plan
