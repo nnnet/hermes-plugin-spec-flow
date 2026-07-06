@@ -72,7 +72,7 @@ graph:
   - {id: K3, needs: [K2],             parallel: "",        status: "[ ]", files: [spec_flow_runner.py]}
   - {id: K1b, needs: [K1],            parallel: "kl",      status: "[~]", files: [spec_scenarios.py, tests/requirements-dev.txt, tests/audit/]}
   - {id: L1, needs: [K1b],            parallel: "kl",      status: "[~]", files: [spec_scenarios.py, tests/audit/]}
-  - {id: H1b, needs: [],              parallel: "kl",      status: "[~]", files: [tests/harness/diff_repair.py, tests/audit/]}
+  - {id: H1b, needs: [],              parallel: "kl",      status: "[x]", files: [tests/harness/diff_repair.py, tests/audit/]}
   - {id: K4, needs: [K2],             parallel: "",        status: "[ ]", files: [tests/harness/openapi_diff.py, spec_openapi.py]}
   - {id: H8, needs: [],               parallel: "wave-h1", status: "[x]", files: [spec_flow_runner.py]}
   - {id: G3, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/decomposition/]}
@@ -489,12 +489,17 @@ wsgiref/ThreadingHTTPServer/pyyaml (stdlib-first, не 3rd-party NIH).
   подо что стоит openapi-schema-validator в requirements (закрывает K1b)
 - заметки: средний риск, зона spec_scenarios
 
-### [ ] H1b `diff-repair-nih-record` — записать причину рукописного diff
+### [x] H1b `diff-repair-nih-record` — записать причину рукописного diff
 - выход: причина рукописного SEARCH/REPLACE (контракт формата с моделью,
   отказ при неоднозначности, пустой SEARCH=перезапись — доменное поведение,
   либа не даёт) записана в TAXONOMY/докстринг diff_repair.py
 - приёмка: молчаливого NIH нет — причина зафиксирована
-- заметки: не код, одна запись; можно сразу
+- заметки: ГОТОВ — коммиты 538cb27 (RED) + ab3abaa, влит. Причина
+  записана в докстринг diff_repair + TAXONOMY S19.10: либа-кандидат
+  diff-match-patch/unidiff/python-patch не даёт 4 доменных поведения —
+  (1) model-facing SEARCH/REPLACE грамматика, (2) пустой SEARCH=перезапись,
+  (3) отказ при 0/>1 совпадений (не fuzzy), (4) интеграция с write-door.
+  Аудит-тест пинит наличие причины (3 зелёных)
 
 ### [ ] K4 `merge-openapi-diff` — узкий ручной OpenAPI-diff на либу
 - выход: после K2 tests/harness/openapi_diff.py строит diff поверх машинного
