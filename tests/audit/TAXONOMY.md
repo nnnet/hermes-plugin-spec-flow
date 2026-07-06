@@ -1489,6 +1489,44 @@ turned it green.
   runs clean (GREEN direction) — the policy connective is symmetric, K2 keeps
   it honest.
 
+## STAGE 23 — specs/*.md is COMPILED FROM the machine OpenAPI, prose is not a
+source (`test_prose_is_derived.py`)
+
+Node K3 of the spec-IR rearchitecture (plan 2026-07-04T00-45), the finale of
+the format flip. E1/K2 (Stages 15/22) made the machine OpenAPI the PRIMARY node
+interface — it lives at `ir[nodes][nid][openapi]`. But the human-readable
+`specs/<nid>.md` still carried the interface only as decomposer PROSE
+(`node["spec_markdown"]`): `Workspace.spec` rendered the engine header plus the
+worker's free-text, and NEVER read the node's OpenAPI document. So the written
+spec was a CARRIER of the interface command, not a reader of it — the exact v165
+lost-route shape (`GET /ping -> "pong"` reached the .md as a sentence, drifted
+from the machine artifacts, and `get_ping` was dropped).
+The flip: the interface section of the .md is now COMPILED DETERMINISTICALLY
+FROM the node's OpenAPI document by `_openapi_interface_markdown` in the engine
+— same document always renders the same section; the prose becomes a downstream
+reader whose edits cannot change what the interface says.
+Ratchet evidence (RED before code): `test_prose_is_derived.py` was proven RED on
+the pre-K3 engine — 2 failed, 1 passed. With the OpenAPI-to-markdown compiler
+call removed from `Workspace.spec`, the .md carried NO structured `GET /ping`
+entry (S23.1) and the interface facts changed with the prose (S23.2); only the
+no-OpenAPI case (S23.3) was already green.
+- S23.1 THE .md RENDERS THE INTERFACE FROM THE MACHINE OpenAPI: a node carrying
+  an `openapi` document (built exactly as `build_ir` builds it, via
+  `spec_ir._node_openapi` over the pure route helpers) writes each owned
+  `METHOD /path` AND its declared `x-spec-flow-handler` symbol into the .md,
+  read straight from the document — the node carried NO prose interface at all.
+- S23.2 THE INTERFACE SECTION IS A FUNCTION OF THE OpenAPI ONLY: the same
+  OpenAPI document rendered under two DIFFERENT decomposer proses yields a
+  byte-identical structured interface section (`**METHOD /path**` entries plus
+  their handler/status/field detail lines). Editing the prose cannot move the
+  interface — prose is derived, the build reads the document. The detector
+  matches STRUCTURED entries only, so a sentence that merely names a route in
+  prose (a legitimate GREEN mention) is never mistaken for the interface.
+- S23.3 NO OpenAPI -> NO PHANTOM SECTION (historical output preserved): a node
+  with no `openapi` document (a non-service/library leaf) grows no interface
+  section — the compiler stays silent when the node owns no routes, so the .md
+  of a pure helper is unchanged.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.

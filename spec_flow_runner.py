@@ -1390,6 +1390,72 @@ def _canonical_handler_symbol(method: str, path: str) -> str:
     return "%s_%s" % ((method or "GET").strip().lower() or "get", base)
 
 
+_OA_METHOD_ORDER = ("get", "post", "put", "patch", "delete",
+                    "head", "options")
+
+
+def _openapi_interface_markdown(doc: "Optional[dict]") -> "list":
+    """K3: compile the human-readable interface section of a node's spec .md
+    DETERMINISTICALLY FROM the node's machine OpenAPI document (the primary
+    artifact E1/K2 put at ir[nodes][nid][openapi]).
+
+    Why: v165 lost get_ping because the interface reached the written spec only
+    as decomposer PROSE — the .md was a CARRIER of the command, not a reader of
+    it. Deriving the interface from the OpenAPI makes the prose a downstream
+    reader: the same document always renders the same section, and editing the
+    prose can no longer change what the interface says.
+    What: renders each owned route (sorted by path, then canonical method order)
+    as ``METHOD /path -> handler`` with its contracted success status, request
+    body fields and response media — every value read straight from the
+    document, none guessed. An absent/empty ``paths`` yields NO section (the
+    node owns no routes), so non-service leaves keep their historical output.
+    Test: tests/audit/test_prose_is_derived.py (S23)."""
+    if not isinstance(doc, dict):
+        return []
+    paths = doc.get("paths")
+    if not isinstance(paths, dict) or not paths:
+        return []
+    out: list = ["", "## Interface (compiled from the machine OpenAPI)", "",
+                 "_Derived from this node's OpenAPI document — edit the"
+                 " document, not this text._", ""]
+    for path in sorted(paths):
+        ops = paths.get(path)
+        if not isinstance(ops, dict):
+            continue
+        methods = sorted(
+            (m for m in ops if isinstance(ops.get(m), dict)),
+            key=lambda m: (_OA_METHOD_ORDER.index(m)
+                           if m in _OA_METHOD_ORDER else len(_OA_METHOD_ORDER),
+                           m))
+        for method in methods:
+            op = ops[method]
+            handler = str(op.get("x-spec-flow-handler") or "").strip()
+            head = "- **%s %s**" % (method.upper(), path)
+            if handler:
+                head += " -> `%s`" % handler
+            out.append(head)
+            responses = op.get("responses")
+            if isinstance(responses, dict) and responses:
+                status = sorted(responses)[0]
+                resp = responses.get(status) or {}
+                line = "  - success: `%s`" % status
+                media = sorted((resp.get("content") or {}))
+                if media:
+                    line += " (%s)" % ", ".join(media)
+                out.append(line)
+            body = op.get("requestBody")
+            if isinstance(body, dict):
+                schema = ((body.get("content") or {})
+                          .get("application/json", {}).get("schema") or {})
+                fields = schema.get("required")
+                if not fields:
+                    fields = sorted((schema.get("properties") or {}))
+                if fields:
+                    out.append("  - request fields: %s"
+                               % ", ".join("`%s`" % f for f in fields))
+    return out
+
+
 def _route_success_status(method: str) -> int:
     """The ONE contracted success status for a route, by HTTP method — the
     single source BOTH the coder (via the route binding text) and the leaf
@@ -2253,11 +2319,16 @@ class Workspace:
         if node.get("review_fails"):
             lines += ["", "## Review history",
                       f"- impl-review failed {node['review_fails']}× before PASS (critique loop)"]
+        # K3: the node's INTERFACE (routes it owns + their handlers) is
+        # compiled DETERMINISTICALLY FROM the machine OpenAPI document, not
+        # carried by prose. Same document -> same section; prose can no longer
+        # be the interface source (v165: get_ping was lost as prose drift).
+        lines += _openapi_interface_markdown(node.get("openapi"))
         worker_md = str(node.get("spec_markdown") or "").strip()
         if worker_md:
             # the level spec AUTHORED by the decomposer worker (per the
-            # spec-flow-decompose skill); the engine header above stays the
-            # deterministic, traceable core
+            # spec-flow-decompose skill) — human context only; the interface
+            # above is the derived, machine-sourced core the build reads
             lines += ["", worker_md]
         if route_binding:
             # Phase 1: engine-declared route -> handler binding for THIS leaf's
