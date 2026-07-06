@@ -669,6 +669,11 @@ def _wrap_external_teams(agents: Optional[dict], transport=None) -> Optional[dic
 #   halt      — stop the run on the first REJECT (strict CI mode)
 #   ask_human — route to the approver (HITL): approved -> record & continue,
 #               not approved -> halt
+# H8/S15.7: interface derivation policy. `ir-required` (default) fails the
+# build if any node's interface was prose-derived; `allow-prose` restores the
+# historical fallback with explicit, journal-visible consent.
+_INTERFACE_POLICIES = {"ir-required", "allow-prose"}
+
 DEFAULT_REVIEW_POLICY = {"on_reject": "rework", "max_rework": 2,
                          # A1 review tiering (default ON): a SIMPLE leaf that
                          # passes the deterministic spec lint skips the LLM
@@ -2729,6 +2734,7 @@ class Engine:
                  resume: bool = False, replan: bool = False,
                  git_provenance: bool = False,
                  review_policy: Optional[dict] = None,
+                 interface_policy: str = "ir-required",
                  seed_files: Optional[dict] = None,
                  standing_requirements: Optional[Any] = None,
                  human_ask: Optional[Any] = None,
@@ -2779,6 +2785,14 @@ class Engine:
         self._task_lock = threading.RLock()
         self._parallel_children = 1
         self.review_policy = {**DEFAULT_REVIEW_POLICY, **(review_policy or {})}
+        # H8/S15.7: the prose-derived interface fallback is gated by an
+        # EXPLICIT policy — a typo must not silently degrade to a default.
+        if interface_policy not in _INTERFACE_POLICIES:
+            raise ValueError(
+                "interface_policy must be one of %s, got %r"
+                % (sorted(_INTERFACE_POLICIES), interface_policy))
+        self.interface_policy = interface_policy
+        self._interface_prose_nodes: set = set()
         self._seed_files = seed_files
         # tools (gate provider) is injectable; default to the bundled gates so
         # the runner works standalone without Hermes.
@@ -4492,9 +4506,35 @@ class Engine:
         if not nid or nid in seen:
             return
         seen.add(nid)
+        # H8/S15.8: a prose-derived interface is a POLICY event, not just a
+        # journal note — record it so the verdict can gate on it. The consent
+        # policy is stated in the same line so the choice is visible.
+        if source == "prose-derived":
+            self.__dict__.setdefault("_interface_prose_nodes", set()).add(nid)
+        pol = getattr(self, "interface_policy", "ir-required")
+        lvl = (L_MILESTONE if source == "prose-derived"
+               and pol == "ir-required" else L_DETAIL)
         self.emit("decompose", "engine", "", nid,
                   "route ownership derived",
-                  "interface_source: %s" % source, level=L_DETAIL)
+                  "interface_source: %s (interface_policy: %s)"
+                  % (source, pol), level=lvl)
+
+    def _interface_policy_failures(self) -> list:
+        """H8/S15.8: product-check failures from the interface policy.
+
+        Why: under `ir-required` a prose-derived interface is behaviour the
+        spec IR never carried — an honest build must not call it READY.
+        What: names each node whose interface was prose-derived; empty under
+        `allow-prose` (explicit consent) or when every interface was IR.
+        Test: tests/audit/test_interface_policy.py."""
+        if getattr(self, "interface_policy", "ir-required") != "ir-required":
+            return []
+        nodes = sorted(self.__dict__.get("_interface_prose_nodes") or ())
+        if not nodes:
+            return []
+        return ["interface derived from prose (not the spec IR) for node(s): "
+                "%s — supply a decomposer IR fragment or set "
+                "interface_policy=allow-prose to consent" % ", ".join(nodes)]
 
     def _decomposer_ir_route_facts(self) -> tuple:
         """E1 (S15.5): (request_fields, media) facts read from the accepted
@@ -11360,6 +11400,10 @@ def %(callable)s(environ, start_response):
             record("integrate", "L0:integrate", False,
                    "project integrate RED — a declared leaf is not green; the "
                    "product is incomplete regardless of the base-contract smoke")
+        # H8/S15.8: under ir-required, a prose-derived interface is behaviour
+        # the spec IR never carried — an honest build cannot be READY on it.
+        for _msg in self._interface_policy_failures():
+            record("interface", "interface_policy", False, _msg)
         ready = bool(lines) and not failed
         verdict = "READY" if ready else "NOT READY"
         head = [f"# Product readiness (depth={depth_name})", "",
@@ -11540,6 +11584,7 @@ def run_project(project: dict, *, workspace, depth: Any = DEPTH_SPEC,
                 replan: bool = False,
                 git_provenance: bool = False,
                 review_policy: Optional[dict] = None,
+                interface_policy: str = "ir-required",
                 seed_files: Optional[dict] = None,
                 standing_requirements: Optional[Any] = None,
                 provider_transport: Optional[Any] = None,
@@ -11563,7 +11608,8 @@ def run_project(project: dict, *, workspace, depth: Any = DEPTH_SPEC,
     return Engine(tools=tools, workspace=workspace, depth=depth, agents=agents,
                   contracts_dir=contracts_dir, sink=sink, verbosity=verbosity,
                   max_decompose_calls=max_decompose_calls,
-                  review_policy=review_policy, seed_files=seed_files,
+                  review_policy=review_policy,
+                  interface_policy=interface_policy, seed_files=seed_files,
                   node_engine=node_engine, runtime_guard=runtime_guard,
                   resume=resume, replan=replan, git_provenance=git_provenance,
                   standing_requirements=standing_requirements,

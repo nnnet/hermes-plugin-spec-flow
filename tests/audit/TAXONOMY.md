@@ -895,6 +895,23 @@ GREEN-direction legacy case) — before the implementation commit.
   the model still left without a body is accepted as an honest
   INCOMPLETENESS finding (spec_ir reports it; the accept event carries the
   tally) — the engine never injects an invented body.
+- S15.7 THE PROSE FALLBACK IS GATED, NOT SILENT (node H8, principles-audit
+  F4): the engine carries an `interface_policy` (default `ir-required`);
+  an unknown value is refused LOUDLY at construction (never a silent
+  typo-to-default). The knob is a case datum (`run_cases` reads
+  `case["interface_policy"]`) and a `run_project`/`Engine` parameter — the
+  same plumbing as `review_policy`.
+- S15.8 UNDER `ir-required`, a node whose interface was prose-derived
+  (`_log_interface_source(nid, "prose-derived")`, the S10.19b fallback) is
+  recorded in `_interface_prose_nodes` and surfaces as a FAILING product
+  check (`_interface_policy_failures` → `_product_check` record → NOT READY)
+  naming the node — following the decomposer_ir FAIL precedent. The event is
+  a MILESTONE, not a whispered DETAIL, so the prose channel is visible.
+- S15.9 UNDER `allow-prose`, the historical fallback runs unchanged and
+  produces NO violation — the consent is explicit and the journal still
+  carries `interface_source: prose-derived (interface_policy: allow-prose)`.
+- S15.10 an `ir`-sourced interface never violates any policy (it is exactly
+  what `ir-required` demands). (`test_interface_policy.py`)
 ## STAGE 16 — OpenAPI compilation from the IR (`test_openapi_compiler.py`)
 Phase B node B2 (`contract-oracle`) of the spec-IR rearchitecture (plan
 2026-07-04T00-45). The per-node OpenAPI 3.1 fragments inside `ir.json` are

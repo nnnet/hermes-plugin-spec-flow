@@ -331,6 +331,9 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
     exec_case.pop("workers", None)
     exec_case.pop("memory", None)
     review_policy = case.get("review") or None
+    # H8/S15.10: interface policy is a case knob (default ir-required); a case
+    # that legitimately relies on the prose fallback opts in explicitly.
+    interface_policy = case.get("interface_policy") or "ir-required"
     exec_case.pop("review", None)
     # Case-level scaffolding is intentionally NOT consumed: a case must not
     # hand the workers a ready-made skeleton (seed_files) or pre-solve its
@@ -390,7 +393,8 @@ def _run_full(case: dict, case_dir: Path, depth: str, tools,
                               tools=tools, agents=agents or None,
                               contracts_dir=str(eng.CONTRACTS), sink=sink,
                               max_decompose_calls=max_calls, node_engine=node_engine,
-                              review_policy=review_policy, resume=resume,
+                              review_policy=review_policy,
+                              interface_policy=interface_policy, resume=resume,
                               replan=replan,
                               standing_requirements=getattr(
                                   channel, "standing_requirements", None),
