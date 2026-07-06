@@ -1692,6 +1692,32 @@ oracle (H7) had ZERO live callers (dead outside its own test).
 - Convention obeyed: dashboard oracle re-run degrades to a note when a library
   is absent (never a crash); the engine stays dev-optional on the oracle.
 
+## STAGE 30 — Every node-id (nid) shown on the dashboard is a CLICK-THROUGH to
+that node's spec (node M4, `tests/dashboard/test_flow_clickthrough.py`)
+A node id was inert text wherever it appeared outside the tree: the flow tab's
+branch column headers ARE node ids (L0, db, core, ...) and each milestone box is
+tagged with its node, yet a reader who spotted a branch in the flow had no way
+to reach that node's spec — the spec was one tab and a scroll away, unlinked.
+The tree already navigated to a node's spec on click, but that door was ad-hoc
+(inline `SEL=id;NTAB='spec';render()`), so no other site could reuse it.
+- S30.1 the flow-tab column header (branch lane label) carries `data-gospec=
+  "<nid>"`; a click lands on that branch node's spec. The header text and layout
+  are unchanged — only the nav hook and a pointer cursor are added.
+- S30.2 each flow milestone box carries `data-gospec="<nid>"` for its bare node
+  id (the `:role` suffix dropped); a box with no resolvable node stays inert (no
+  hook, no cursor) — the hook appears only where a real jump target exists.
+- S30.3 the IR node section heading carries `data-gospec="<nid>"` AND the section
+  gains a stable `id="irnode-<nid>"` anchor — the jump target the helper can
+  scroll to when a node's spec panel is not yet in STATE.
+- S30.4 the client page defines ONE reusable `goToNodeSpec(nid)` helper, wired
+  through the single delegated document click handler on `[data-gospec]`; the
+  tree node click is refactored onto the same door so navigation cannot drift
+  between sites. The helper opens the spec panel when the run knows the node,
+  else degrades to the IR tab scrolled to the node anchor — never a dead end.
+- Consciously left: contract-drift episodes surface as per-node badges already
+  reachable via the tree (no standalone endpoint→node drift table exists here to
+  hook); the graph tab's double-click-into-spec is a distinct gesture, untouched.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.

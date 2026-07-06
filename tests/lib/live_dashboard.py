@@ -884,7 +884,11 @@ def _flow_timeaxis(events: list[dict], tree: dict | None = None) -> str | None:
     p.append('<div style="position:sticky;top:0;z-index:5;height:0">')
     for lane in order:
         lx = AXIS + lane_x[lane] * LANEW
-        p.append(f'<div style="position:absolute;left:{lx}px;top:0;'
+        # The column header IS a branch node id: make it a click-through to that
+        # node's spec (data-gospec, resolved by the shared goToNodeSpec helper).
+        p.append(f'<div data-gospec="{_esc(lane, 90)}" '
+                 f'title="перейти к спеке узла {_esc(lane, 90)}" '
+                 f'style="position:absolute;left:{lx}px;top:0;cursor:pointer;'
                  f'width:{LANEW - 8}px;color:var(--link-2);font-weight:600;overflow:hidden;'
                  f'white-space:nowrap;text-overflow:ellipsis;background:var(--bg);'
                  f'padding:2px 0">{_esc(lane, 90)}</div>')
@@ -916,11 +920,19 @@ def _flow_timeaxis(events: list[dict], tree: dict | None = None) -> str | None:
                 border, bg = _color(e)
                 v = str(e.get("verdict") or "")
                 ph = str(e.get("phase") or "")
-                node = _esc(str(e.get("task") or "").split(":")[0] or ph, 90)
+                # Bare node id (drop any ':role' suffix) is the spec jump target;
+                # the visible label keeps its phase-fallback behaviour unchanged.
+                raw_nid = str(e.get("task") or "").split(":")[0]
+                node = _esc(raw_nid or ph, 90)
                 label = (f'<b style="color:var(--fg-strong)">{_esc(ph, 90)} · {node}</b>'
                          f'<br><span style="color:var(--dim)">{_esc(e.get("action") or "", 90)}</span>'
                          + (f' <span style="color:var(--dim-2)">· {_esc(v, 90)}</span>' if v else ''))
-                p.append(f'<div style="position:absolute;left:{lx}px;top:{yy}px;'
+                # A milestone box click-through lands on its node's spec.
+                nav = (f'data-gospec="{_esc(raw_nid, 90)}" '
+                       f'title="перейти к спеке узла {_esc(raw_nid, 90)}"'
+                       if raw_nid else "")
+                cur = "cursor:pointer;" if raw_nid else ""
+                p.append(f'<div {nav} style="position:absolute;left:{lx}px;top:{yy}px;{cur}'
                          f'width:{LANEW - 18}px;max-height:{BOXH - 6}px;overflow:hidden;'
                          f'background:{bg};border:1px solid {border};border-radius:6px;'
                          f'padding:3px 6px;box-sizing:border-box;line-height:1.2">{label}</div>')
@@ -1300,7 +1312,14 @@ def _ir_node_html(nid: str, node: dict) -> str:
     Test: a node with symbols+env+deps+effects+scenarios+files+children emits all
     blocks; a node with only routes emits just the table.
     """
-    parts = ['<div class="irnode">', "<h4>%s</h4>" % _esc(nid)]
+    # The IR node heading IS the node id: a click-through to the node's spec
+    # panel, via the shared goToNodeSpec helper (same door as the flow tab/tree).
+    # The section also carries id="irnode-<nid>" so the helper's IR-tab fallback
+    # can scroll straight to this node when its spec panel is not yet available.
+    parts = ['<div class="irnode" id="irnode-%s">' % _esc(nid),
+             '<h4 data-gospec="%s" title="перейти к спеке узла %s" '
+             'style="cursor:pointer">%s</h4>'
+             % (_esc(nid), _esc(nid), _esc(nid))]
     # M3: state the node's spec-validation status at the top of its section —
     # a reader of the spec itself sees at a glance whether it is validated.
     parts.append(_node_spec_validation_html(nid, node))
@@ -2916,6 +2935,18 @@ function treeHTML(n){
  h+='</li>';return h;
 }
 
+// Shared node-spec navigation: the ONE door every data-gospec site reuses
+// (flow-tab column header, flow milestone box, IR node heading, tree node).
+// Opens the node's spec panel (SEL=<nid>, spec sub-tab) when the run knows the
+// node; otherwise degrades to the IR tab, scrolling to that node's #irnode-<nid>
+// anchor — so a click is never a dead end even before the node is in STATE.
+function goToNodeSpec(nid){
+ if(!nid)return;
+ if(STATE&&STATE.nodes&&STATE.nodes[nid]){SEL=nid;NTAB='spec';render();return;}
+ SEL=null;GTAB='ir';renderGlobal();
+ const el=document.getElementById('irnode-'+nid);
+ if(el&&el.scrollIntoView)el.scrollIntoView({block:'center'});
+}
 function render(user){
  if(user===undefined)user=true;            // explicit false only from the auto poll
  if(!STATE||STATE.empty){$('#status').textContent='нет прогонов';$('#detail').innerHTML='<p class=dim>runs-out пуст</p>';return;}
@@ -3474,10 +3505,15 @@ function esc(s){return (s==null?'':String(s)).replace(/[&<>]/g,m=>({'&':'&amp;',
 document.addEventListener('click',e=>{
  if(e.target.closest('#name')){SEL=null;render();return;}
  if(e.target.closest('#mode')){AUTO=!AUTO;if(AUTO)poll();else render();return;}
+ // Shared node-spec click-through: any element with data-gospec="<nid>"
+ // (flow-tab column header, flow milestone box, IR node heading, tree node)
+ // jumps to that node's spec through the single goToNodeSpec door.
+ const gs=e.target.closest('[data-gospec]');
+ if(gs){goToNodeSpec(gs.dataset.gospec);return;}
  const tw=e.target.closest('.tw[data-tw]');
  if(tw){const id=tw.dataset.tw;EXPANDED[id]=EXPANDED[id]===false?true:false;render();return;}
  const nodeEl=e.target.closest('.node[data-id]');
- if(nodeEl){SEL=nodeEl.dataset.id;NTAB='spec';render();return;}
+ if(nodeEl){goToNodeSpec(nodeEl.dataset.id);return;}
  const gn=e.target.closest('.gnode[data-id]');
  if(gn){const id=gn.dataset.id;clearTimeout(CLICKT);CLICKT=setTimeout(()=>toggleGraph(id),260);return;}
  const sorth=e.target.closest('th[data-sort]');
