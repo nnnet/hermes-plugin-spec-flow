@@ -112,7 +112,17 @@ graph:
   - {id: N3, needs: [N1],      parallel: "wave2", status: "[x]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py, spec_gherkin.py, spec_ir.py, tests/audit/]}
   - {id: N5, needs: [N1],      parallel: "wave2", status: "[x]", files: [tests/lib/live_dashboard.py, tests/dashboard/]}
   - {id: N4, needs: [N2, N3],  parallel: "",      status: "[x]", files: [spec_flow_runner.py, tests/audit/]}
+  - {id: N7, needs: [],        parallel: "",      status: "[~]", files: [spec_flow_runner.py, tests/audit/]}
 ```
+
+### N7 `live-ir-on-spec` — ir.json пишется по ходу и на spec-глубине (не только realized)
+- контекст: аудит v167 выявил дыру — `_write_ir_incremental` вызывается только
+  на «leaf realized» (реализация); на `depth=spec` листья не реализуются →
+  живой ir.json пуст весь прогон, вкладка IR пуста. Регрессия I1/I2/I3
+- выход: инкремент ir.json после закрытия ЛЮБОЙ стадии листа (spec тоже), под
+  локом I1; ir.json растёт с первого закрытого листа независимо от глубины
+- приёмка: RED — после обработки листа на depth=spec ir.json пуст/не пишется;
+  GREEN — непуст, отражает закрытые листья; Stage
 
 N6 (модель содержания) — фундамент для гейта N2: формализует ОБЯЗАТЕЛЬНЫЕ
 аспекты (см. раздел «Модель содержания») как машинную проверку. Зона N6
