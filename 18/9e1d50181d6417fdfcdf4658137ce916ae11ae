@@ -1,0 +1,19 @@
+.claude/plans/2026-07-04T00-45__spec-ir-compiler-rearchitecture.md
+  s_a0fd4933cab6db::t_176307d1f69498 73-74,477,482,484,490
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "189e1d50181d6417fdfcdf4658137ce916ae11ae",
+  "prompts": {},
+  "sessions": {
+    "s_a0fd4933cab6db": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f44efdfd-5e4c-4895-8a1a-c149a64ab4a0",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
