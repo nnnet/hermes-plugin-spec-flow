@@ -7885,10 +7885,12 @@ def %(callable)s(environ, start_response):
                     except ImportError:  # flat layout: repo root on sys.path
                         import spec_openapi  # type: ignore
                     oa_errors = []
+                    _oa_docs = 0
                     for _pnid, _pnode in nodes.items():
                         _doc = (_pnode or {}).get("openapi")
                         if _doc is None:
                             continue
+                        _oa_docs += 1
                         oa_errors.extend(
                             spec_openapi.node_openapi_library_errors(
                                 str(_pnid), _doc))
@@ -7900,6 +7902,19 @@ def %(callable)s(environ, start_response):
                             "the OpenAPI 3.1 library",
                             "; ".join(oa_errors)[:300],
                             "decomposer_openapi", "FAIL", level=L_MILESTONE)
+                    elif _oa_docs:
+                        # M3: 'passed the OpenAPI 3.1 library' must be as
+                        # OBSERVABLE as a failure — a node document that
+                        # cleared the maintained oracle emits a NAMED PASS on
+                        # the same gate, not silence. Without it the dashboard
+                        # can only ever surface an openapi FAIL, never the
+                        # green fact that validation succeeded.
+                        self.emit(
+                            "decompose", "engine", "", nid,
+                            "decomposer OpenAPI: node document valid by "
+                            "the OpenAPI 3.1 library",
+                            "documents: %d" % _oa_docs,
+                            "decomposer_openapi", "PASS", level=L_MILESTONE)
                 if not errors:
                     reg.update(nodes)
                     self.emit(
@@ -10977,6 +10992,23 @@ def %(callable)s(environ, start_response):
             self._ir = ir
             self._ir_sources = sources
             rep = spec_ir.validate_ir(ir)
+            # H7/S13.8: the jsonschema oracle was a DEAD witness — invoked only
+            # from a test, never on the live write path. Run it here over the
+            # written IR and emit its verdict as a MILESTONE alongside the
+            # closed-world one, so a second, independent structural check is
+            # both exercised in production and OBSERVABLE on the dashboard.
+            try:
+                _schema_errors = spec_ir.jsonschema_errors(ir)
+            except Exception as _exc:  # noqa: BLE001 — oracle absent/failing
+                _schema_errors = ["jsonschema oracle unavailable: %s"
+                                  % str(_exc)[:120]]
+            self.emit(
+                "decompose", "engine", "",
+                str(getattr(self, "_root_id", "") or "L0"),
+                "IR jsonschema oracle (H7)",
+                "jsonschema errors: %d" % len(_schema_errors),
+                "ir_jsonschema", "PASS" if not _schema_errors else "FAIL",
+                level=L_MILESTONE)
             self._atomic_write(
                 "ir.json",
                 json.dumps(ir, indent=2, sort_keys=True) + "\n")
@@ -10995,7 +11027,11 @@ def %(callable)s(environ, start_response):
                 "reason: %s"
                 % (len(ir.get("nodes") or {}), len(rep["errors"]),
                    len(rep["incomplete"]), reason),
-                "ir_written", "", level=L_MILESTONE)
+                # M3: the closed-world error count was buried in the detail
+                # string; carry it as a real PASS/FAIL verdict so the run
+                # summary can state 'validated' at a glance, not parse prose.
+                "ir_written", "PASS" if not rep["errors"] else "FAIL",
+                level=L_MILESTONE)
         except Exception as exc:  # noqa: BLE001 — attributable, non-fatal
             self.emit(
                 "decompose", "engine", "",

@@ -1660,6 +1660,38 @@ Two obligations, both RED-first:
   no interface document claims no provenance (empty badge). GREEN direction: a
   non-service leaf's spec panel carries no false primary/derived claim.
 
+## STAGE 29 — Spec-validation status is OBSERVABLE (spec view + tree + run
+summary + live milestones) (node M3, `tests/dashboard/
+test_dashboard_spec_validation.py`, `tests/audit/
+test_spec_validation_milestones.py`)
+A spec that passed validation must be VISIBLE as validated — origin/provenance
+(S28) said WHERE a datum came from, but 'is it VALID?' had no green signal;
+only a failure could ever show (as an 'error' badge). Two oracle gaps fed this:
+the OpenAPI seam emitted `decomposer_openapi` ONLY on FAIL, and the jsonschema
+oracle (H7) had ZERO live callers (dead outside its own test).
+- S29.1/S29.2 the spec view itself carries a per-node badge: a node whose
+  closed-world + OpenAPI-library oracles find nothing renders '✓ validated'
+  (`_node_spec_validation_html` in `_ir_node_html`); a node with a violation
+  renders '✗ N errors' with the list — never a false green. The dashboard
+  RE-RUNS the same oracles the engine uses over the fresh ir.json, so the
+  green fact is witnessed at display, not asserted. BOTH directions pinned.
+- S29.3 the IR tab head states a run-level roll-up naming all three oracles
+  ('Spec validation: closed-world N · openapi-lib K · jsonschema M') — the
+  whole-spec validated fact, in one glance, 'in other places' than the node.
+- S29.4/S29.5 the tree/graph gains a green 'validated' episode badge for a
+  PASS-spec node (suppressed when the node already carries 'error', so the two
+  views never contradict); node run-state carries `spec_validated`, the client
+  page reads it into the spec panel, and both badge maps know the glyph.
+- S29.6 the engine emits `decomposer_openapi` PASS (not only FAIL) when a node
+  document clears the OpenAPI 3.1 library — success is as observable as a miss.
+- S29.7 the H7 jsonschema oracle runs on the LIVE write path (`_write_ir`) and
+  journals an `ir_jsonschema` milestone; the formerly dead oracle really runs
+  (a structurally broken IR reds it — it does not rubber-stamp).
+- S29.8 `ir_written` gained a real PASS/FAIL verdict from the closed-world
+  error count (formerly verdict-empty, the count buried in the detail prose).
+- Convention obeyed: dashboard oracle re-run degrades to a note when a library
+  is absent (never a crash); the engine stays dev-optional on the oracle.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.
