@@ -63,7 +63,7 @@ graph:
   - {id: H5, needs: [],               parallel: "",        status: "[x]", files: [spec_ir.py, spec_skeletons.py, spec_flow_runner.py]}
   - {id: H6, needs: [],               parallel: "wave-h1", status: "[x]", files: [spec_skeletons.py, spec_flow_doctor.py]}
   - {id: H7, needs: [],               parallel: "",        status: "[x]", files: [spec_ir.py, tests/audit/]}
-  - {id: I1, needs: [],               parallel: "",        status: "[~]", files: [spec_flow_runner.py, tests/audit/]}
+  - {id: I1, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/audit/]}
   - {id: I2, needs: [I1],             parallel: "",        status: "[ ]", files: [spec_ir.py, spec_flow_runner.py]}
   - {id: I3, needs: [I2],             parallel: "",        status: "[ ]", files: [spec_flow_runner.py]}
   - {id: H8, needs: [],               parallel: "wave-h1", status: "[x]", files: [spec_flow_runner.py]}
@@ -467,16 +467,21 @@ Schemathesis, awesome-ralph.
 Переворот = развернуть стрелку. Делается лестницей, безопасно, чтобы не
 сломать идущий движок.
 
-### [~] I1 `ir-incremental-write` — IR пишется по ходу, потокобезопасно
+### [x] I1 `ir-incremental-write` — IR пишется по ходу, потокобезопасно
 - выход: ir.json обновляется на КАЖДОМ значимом переходе (реализация
   листа, поздняя инъекция), а не только в конце; запись под локом
   (параллельные листья пишут безопасно)
 - приёмка: после реализации первого листа ir.json уже на диске и растёт
   по ходу; конкурентные вызовы _write_ir не бьются (лок); дашборд видит
   IR вживую. Красный кейс: два потока зовут _write_ir → без лока порча
-- заметки: первый шаг переворота — делает IR рабочим артефактом, не
-  переписывая читателей (build_ir остаётся read-only над датумами).
-  worktree-агент/соло запущен 2026-07-06
+- заметки: ГОТОВ — коммиты 1ab7d66 (S14.6 красные) + b82e474.
+  _ir_write_lock сериализует дампы; _atomic_write (tmp+os.replace) —
+  читатель-дашборд не ловит окно усечения; artifacts обновляются на
+  месте, не плодятся. _write_ir_incremental дёргается в _visit после
+  реализации листа (best-effort) — ir.json растёт по ходу. Попутно
+  починил: artifacts-запись должна быть dict (path/type/bytes), строка
+  ломала Workspace.finalize (61 тест). Дашборд (влит) показывает IR
+  вживую вкладкой 🧩 с бейджами ⚙/📜. Регрессия 583 + dashboard 85
 
 ### [ ] I2 `ir-as-source` — IR аккумулируется как источник, датумы производны
 - выход: движок держит ОДНУ IR-структуру в памяти, наращивает её по ходу
