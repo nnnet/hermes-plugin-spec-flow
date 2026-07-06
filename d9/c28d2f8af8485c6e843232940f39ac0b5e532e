@@ -1,0 +1,21 @@
+tests/run-detached.sh
+  s_a0fd4933cab6db::t_4b3a057228d613 15-21
+  s_a0fd4933cab6db::t_d2461d456e12b0 32
+  s_a0fd4933cab6db::t_ddc5ede258f11d 78
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "d9c28d2f8af8485c6e843232940f39ac0b5e532e",
+  "prompts": {},
+  "sessions": {
+    "s_a0fd4933cab6db": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f44efdfd-5e4c-4895-8a1a-c149a64ab4a0",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
