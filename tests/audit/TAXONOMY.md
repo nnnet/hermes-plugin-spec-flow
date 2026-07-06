@@ -1916,6 +1916,26 @@ CARRIER ONLY — byte-identical under two different proses over the same carrier
 reader (S36.5). Parallels K3's `_openapi_interface_markdown` — same flip, the
 non-HTTP class's carrier.
 
+## STAGE 37 — the live ir.json grows on EVERY closed node (branch OR leaf),
+not only on a realized leaf (node N7, `test_ir_grows_on_spec_depth.py`)
+
+The live-IR completion. I1/S14.6 made ir.json a LIVE artifact re-dumped as the
+tree is built, but the ONLY dump site was the leaf arm of `_visit` (labelled
+"leaf realized"). The v167 audit (a `--depth spec` run) exposed the gap: a leaf
+DID reach that arm at spec depth (6 "leaf realized" dumps in the trace), so the
+leaf path was honest — but a BRANCH node closes its spec stage (OpenAPI +
+contract materialised at the review gate) WITHOUT dumping the IR. So ir.json
+stayed ABSENT until the first leaf closed: v167 checkpoints 001/002 already
+carry the branch nodes' specs/ and contracts/ yet have NO ir.json, and the
+dashboard IR tab was empty through the opening of the run. S37 adds the
+incremental dump to the branch arm too — same locked writer alias as the leaf
+arm (`_write_ir_incremental` → `_write_ir`, I1), idempotent (I2 dedups a
+repeated node), never the final full dump — so the IR grows from the FIRST
+closed node regardless of `--depth`. Reds cover both directions: the branch arm
+carries the dump (S37.1, RED before the fix), the leaf arm KEEPS its dump
+(S37.2, the no-regression guard on I1 S14.6), and the incremental writer stays
+the locked alias (S37.3, no second raw writer racing the leaf dump).
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.
