@@ -1119,6 +1119,175 @@ def _run_active(run_dir: "pathlib.Path | None") -> bool:
     return age < _RUN_FRESH_S
 
 
+# ── IR (ir.json) view ────────────────────────────────────────────────────────
+# The engine writes workspace/ir.json ONCE at plan time (build_ir -> _write_ir).
+# This tab renders that closed structure read-only: product header, per-node
+# route tables with an ORIGIN badge (engine convention vs spec datum), plus the
+# symbols / env / dependencies / effects / gaps blocks — each omitted when its
+# datum is absent (mirrors the IR's own "missing datum => absent field" law).
+
+def _ir_src_tag(op: dict) -> str:
+    """Origin badge for one OpenAPI operation.
+
+    Why: ir.json marks engine-invented status/body as ``convention`` (H2/S13.6)
+    so a reader can tell what the spec asked for from what the engine filled in.
+    What: returns ⚙ engine when either x-spec-flow-status-source or
+    x-spec-flow-body-source == "convention", else 📜 spec.
+    Test: op with x-spec-flow-status-source="convention" -> contains ⚙; a bare op
+    -> contains 📜.
+    """
+    conv = (op.get("x-spec-flow-status-source") == "convention"
+            or op.get("x-spec-flow-body-source") == "convention")
+    return ('<span class="badge" title="движок: REST-соглашение">⚙</span>'
+            if conv else
+            '<span class="badge" title="из спеки">📜</span>')
+
+
+def _ir_node_routes(openapi: dict) -> str:
+    """Render the routes table for one node's OpenAPI fragment.
+
+    Why: routes are the node's contracted surface; the table is the heart of the
+    IR tab (method / path / status / media / handler + origin badge).
+    What: one row per (path, method); reads status + media from the operation's
+    responses, handler from x-spec-flow-handler. Returns "" when no paths.
+    Test: a fragment with one GET path yields a <table> containing the path, the
+    handler symbol and one origin badge.
+    """
+    paths = (openapi or {}).get("paths") or {}
+    rows: list[str] = []
+    for path in sorted(paths):
+        methods = paths[path] or {}
+        for m in sorted(methods):
+            op = methods[m] or {}
+            responses = op.get("responses") or {}
+            status = next(iter(responses), "")
+            resp = responses.get(status) or {}
+            media = ", ".join(sorted((resp.get("content") or {}).keys()))
+            handler = op.get("x-spec-flow-handler") or ""
+            rows.append(
+                "<tr><td>%s %s</td><td><code>%s</code></td><td>%s</td>"
+                "<td>%s</td><td><code>%s</code></td></tr>" % (
+                    _ir_src_tag(op), _esc(m.upper()), _esc(path),
+                    _esc(status), _esc(media) or "—",
+                    _esc(handler) or "—"))
+    if not rows:
+        return ""
+    return ("<table><thead><tr><th>метод</th><th>путь</th><th>статус</th>"
+            "<th>media</th><th>handler</th></tr></thead><tbody>"
+            + "".join(rows) + "</tbody></table>")
+
+
+def _ir_node_html(nid: str, node: dict) -> str:
+    """Render one IR node section: routes table + optional symbol/env/dep/effect
+    blocks, each omitted when absent.
+
+    Why: a node is the unit of ownership in the IR; its whole contracted surface
+    lives here, so the tab reads node-by-node like ir.json itself.
+    What: emits an .irnode block with a heading, the routes table, x-spec-flow-
+    gaps, exposes/consumes symbols, env, dependencies and effects — skipping any
+    block whose datum is missing.
+    Test: a node with symbols+env+deps+effects emits all four blocks; a node with
+    only routes emits just the table.
+    """
+    parts = ['<div class="irnode">', "<h4>%s</h4>" % _esc(nid)]
+    openapi = node.get("openapi") or {}
+    routes = _ir_node_routes(openapi)
+    if routes:
+        parts.append(routes)
+    gaps = openapi.get("x-spec-flow-gaps") or []
+    if gaps:
+        parts.append("<p class=muted>пробелы (x-spec-flow-gaps):</p><ul>"
+                     + "".join("<li>%s</li>" % _esc(g) for g in gaps)
+                     + "</ul>")
+    symbols = node.get("symbols") or {}
+    exposes = symbols.get("exposes") or []
+    if exposes:
+        parts.append("<p class=muted>отдаёт (exposes):</p><ul>" + "".join(
+            "<li><code>%s(%s)</code></li>" % (
+                _esc(e.get("name")),
+                ", ".join(_esc(a) for a in (e.get("args") or [])))
+            for e in exposes) + "</ul>")
+    consumes = symbols.get("consumes") or []
+    if consumes:
+        parts.append("<p class=muted>потребляет (consumes):</p><ul>" + "".join(
+            "<li><code>%s.%s(%s)</code></li>" % (
+                _esc(c.get("from")), _esc(c.get("name")),
+                ", ".join(_esc(a) for a in (c.get("args") or [])))
+            for c in consumes) + "</ul>")
+    env = node.get("env") or []
+    if env:
+        parts.append("<p class=muted>env:</p><ul>" + "".join(
+            "<li><code>%s</code> — %s</li>" % (
+                _esc(e.get("name")), _esc(e.get("rule")))
+            for e in env) + "</ul>")
+    deps = node.get("dependencies") or []
+    if deps:
+        parts.append("<p class=muted>зависимости (dependencies):</p><ul>"
+                     + "".join("<li><code>%s</code></li>" % _esc(d)
+                               for d in deps) + "</ul>")
+    effects = node.get("effects") or []
+    if effects:
+        parts.append("<p class=muted>эффекты (effects):</p><ul>"
+                     + "".join("<li><code>%s</code></li>" % _esc(e)
+                               for e in effects) + "</ul>")
+    parts.append("</div>")
+    return "".join(parts)
+
+
+def _ir_report_html(run_dir: pathlib.Path) -> str:
+    """Render the whole ir.json view; "" when the artifact is absent.
+
+    Why: the IR is the source of truth for the product's contracted surface
+    (Phase I) — surfacing it read-only lets a human verify what the engine
+    plans to build without opening the file.
+    What: reads workspace/ir.json, renders a product header + one section per
+    node + the pretty raw json folded into <details>. Returns "" when the file
+    is missing (the client shows an honest placeholder); a malformed/non-object
+    file yields an explicit note, never a stack trace.
+    Test: point at a dir with a built ir.json -> HTML has the product header and
+    a routes table; absent dir -> ""; malformed json -> "не читается" note.
+    """
+    ir_path = run_dir / "workspace" / "ir.json"
+    if not ir_path.exists():
+        return ""
+    try:
+        raw = ir_path.read_text(encoding="utf-8")
+        ir = json.loads(raw)
+    except (OSError, json.JSONDecodeError) as exc:
+        return ("<p class=errbox>ir.json есть, но не читается: %s</p>"
+                % _esc(exc))
+    if not isinstance(ir, dict):
+        return "<p class=errbox>ir.json не является объектом</p>"
+
+    product = ir.get("product") or {}
+    head = []
+    fmt = ir.get("format")
+    if fmt:
+        head.append("формат <code>%s</code>" % _esc(fmt))
+    if product.get("kind"):
+        head.append("вид <code>%s</code>" % _esc(product["kind"]))
+    if product.get("entry"):
+        head.append("вход <code>%s</code>" % _esc(product["entry"]))
+    callable_ = product.get("callable") or []
+    if callable_:
+        head.append("callable <code>%s</code>"
+                    % _esc(", ".join(str(c) for c in callable_)))
+    out = ['<p class=muted>%s</p>' % " · ".join(head)] if head else []
+
+    nodes = ir.get("nodes") or {}
+    for nid in sorted(nodes):
+        n = nodes[nid]
+        if isinstance(n, dict):
+            out.append(_ir_node_html(nid, n))
+    if not nodes:
+        out.append("<p class=dim>в ir.json нет узлов</p>")
+
+    pretty = json.dumps(ir, ensure_ascii=False, indent=2, sort_keys=True)
+    out.append("<details><summary>сырой ir.json</summary>"
+               '<pre class="irdump">%s</pre></details>' % _esc(pretty))
+    return "".join(out)
+
+
 def _build_state(run_dir: pathlib.Path) -> dict:
     events = _read_jsonl(run_dir / "trace.jsonl")
     llm = _read_jsonl(run_dir / "llm-log.jsonl")
@@ -1372,6 +1541,7 @@ def _build_state(run_dir: pathlib.Path) -> dict:
         "reports": {
             "inputs": _md_to_html(_inputs_md(run_dir, llm)),
             "flow": _flow_html(events, tree, llm),
+            "ir": _ir_report_html(run_dir),
             "report": report_html,
             "oracle": read_md("oracle-report.md"),
             "summary": read_md("SUMMARY.md"),
@@ -2359,6 +2529,9 @@ pre.code{background:var(--panel);padding:10px;border-radius:6px;overflow:auto;wh
 .errbox{background:var(--err-soft);border:1px solid color-mix(in srgb,var(--err) 40%,transparent);border-radius:6px;padding:6px 10px;margin:8px 0;font-size:12px}.errbox li{margin:2px 0}
 .fixbox{background:var(--ok-soft);border:1px solid color-mix(in srgb,var(--ok) 40%,transparent);border-radius:6px;padding:6px 10px;margin:8px 0;font-size:12px}.fixbox li{margin:2px 0}
 .gtabs{margin-top:8px}
+.irnode{border:1px solid var(--panel-2);border-radius:6px;padding:8px 10px;margin:8px 0}
+.irnode h4{margin:0 0 6px}.irnode ul{margin:4px 0 4px 18px}
+.irdump{background:var(--panel);padding:10px;border-radius:6px;overflow:auto;white-space:pre;max-height:60vh;font-size:12px}
 </style></head><body>
 <div class=bar>
  <b id=name class=home title="клик — вернуться к обзору">…</b>
@@ -2880,12 +3053,16 @@ function hitlPost(path,payload,msgEl){
 // auto-refresh rebuild does not reset the scroll position.
 function renderGlobal(){
  const R=STATE.reports;
- const tabs=[['inputs','▶ Старт (цель+вход)'],['graph','🕸 Граф спеков'],['flow','🔀 Поток выполнения'],['timeline','⏱ Таймлайн'],['report','Отчёт+аудит'],['agents','🤖 Агенты сейчас'],['hitl','✋ HITL'],['idle','⏱ Простои'],['compare','📊 Сравнение прогонов'],['workflow','Воркфлоу'],['oracle','Оракул'],['commits','Версии/коммиты'],['summary','Итог']];
- let h='<div class=tabs>'+tabs.map(([k,t])=>(k==='timeline'||k==='graph'||k==='agents'||k==='hitl'||k==='flow'||k==='idle'||k==='compare'||R[k])?`<span class="tab${GTAB===k?' on':''}" data-g="${k}">${t}</span>`:'').join('')+'</div>';
+ const tabs=[['inputs','▶ Старт (цель+вход)'],['graph','🕸 Граф спеков'],['flow','🔀 Поток выполнения'],['ir','🧩 IR (ir.json)'],['timeline','⏱ Таймлайн'],['report','Отчёт+аудит'],['agents','🤖 Агенты сейчас'],['hitl','✋ HITL'],['idle','⏱ Простои'],['compare','📊 Сравнение прогонов'],['workflow','Воркфлоу'],['oracle','Оракул'],['commits','Версии/коммиты'],['summary','Итог']];
+ let h='<div class=tabs>'+tabs.map(([k,t])=>(k==='timeline'||k==='graph'||k==='agents'||k==='hitl'||k==='flow'||k==='ir'||k==='idle'||k==='compare'||R[k])?`<span class="tab${GTAB===k?' on':''}" data-g="${k}">${t}</span>`:'').join('')+'</div>';
  let body;
  if(GTAB==='agents')body='<h3 class=muted>Что делают агенты сейчас <span class=dim>(сверху — последнее)</span></h3><ol class="feed full" reversed>'+(STATE.feed||[]).slice().reverse().map(f=>`<li>${esc(f)}</li>`).join('')+'</ol>';
  else if(GTAB==='hitl')body=hitlHTML();
  else if(GTAB==='flow')body='<p class=muted>поток выполнения по вертикальной шкале времени (сверху позже): колонки — ветки, блоки — вехи (цвет = вердикт), позиция = реальная метка времени</p><div id=flowscroll class=keepscroll style="overflow:auto;max-height:75vh">'+(R.flow||'<p class=dim>потока ещё нет</p>')+'</div>';
+ // ir.json view: R.ir is a server-rendered HTML string, or "" when the
+ // artifact is absent — the tab is ALWAYS offered, an empty value shows an
+ // honest placeholder (ir.json is written only after the tree is realized).
+ else if(GTAB==='ir')body='<p class=muted>ir.json — контракт продукта после реализации дерева. Бейдж происхождения маршрута: ⚙ движок (REST-соглашение) · 📜 из спеки.</p>'+(R.ir||'<p class=dim>IR ещё не выгружен — ir.json пишется после того как дерево реализовано (build_ir → _write_ir).</p>');
  else if(GTAB==='idle')body=idleHTML();
  else if(GTAB==='compare')body=compareHTML();
  else if(GTAB==='timeline')body=timelineHTML();
