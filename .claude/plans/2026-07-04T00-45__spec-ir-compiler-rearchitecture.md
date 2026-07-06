@@ -58,8 +58,8 @@ graph:
   - {id: G2, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/nodes/]}
   - {id: H1, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py]}
   - {id: H2, needs: [],               parallel: "",        status: "[ ]", files: [spec_ir.py, spec_flow_runner.py]}
-  - {id: H3, needs: [],               parallel: "wave-h1", status: "[~]", files: [spec_ir.py, spec_openapi.py, spec_conformance.py]}
-  - {id: H4, needs: [H3],             parallel: "",        status: "[ ]", files: [spec_ir.py, spec_flow_runner.py]}
+  - {id: H3, needs: [],               parallel: "wave-h1", status: "[x]", files: [spec_ir.py, spec_openapi.py, spec_conformance.py]}
+  - {id: H4, needs: [H3],             parallel: "wave-2",  status: "[~]", files: [spec_ir.py, spec_flow_runner.py]}
   - {id: H5, needs: [],               parallel: "",        status: "[ ]", files: [spec_ir.py, spec_skeletons.py, spec_flow_runner.py]}
   - {id: H6, needs: [],               parallel: "wave-h1", status: "[~]", files: [spec_skeletons.py, spec_flow_doctor.py]}
   - {id: H7, needs: [],               parallel: "",        status: "[ ]", files: [spec_ir.py, tests/audit/]}
@@ -479,12 +479,20 @@ Schemathesis, awesome-ralph.
   (status_source: convention|spec)
 - приёмка: по ir.json видно, что заказала спека, а что додумал движок
 
-### [~] H3 `closed-response-schemas` — схемы ответов непустые и запинены
+### [x] H3 `closed-response-schemas` — схемы ответов непустые и запинены
 - выход: compile_openapi эмитит контрактную схему тела (не {}),
   compile_leaf_tests пинит её, не только isinstance(dict|list)
 - приёмка: эксплойт F1 (произвольное тело зелёное) закрыт красным кейсом
+- заметки: ГОТОВ — коммиты e2fc3d3 (S21 красные) + d5efa5f. Агенты
+  волны 1 умерли на лимите подписки — доделал сам последовательно.
+  spec_conformance._response_shape/_shape_body_asserts пинят закрытую
+  форму (required присутствуют, типы, нет лишних полей); пустая {}
+  остаётся честным isinstance-пробелом; const не ослаблен.
+  compile_openapi называет пустую схему ответа body-shape-пробелом
+  (зеркало media-gap). Эксплойт закрыт поведенчески (exec). Регрессия
+  645 зелёных + батарея чистая
 
-### [ ] H4 `typed-request-fields` — поля запроса типизированы
+### [~] H4 `typed-request-fields` — поля запроса типизированы
 - выход: IR несёт типы полей, 400-гейт роутера отвергает неверный тип
 - приёмка: эксплойт F3 ({"text": 12345} проходит) закрыт
 
