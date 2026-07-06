@@ -1562,6 +1562,24 @@ no-OpenAPI case (S23.3) was already green.
   This is duplication REMOVED (interface extraction now single-sourced), not a
   new hand-rolled seam (contrast S19.10, where the reason to hand-roll is the
   model-facing block format the library lacks).
+## STAGE 25 — ONE in-memory IR accumulator; datum projections are DERIVED from it (node I2, `test_ir_single_accumulator.py`)
+- S25a THE ENGINE HOLDS ONE IR STRUCTURE: after a write under the I1 lock
+  (`_write_ir_locked`) the engine keeps `self._ir` (and the raw-datum snapshot
+  `self._ir_sources` it was built from) in memory. `build_ir`'s result is the
+  single source retained across readers, not a throwaway rebuilt on every call.
+- S25b INTERFACE.JSON IS DERIVED FROM THE ACCUMULATOR, NOT RE-ASSEMBLED:
+  `_write_interface_contract` reads its route media / request_fields projection
+  from `self._ir_sources`, no longer re-calling `_route_media_map()` /
+  `_route_request_fields()` on its own. Direction proof: after the accumulator
+  is built the RAW datum is mutated (monkeypatched); a re-derived interface
+  would pick the mutation up (two directions, the pairwise-drift class), a
+  derived-from-accumulator interface ignores it (one direction: datums ->
+  accumulator -> {IR, interface}, the datum never read a second time behind it).
+- S25c THE HELD IR IS A DUMP, NEVER A LIVE REBUILD: `_ir_snapshot()` returns the
+  same held structure after a raw-datum mutation — two reads under changing
+  datums cannot drift. The datum is upstream of the accumulator, never queried
+  behind it. Consolidation REMOVED (media/request_fields single-sourced), not a
+  new seam: the raw datums are captured ONCE by `spec_ir.collect_ir_sources`.
 
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.

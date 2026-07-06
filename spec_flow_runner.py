@@ -2946,6 +2946,12 @@ class Engine:
         # I1/S14.6: serialize IR dumps so parallel leaves cannot interleave a
         # build+write, and make ir.json a working (live) artifact.
         self._ir_write_lock = threading.Lock()
+        # I2/S25: the ONE in-memory IR accumulator and the raw-datum snapshot
+        # it was built from. _write_ir_locked refreshes both under the lock;
+        # every projection (interface.json) reads them instead of re-querying
+        # the datum methods — one source, one direction.
+        self._ir: "Optional[dict]" = None
+        self._ir_sources: "Optional[dict]" = None
         # auto-checkpoint cadence: the engine snapshots ITSELF every N node
         # boundaries when set (a run/engine parameter, like the decomposer type)
         self._nodes_since_ckpt = 0
@@ -10794,11 +10800,21 @@ def %(callable)s(environ, start_response):
         declared = set(routes)
         routes = list(routes) + [mp for mp in sorted(adopted)
                                  if mp not in declared]
-        _media = self._route_media_map()
-        try:                     # S12.1: the request-shape datum, same source
-            _reqf = self._route_request_fields()
-        except Exception:        # noqa: BLE001 — datum stays best-effort
-            _reqf = {}
+        # I2/S25: read media / request_fields FROM the held IR accumulator
+        # (self._ir_sources), NOT by re-calling the datum methods. The IR and
+        # this interface projection now share one upstream captured once under
+        # the lock — one source, one direction. Before the first locked write
+        # (interface can be emitted early) fall back to a fresh capture so the
+        # datum is still read exactly once.
+        srcs = self._ir_sources
+        if not isinstance(srcs, dict):
+            try:
+                from . import spec_ir  # type: ignore
+            except ImportError:  # flat layout: repo root on sys.path
+                import spec_ir  # type: ignore
+            srcs = spec_ir.collect_ir_sources(self)
+        _media = srcs.get("media") or {}
+        _reqf = srcs.get("reqf") or {}
         route_rows = []
         for m, p in sorted(routes):
             fn_adopted = None if (m, p) in declared else adopted.get((m, p))
@@ -10911,7 +10927,15 @@ def %(callable)s(environ, start_response):
                 from . import spec_ir  # type: ignore
             except ImportError:  # flat layout: repo root on sys.path
                 import spec_ir  # type: ignore
-            ir = spec_ir.build_ir(self)
+            # I2: read the raw datums ONCE into a held snapshot, build the IR
+            # from it, and KEEP both in memory as the single accumulator. Every
+            # downstream projection (interface.json) reads self._ir_sources
+            # instead of re-querying the datum methods — one source, one
+            # direction (datums -> accumulator -> {IR, interface}).
+            sources = spec_ir.collect_ir_sources(self)
+            ir = spec_ir.build_ir(self, sources)
+            self._ir = ir
+            self._ir_sources = sources
             rep = spec_ir.validate_ir(ir)
             self._atomic_write(
                 "ir.json",
@@ -10938,6 +10962,17 @@ def %(callable)s(environ, start_response):
                 str(getattr(self, "_root_id", "") or "L0"),
                 "machine IR dump failed", str(exc)[:300],
                 "ir_written", "SKIP", level=L_MILESTONE)
+
+    def _ir_snapshot(self) -> "Optional[dict]":
+        """Return the held in-memory IR (I2) as a pure DUMP — never a rebuild.
+
+        Why: the accumulator is the single source. A reader that wants the IR
+        gets the SAME structure `_write_ir_locked` last built under the lock,
+        so two reads under changing datums cannot drift; the datum methods are
+        upstream of the accumulator and are never queried behind it.
+        What: returns self._ir (None until the first locked write).
+        Test: tests/audit/test_ir_single_accumulator.py."""
+        return self._ir
 
     def _ir_route_set(self) -> set:
         """The realized route set: every (METHOD, path) any node owns."""
