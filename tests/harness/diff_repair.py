@@ -23,6 +23,27 @@ Block format (the repair prompt asks for exactly this):
 An empty SEARCH body means "replace the whole file" (a create / full
 rewrite escape hatch the model can still use when a diff won't express the
 change). Test: tests/test_diff_repair.py.
+
+Recorded reason — why this is hand-rolled, not a diff library (node H1b).
+A generic patch library (diff-match-patch, unidiff, python-patch) nominally
+covers "apply a patch to text", so the NIH is called out here so it can never
+be silent. It is deliberate: none of those libraries gives the domain
+behaviour this applier exists for.
+  * The model-facing block FORMAT contract. The unit is not a unified diff but
+    an LLM-friendly `FILE:` + `<<<SEARCH / === / >>>REPLACE` grammar (see
+    ``_BLOCK``) that the repair prompt is instructed to emit, tolerant of any
+    run of markers >= 3 (a model that emits 5 or 8 of them still parses).
+    diff-match-patch / unidiff parse patch text, not this grammar.
+  * Empty SEARCH = whole-file replace — a create / full-rewrite escape hatch
+    with no diff-library equivalent.
+  * Refusal, not fuzzy application. A block applies ONLY on an EXACTLY-ONCE
+    match; 0 (gone) or >1 (ambiguous) is REFUSED without a write so a stale
+    diff never corrupts the file. diff-match-patch does the opposite (fuzzy
+    match_main / patch_apply with a match threshold); unidiff needs exact line
+    offsets. The refusal IS the safety property.
+  * Write-door integration (``apply_repair``): an ``allowed`` path allowlist,
+    per-file accumulation of composed edits, and a staged files-to-write dict
+    a refused block leaves untouched — the seam the harness write door reads.
 """
 from __future__ import annotations
 
