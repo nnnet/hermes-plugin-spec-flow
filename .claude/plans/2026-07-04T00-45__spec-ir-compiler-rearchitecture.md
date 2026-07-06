@@ -70,6 +70,10 @@ graph:
   - {id: K1, needs: [],               parallel: "",        status: "[~]", files: [spec_openapi.py, tests/audit/, tests/requirements-dev.txt]}
   - {id: K2, needs: [K1],             parallel: "",        status: "[ ]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py, spec_ir.py]}
   - {id: K3, needs: [K2],             parallel: "",        status: "[ ]", files: [spec_flow_runner.py]}
+  - {id: K1b, needs: [K1],            parallel: "",        status: "[ ]", files: [spec_scenarios.py, tests/requirements-dev.txt, tests/audit/]}
+  - {id: L1, needs: [K1b],            parallel: "",        status: "[ ]", files: [spec_scenarios.py, tests/audit/]}
+  - {id: H1b, needs: [],              parallel: "",        status: "[ ]", files: [tests/harness/diff_repair.py, tests/audit/]}
+  - {id: K4, needs: [K2],             parallel: "",        status: "[ ]", files: [tests/harness/openapi_diff.py, spec_openapi.py]}
   - {id: H8, needs: [],               parallel: "wave-h1", status: "[x]", files: [spec_flow_runner.py]}
   - {id: G3, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/decomposition/]}
   - {id: G4, needs: [G3],             parallel: "",        status: "[x]", files: [tests/]}
@@ -460,6 +464,43 @@ HITL-инъекции посреди прогона. Недостающее бе
 
 Sources: github/spec-kit, spec-driven.md, Specmatic: MCP as guardrails,
 Schemathesis, awesome-ralph.
+
+### Узлы L/K-доп — инвентарь либ 2026-07-06 (read-only аудит принципа-3)
+
+Вывод аудита: проект ДИСЦИПЛИНИРОВАН, «велосипедов без причины» мало. Осознанно
+рукописное (оставить, причина записана): волновой планировщик (H1),
+замкнутый мир IR vs jsonschema (H7), FSM (transitions уже основной путь,
+_FallbackMachine — graceful), lint_openapi (K1 — доп-правила поверх стандарта),
+wsgiref/ThreadingHTTPServer/pyyaml (stdlib-first, не 3rd-party NIH).
+Реальные долги — ниже узлами.
+
+### [ ] K1b `wire-or-drop-schema-validator` — мёртвая либа в requirements
+- выход: openapi-schema-validator==0.9.0 запинен, но НИГДЕ не используется —
+  либо подключить к валидации тел (L1), либо убрать из requirements-dev.txt
+- приёмка: grep находит импорт либы ИЛИ её нет в requirements (честность
+  зависимостей, не мёртвый груз)
+- заметки: нулевой риск; зона не пересекается с J1
+
+### [ ] L1 `scenario-body-oracle` — тела сценариев валидировать либой
+- выход: тела ответов сценариев (spec_scenarios _judge/_json_subset) валидируем
+  openapi-schema-validator/jsonschema против contracted response-схемы; ручной
+  subset остаётся фолбэком
+- приёмка: тело, нарушающее схему, ловится ЛИБОЙ (красный+зелёный); ровно то,
+  подо что стоит openapi-schema-validator в requirements (закрывает K1b)
+- заметки: средний риск, зона spec_scenarios
+
+### [ ] H1b `diff-repair-nih-record` — записать причину рукописного diff
+- выход: причина рукописного SEARCH/REPLACE (контракт формата с моделью,
+  отказ при неоднозначности, пустой SEARCH=перезапись — доменное поведение,
+  либа не даёт) записана в TAXONOMY/докстринг diff_repair.py
+- приёмка: молчаливого NIH нет — причина зафиксирована
+- заметки: не код, одна запись; можно сразу
+
+### [ ] K4 `merge-openapi-diff` — узкий ручной OpenAPI-diff на либу
+- выход: после K2 tests/harness/openapi_diff.py строит diff поверх машинного
+  OpenAPI (compile_openapi/либа), не ручным обходом paths/responses
+- приёмка: diff полей не дублирует compile_openapi; зависит от K2
+- заметки: ждёт K2
 
 ### Узлы K — OpenAPI 3.1 БИБЛИОТЕКОЙ, спека первична машинной (2026-07-06, СУПЕРПРИОРИТЕТ)
 
