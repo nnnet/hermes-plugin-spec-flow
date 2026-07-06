@@ -1298,6 +1298,154 @@ def _node_spec_validation_html(nid: str, node: dict) -> str:
             '✗ %d errors<ul>%s</ul></div>' % (len(errs), items))
 
 
+def _node_is_http(node: dict) -> bool:
+    """True when a node contracts an HTTP surface (an OpenAPI paths map).
+
+    Why: the standard a node's spec is shown in DIVERGES by kind — an HTTP node
+    is OpenAPI 3.1 operations, a non-HTTP (pure-capability) node is Gherkin
+    scenarios + typed symbols. This is the one predicate both the standard block
+    and the standard badge branch on, so they never disagree.
+    What: returns True iff node.openapi.paths is a non-empty map.
+    Test: tests/dashboard/test_dashboard_standard_spec.py — the engine-built
+    `core` node is HTTP; a scenarios-only node is not.
+    """
+    if not isinstance(node, dict):
+        return False
+    paths = ((node.get("openapi") or {}).get("paths")
+             if isinstance(node.get("openapi"), dict) else None)
+    return bool(paths)
+
+
+def _node_standard_spec_html(nid: str, node: dict) -> str:
+    """Render a node's spec as MACHINE STANDARD, not prose (N5, S33).
+
+    Why (user 2026-07-06, single criterion): a spec is complete for a weak model
+    only as data in a standard — the panel must SHOW that machine surface, the
+    `.md` prose being a derived secondary view. For an HTTP node the standard is
+    the OpenAPI 3.1 operations (the same routes table the IR tab renders, K3);
+    for a non-HTTP node it is the Gherkin Given/When/Then scenarios plus the
+    typed `symbols` signatures (the machine carrier N3 emits) — never a textual
+    description.
+    What: HTTP node -> the routes table + any x-spec-flow-gaps; non-HTTP node ->
+    the exposes/consumes symbol signatures + every Given/When/Then scenario. An
+    empty carrier yields a muted note (no standard datum yet), never prose.
+    Test: tests/dashboard/test_dashboard_standard_spec.py — a scenarios-only
+    node's block carries When/Then and the exposed symbol; an HTTP node's block
+    carries its routes table.
+    """
+    parts: list = ['<div class="specstd">']
+    openapi = node.get("openapi") or {} if isinstance(node, dict) else {}
+    if _node_is_http(node):
+        parts.append('<p class=muted>интерфейс (OpenAPI 3.1):</p>')
+        parts.append(_ir_node_routes(openapi))
+        gaps = openapi.get("x-spec-flow-gaps") or []
+        if gaps:
+            parts.append("<p class=muted>пробелы (x-spec-flow-gaps):</p><ul>"
+                         + "".join("<li>%s</li>" % _esc(g) for g in gaps)
+                         + "</ul>")
+    else:
+        symbols = node.get("symbols") or {} if isinstance(node, dict) else {}
+        exposes = symbols.get("exposes") or []
+        if exposes:
+            parts.append("<p class=muted>отдаёт (exposes):</p><ul>" + "".join(
+                "<li><code>%s(%s)</code></li>" % (
+                    _esc(e.get("name")),
+                    ", ".join(_esc(a) for a in (e.get("args") or [])))
+                if isinstance(e, dict) else "<li><code>%s</code></li>" % _esc(e)
+                for e in exposes) + "</ul>")
+        consumes = symbols.get("consumes") or []
+        if consumes:
+            parts.append("<p class=muted>потребляет (consumes):</p><ul>"
+                         + "".join(
+                "<li><code>%s.%s(%s)</code></li>" % (
+                    _esc(c.get("from")), _esc(c.get("name")),
+                    ", ".join(_esc(a) for a in (c.get("args") or [])))
+                if isinstance(c, dict) else "<li><code>%s</code></li>" % _esc(c)
+                for c in consumes) + "</ul>")
+        scenarios = node.get("scenarios") or [] if isinstance(node, dict) else []
+        if scenarios:
+            parts.append("<p class=muted>сценарии (Gherkin Given/When/Then):</p>"
+                         + "".join(_ir_scenario_html(s) for s in scenarios))
+        if not exposes and not consumes and not scenarios:
+            parts.append('<p class=dim>машинный носитель ещё не выгружен — '
+                         'ir.json наполняется по ходу.</p>')
+    parts.append('</div>')
+    return "".join(parts)
+
+
+def _node_standard_badge_html(nid: str, node: dict) -> str:
+    """Per-standard validation badge over a node's machine spec (N5, S33).
+
+    Why: showing the standard is half the story — a reader must also see it is
+    VALID by its OWN standard's oracle, with the error count. An HTTP node is
+    judged by the OpenAPI 3.1 library (`spec_openapi.validate_openapi_library`);
+    a non-HTTP node by the Gherkin grammar oracle (`spec_ir.gherkin_errors`) —
+    and its LACK of an HTTP interface is legitimate, marked 'no HTTP interface',
+    never a defect. Both kinds additionally carry the JSON Schema structural
+    verdict (`spec_ir.jsonschema_errors`). 0 errors = green.
+    What: returns a <div class="stdbadge"> naming the standard + '✓'/'✗ N'. All
+    oracles degrade to a note (never a crash) when their library is absent, so
+    the badge is honest in a minimal environment too.
+    Test: tests/dashboard/test_dashboard_standard_spec.py — a non-HTTP node
+    yields a 'Gherkin' badge marking the missing HTTP interface; an engine-built
+    HTTP node yields an 'OpenAPI 3.1' badge.
+    """
+    one = {"nodes": {nid: node}}
+    try:
+        import spec_ir
+        one = {"format": spec_ir.IR_FORMAT, "product": {},
+               "nodes": {nid: node}}
+    except Exception:  # noqa: BLE001 — badge still renders below
+        spec_ir = None  # type: ignore
+
+    def _count(fn_name: str, arg) -> "tuple[int, bool]":
+        """(error count, oracle available) for one spec_ir oracle."""
+        if spec_ir is None:
+            return (0, False)
+        try:
+            return (len(getattr(spec_ir, fn_name)(arg)), True)
+        except Exception:  # noqa: BLE001 — oracle absent/failing degrades
+            return (0, False)
+
+    badges: list = []
+    if _node_is_http(node):
+        n_oa, oa_ok = 0, True
+        try:
+            import spec_openapi
+            n_oa = len(spec_openapi.validate_openapi_library(
+                node.get("openapi") or {}))
+        except Exception:  # noqa: BLE001
+            oa_ok = False
+        badges.append(_std_badge_chip("OpenAPI 3.1", n_oa, oa_ok))
+    else:
+        n_gh, gh_ok = _count("gherkin_errors", one)
+        badges.append(_std_badge_chip("Gherkin", n_gh, gh_ok))
+        badges.append('<span class="stdchip na" title="узел без HTTP-интерфейса '
+                      '— это не дефект, стандарт узла — Gherkin">no HTTP '
+                      'interface</span>')
+    n_js, js_ok = _count("jsonschema_errors", one)
+    badges.append(_std_badge_chip("JSON Schema", n_js, js_ok))
+    return '<div class="stdbadge">' + "".join(badges) + '</div>'
+
+
+def _std_badge_chip(standard: str, n_errors: int, available: bool) -> str:
+    """One standard chip: name + ✓ (0 errors) / ✗ N / — (oracle absent).
+
+    Why: a uniform, greppable rendering for every standard so the badge reads
+    the same whether the oracle is OpenAPI, Gherkin or JSON Schema.
+    What: green '✓' when 0 errors, red '✗ N' otherwise, muted '—' when the
+    oracle library is not installed (degrade, never a false green nor a crash).
+    Test: covered via _node_standard_badge_html in the S33 dashboard tests.
+    """
+    if not available:
+        return ('<span class="stdchip na" title="оракул %s недоступен в среде">'
+                '%s —</span>' % (_esc(standard), _esc(standard)))
+    if n_errors == 0:
+        return ('<span class="stdchip ok">%s ✓</span>' % _esc(standard))
+    return ('<span class="stdchip bad">%s ✗ %d</span>'
+            % (_esc(standard), n_errors))
+
+
 def _ir_node_html(nid: str, node: dict) -> str:
     """Render one IR node section: routes table + optional symbol/env/dep/effect/
     scenario/files/children blocks, each omitted when absent.
@@ -1796,11 +1944,19 @@ def _build_state(run_dir: pathlib.Path) -> dict:
         # spec_validated: the M3 'validated ✓ / N errors' badge, computed by
         # re-running the oracles over the node's fresh IR — the spec panel shows
         # whether the spec is VALID, not only where it came from.
+        # spec_standard: the N5/S33 MACHINE-STANDARD spec block (OpenAPI routes
+        # for an HTTP node, Gherkin scenarios + symbols for a non-HTTP one) plus
+        # its per-standard validation badge — the panel shows the machine spec
+        # in its standard, the .md prose being a derived secondary view.
         "nodes": {nid: {**meta[nid], "files": files.get(nid, {}),
                         "spec_primary": _node_spec_provenance_html(
                             ir_nodes.get(nid, {})),
                         "spec_validated": (
                             _node_spec_validation_html(nid, ir_nodes[nid])
+                            if nid in ir_nodes else ""),
+                        "spec_standard": (
+                            _node_standard_badge_html(nid, ir_nodes[nid])
+                            + _node_standard_spec_html(nid, ir_nodes[nid])
                             if nid in ir_nodes else ""),
                         "events": ev_idx.get(nid, [])} for nid in meta},
         "feed": feed[-60:],
@@ -2791,6 +2947,12 @@ pre.code{background:var(--panel);padding:10px;border-radius:6px;overflow:auto;wh
 .feed{padding-left:38px;max-height:150px;overflow:auto}.feed.full{max-height:none;overflow:visible}.feed li{margin:1px 0}
 .diff .add{background:var(--ok-bg);color:var(--ok)}.diff .del{background:var(--err-bg);color:var(--err)}
 .muted{color:var(--dim-2)}.kv{color:var(--dim)}
+.stdbadge{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+.stdchip{font-size:11px;border-radius:8px;padding:1px 8px;border:1px solid var(--dim-2)}
+.stdchip.ok{color:#3fb950;border-color:#2ea04366}
+.stdchip.bad{color:#f85149;border-color:#f8514966}
+.stdchip.na{color:var(--dim-2)}
+.specstd{margin:6px 0;padding:6px 8px;border-left:2px solid var(--panel-2)}
 .badge{font-size:9px;vertical-align:middle;letter-spacing:1px}
 .actv{color:var(--warn);font-weight:700}
 .errbox{background:var(--err-soft);border:1px solid color-mix(in srgb,var(--err) 40%,transparent);border-radius:6px;padding:6px 10px;margin:8px 0;font-size:12px}.errbox li{margin:2px 0}
@@ -3352,8 +3514,11 @@ function renderGlobal(){
  else if(GTAB==='flow')body='<p class=muted>поток выполнения по вертикальной шкале времени (сверху позже): колонки — ветки, блоки — вехи (цвет = вердикт), позиция = реальная метка времени</p><div id=flowscroll class=keepscroll style="overflow:auto;max-height:75vh">'+(R.flow||'<p class=dim>потока ещё нет</p>')+'</div>';
  // ir.json view: R.ir is a server-rendered HTML string, or "" when the
  // artifact is absent — the tab is ALWAYS offered, an empty value shows an
- // honest placeholder (ir.json is written only after the tree is realized).
- else if(GTAB==='ir')body='<p class=muted>ir.json — контракт продукта после реализации дерева. Бейдж происхождения маршрута: ⚙ движок (REST-соглашение) · 📜 из спеки.</p>'+(R.ir||'<p class=dim>IR ещё не выгружен — ir.json пишется после того как дерево реализовано (build_ir → _write_ir).</p>');
+ // honest placeholder. TRUTH (I1/I2/I3): ir.json is a LIVE incremental
+ // artifact, re-dumped under `_ir_write_lock` after EVERY processed leaf
+ // (`_write_ir_incremental` in `_visit`) — it GROWS as leaves close, it is
+ // empty only until the first leaf is realized, never an end-of-run report.
+ else if(GTAB==='ir')body='<p class=muted>ir.json — живой инкремент машинной спеки: дополняется по ходу под локом после каждого закрытого листа (растёт, а не пишется в конце). Бейдж происхождения маршрута: ⚙ движок (REST-соглашение) · 📜 из спеки.</p>'+(R.ir||'<p class=dim>IR пока пуст — ir.json наполняется инкрементально под локом (_ir_write_lock) после каждого обработанного листа; пусто, пока не закрыт первый лист.</p>');
  else if(GTAB==='idle')body=idleHTML();
  else if(GTAB==='compare')body=compareHTML();
  else if(GTAB==='timeline')body=timelineHTML();
@@ -3448,13 +3613,20 @@ async function getMD(p){if(!p)return '';const k='md:'+p;if(FILECACHE[k]!=null)re
 async function renderNodeBody(nd){
  const f=nd.files||{},b=$('#nbody');if(!b)return;
  if(NTAB==='spec'){
+   // N5/S33: the MACHINE STANDARD is primary — the panel shows the node's spec
+   // in its standard (OpenAPI 3.1 operations for an HTTP node, Gherkin
+   // Given/When/Then scenarios + typed symbols for a non-HTTP one) with a
+   // per-standard validation badge, and the .md prose is a DERIVED secondary
+   // view below. spec_standard = badge + machine-spec block (server-rendered).
+   const std=nd.spec_standard||'';
    // OpenAPI-first: the machine document is primary, this prose is DERIVED
    // (compiled from the node's OpenAPI). Stamp the provenance badge above it.
    const prov=nd.spec_primary||'';
    // M3: whether the spec is VALIDATED (green ✓ / N errors), shown above the
    // spec prose so the reader sees validation status on the spec itself.
    const valid=nd.spec_validated||'';
-   b.innerHTML=valid+prov+(prov?'<p class=muted>ниже — проза, скомпилированная из машинного OpenAPI</p>':'')+(await getMD(f.spec));
+   const proseHdr=(std||prov)?'<p class=muted>ниже — проза (производная от машинной спеки, вторична)</p>':'';
+   b.innerHTML=valid+std+prov+proseHdr+(await getMD(f.spec));
  }
  else if(NTAB==='code'){b.innerHTML='<pre class=code>'+esc(await getFile(f.code))+'</pre>';}
  else if(NTAB==='test'){b.innerHTML='<pre class=code>'+esc(await getFile(f.test))+'</pre>';}

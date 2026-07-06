@@ -78,7 +78,7 @@ graph:
   - {id: N1, needs: [],        parallel: "",     status: "[x]", files: [spec_scenarios.py, spec_ir.py, tests/requirements-dev.txt, docs/EXTERNAL-TECH-GUIDE.md, tests/audit/]}
   - {id: N2, needs: [N1],      parallel: "",      status: "[ ]", files: [spec_flow_runner.py, spec_ir.py, tests/audit/]}
   - {id: N3, needs: [N1],      parallel: "wave2", status: "[ ]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py, tests/audit/]}
-  - {id: N5, needs: [N1],      parallel: "wave2", status: "[ ]", files: [tests/lib/live_dashboard.py, tests/dashboard/]}
+  - {id: N5, needs: [N1],      parallel: "wave2", status: "[x]", files: [tests/lib/live_dashboard.py, tests/dashboard/]}
   - {id: N4, needs: [N2, N3],  parallel: "",      status: "[ ]", files: [spec_flow_runner.py, tests/audit/]}
 ```
 
@@ -160,7 +160,29 @@ graph:
   под локом); текстового-only вида спеки нет
 - приёмка: RED — spec-панель рендерит прозу без стандарта/бейджа; заглушка IR
   описывает старое поведение; GREEN — стандарт+бейдж, заглушка исправлена; Stage
-- заметки:
+- заметки: сделано (S33). Stage 33 в TAXONOMY (S32 оставлен агенту N3). Правки
+  только в `tests/lib/live_dashboard.py` + новый `tests/dashboard/test_dashboard_standard_spec.py`.
+  (1) Заглушка IR-вкладки исправлена: старый текст «после того как дерево
+  реализовано» / «после реализации дерева» убран; теперь правдиво — живой
+  инкремент по ходу под `_ir_write_lock` после каждого закрытого листа
+  (`_write_ir_incremental` в `_visit`), пусто пока не закрыт первый лист.
+  (2) Панель «Спека» узла показывает МАШИННЫЙ стандарт: HTTP-узел — OpenAPI
+  routes-таблица (K3); не-HTTP — Gherkin Given/When/Then из `scenarios` +
+  сигнатуры `symbols`; проза .md рендерится ниже, помечена производной. Новые
+  функции `_node_standard_spec_html`, `_node_standard_badge_html`, `_node_is_http`,
+  `_std_badge_chip`; ключ узла `spec_standard` в `_build_state`.
+  (3) Бейдж по стандарту над прочитанным ir.json теми же оракулами
+  (`spec_openapi.validate_openapi_library`, `spec_ir.gherkin_errors`,
+  `spec_ir.jsonschema_errors`): «OpenAPI 3.1 ✓» / «Gherkin ✓» / «JSON Schema ✓»
+  с числом ошибок; не-HTTP узел — Gherkin-бейдж + «no HTTP interface» (не дефект);
+  оракул без либы degrade-ит в «—» (без ложного зелёного).
+  (4) Ни одна вкладка не удалена (тест целостности global+node вкладок).
+  RED-краснели: заглушка со старым текстом; отсутствие `_node_standard_spec_html`/
+  `_node_standard_badge_html`; отсутствие `spec_standard` в state.
+  Прогон: 8/8 новых зелёных; tests/dashboard+lib+audit — 656 passed, 1 failed
+  (`test_gherkin_lib_oracle::test_validate_ir_folds…` — предсуществующий фейл
+  среды без `gherkin-official`, зона N1/S31, доказан git stash — не регресс N5;
+  M1/M3/M4 dashboard-тесты целы).
 
 ## Порядок исполнения
 
