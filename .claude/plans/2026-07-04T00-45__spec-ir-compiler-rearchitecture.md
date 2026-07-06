@@ -69,7 +69,7 @@ graph:
   - {id: J1, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, spec_skeletons.py, tests/audit/]}
   - {id: K1, needs: [],               parallel: "",        status: "[x]", files: [spec_openapi.py, tests/audit/, tests/requirements-dev.txt]}
   - {id: K2, needs: [K1],             parallel: "",        status: "[x]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py, spec_ir.py]}
-  - {id: K3, needs: [K2],             parallel: "",        status: "[ ]", files: [spec_flow_runner.py]}
+  - {id: K3, needs: [K2],             parallel: "",        status: "[x]", files: [spec_flow_runner.py]}
   - {id: K1b, needs: [K1],            parallel: "kl",      status: "[x]", files: [spec_scenarios.py, tests/requirements-dev.txt, tests/audit/]}
   - {id: L1, needs: [K1b],            parallel: "kl",      status: "[x]", files: [spec_scenarios.py, tests/audit/]}
   - {id: H1b, needs: [],              parallel: "kl",      status: "[x]", files: [tests/harness/diff_repair.py, tests/audit/]}
@@ -560,7 +560,23 @@ tests/requirements-dev.txt; проверено — библиотека ЕСТ �
   (читалка для человека), источник — OpenAPI; проза больше не носитель команды
 - приёмка: .md детерминированно выводится из OpenAPI; правка .md ничего не
   меняет в сборке (не источник)
-- заметки: замыкает переворот формата спеки
+- заметки: ГОТОВ. Stage S23 (tests/audit/test_prose_is_derived.py), храповик
+  RED→GREEN соблюдён: на движке ДО фикса тест 2 failed/1 passed (с отключённым
+  вызовом компилятора в Workspace.spec — .md не несёт `**GET /ping**` из
+  OpenAPI S23.1, а интерфейс менялся вместе с прозой S23.2; S23.3 без openapi
+  уже зелёный). Корень: `Workspace.spec` строил .md из engine-header +
+  worker-прозы `node["spec_markdown"]`, машинный OpenAPI ноды (`node["openapi"]`
+  из K2/E1) в .md НЕ участвовал — интерфейс жил только прозой (класс провала
+  v165). Движок: новая чистая `_openapi_interface_markdown(doc)` детерминированно
+  рендерит OpenAPI-документ ноды в секцию «## Interface (compiled from the
+  machine OpenAPI)» (маршруты sorted по path+канон.порядку методов, хендлер
+  x-spec-flow-handler, success-статус, request-поля, media — всё ИЗ документа,
+  ничего не угадывается); `Workspace.spec` зовёт её на `node.get("openapi")`
+  ПЕРЕД прозой. Проза осталась человеческим контекстом, но интерфейс теперь
+  производная от OpenAPI. Набор tests/audit зелёный: 530 passed + 11 skipped
+  (мои +3 входят); spec/nodes/journal 193 passed. Ветка ответвлена от устаревшего
+  cccbf0a — сделан ff-merge на 67d4d05 (K1+K2), чтобы был spec_ir.py/OpenAPI.
+  Замыкает переворот формата спеки.
 
 ### Узлы J — разбор провала p6 v165: вброшенный маршрут не реализуется (2026-07-06)
 
