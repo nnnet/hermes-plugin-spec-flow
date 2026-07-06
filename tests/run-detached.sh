@@ -12,6 +12,13 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Use the project venv (dev-deps: gherkin-official, openapi-*-validator, jsonschema)
+# if present, so the audit gate AND the run see the standard-oracle libraries.
+# A bare system python3 lacks them -> the gherkin oracle test reds and every
+# library-oracle degrades to a no-op mid-run (silent loss of spec validation).
+PYBIN="${HERE}/../.venv/bin/python"
+[ -x "${PYBIN}" ] || PYBIN="python3"
+export PYBIN
 TS="$(date +%Y%m%d-%H%M%S)"
 LOG="${SPEC_FLOW_DETACH_LOG:-${HERE}/runs-out/_detached_${TS}.log}"
 mkdir -p "$(dirname "${LOG}")"
@@ -22,7 +29,7 @@ mkdir -p "$(dirname "${LOG}")"
 # SPEC_FLOW_SKIP_AUDIT=1 only for a deliberate diagnostic run on a known-red audit.
 if [ "${SPEC_FLOW_SKIP_AUDIT:-0}" != "1" ]; then
     echo "[run-detached] audit gate: pytest tests/audit …"
-    if ! python3 -m pytest "${HERE}/audit" -q >/dev/null 2>&1; then
+    if ! "${PYBIN}" -m pytest "${HERE}/audit" -q >/dev/null 2>&1; then
         echo "[run-detached] AUDIT RED — refusing to launch. Fix the design hole"\
              "(python3 -m pytest tests/audit) then re-run, or set"\
              "SPEC_FLOW_SKIP_AUDIT=1 for a deliberate diagnostic run." >&2
@@ -68,7 +75,7 @@ echo "[run-detached] launching pid-of-setsid… ts=${TS} args=$* log=${LOG}" >"$
 #   NO rc line in the log    -> the whole session group was swept (cgroup kill):
 #                               the supervisor died with its child.
 PYTHONFAULTHANDLER=1 PYTHONUNBUFFERED=1 setsid bash -c '
-    python3 -u "$0" "$@"
+    "${PYBIN:-python3}" -u "$0" "$@"
     rc=$?
     ts="$(date "+%F %T")"
     if [ "$rc" -ge 128 ]; then
