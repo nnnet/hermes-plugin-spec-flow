@@ -1581,6 +1581,33 @@ no-OpenAPI case (S23.3) was already green.
   behind it. Consolidation REMOVED (media/request_fields single-sourced), not a
   new seam: the raw datums are captured ONCE by `spec_ir.collect_ir_sources`.
 
+## STAGE 26 — the HOT PATH reads the held IR accumulator, never a fresh rebuild of it (node I3, `test_ir_hotpath_reads_accumulator.py`)
+  Closes the "переворот": node I2 (S25) made `self._ir` the single accumulator
+  and `interface.json` its projection, but three skeleton hot-path readers
+  still called `spec_ir.build_ir(self)` with NO `sources` argument —
+  `_ir_skeleton_for` (write-door skeleton per leaf), the late-route
+  `binds_route` refresh feeding `_refresh_ir_skeletons`, and the IR-compiled
+  conformance test writer's engine fragment. Each re-ran `collect_ir_sources`
+  and read every raw datum (`_route_owners` / `_route_media_map` /
+  `_route_request_fields` / env / pins) a SECOND time BEHIND the accumulator,
+  so an update to `self._ir` was invisible to them: the pairwise-drift class
+  the accumulator exists to remove. A single `_held_ir()` helper now serves
+  every hot read from the held structure (building + holding once under the I1
+  lock only if no locked dump has run yet); the datum methods stay strictly
+  upstream of the accumulator.
+- S26a THE SKELETON READER COMPILES FROM THE HELD IR: an env access point
+  injected into the held node's IR entry appears in the compiled skeleton — a
+  rebuild from raw datums (which never saw the injection) would drop it.
+  Behavioural, not textual: mutate `self._ir`, assert the hot read reflects it.
+- S26b THE HELD `nodes` OBJECT IS USED AS-IS, NOT RE-DERIVED: the object
+  `compile_skeleton` receives IS `self._ir["nodes"]` (identity) — two
+  independent assemblers cannot drift when there is only one.
+- S26c TEXT GATE (secondary): no hot-path reader carries a `build_ir(self)`
+  CALL with no sources snapshot; the only sanctioned rebuild is the write door
+  (`collect_ir_sources` -> `build_ir(self, sources)` under the I1 lock). A bare
+  mention in prose is not an offender — the gate matches the call as an
+  expression head, so the ratchet does not fossilize the docstring wording.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.

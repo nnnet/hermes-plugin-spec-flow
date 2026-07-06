@@ -65,7 +65,7 @@ graph:
   - {id: H7, needs: [],               parallel: "",        status: "[x]", files: [spec_ir.py, tests/audit/]}
   - {id: I1, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/audit/]}
   - {id: I2, needs: [I1],             parallel: "",        status: "[x]", files: [spec_ir.py, spec_flow_runner.py]}
-  - {id: I3, needs: [I2],             parallel: "",        status: "[ ]", files: [spec_flow_runner.py]}
+  - {id: I3, needs: [I2],             parallel: "",        status: "[x]", files: [spec_flow_runner.py]}
   - {id: J1, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, spec_skeletons.py, tests/audit/]}
   - {id: K1, needs: [],               parallel: "",        status: "[x]", files: [spec_openapi.py, tests/audit/, tests/requirements-dev.txt]}
   - {id: K2, needs: [K1],             parallel: "",        status: "[x]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py, spec_ir.py]}
@@ -695,7 +695,20 @@ beyond this file», а контракт требует добавить get_ping
   IR-аккумулятора (I2); файлы-датумы остаются как проекции для совместимости
 - приёмка: grep не находит прямых читателей сырых датумов в горячем пути;
   дубль устранён
-- заметки: замыкает переворот
+- заметки: ГОТОВ — Stage S26, коммит 676918b. Замыкает переворот. Три
+  горячих скелетных читателя звали `spec_ir.build_ir(self)` заново (каждый
+  пересобирал `collect_ir_sources` = читал датумы ВТОРОЙ раз позади
+  аккумулятора): `_ir_skeleton_for`, late-route `binds_route`-refresh
+  (кормит `_refresh_ir_skeletons`) и eng_frag в `_compile_ir_leaf_tests`.
+  Введён единый помощник `_held_ir()` — отдаёт held `self._ir`; если дампа
+  ещё не было, строит ОДИН раз под I1-локом из снимка датумов и ДЕРЖИТ.
+  Все три читателя переведены на него; докстринг `_ir_skeleton_for`
+  исправлен («fresh IR» → «held accumulator»). RED-тест
+  tests/audit/test_ir_hotpath_reads_accumulator.py краснел поведенчески:
+  мутация held `self._ir` (env-точка узла) не отражалась в скелете, т.к.
+  читатель пересобирал из датумов; S26c-текстгейт ловил `build_ir(self)`.
+  Зелёные по наборам: audit 539 (+11 skip), nodes+decomposition+
+  verification+spec+core 318, gates+coverage+journal+harness 487.
 
 ### Узлы H — аудит трёх принципов 2026-07-05 (все ждут решения юзера)
 
