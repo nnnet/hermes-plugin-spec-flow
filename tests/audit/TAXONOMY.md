@@ -1893,6 +1893,29 @@ invariant (missing scenarios/effects/error-response). They were COMPLETED to
 the N6 model (conformance to the new invariant, not test-softening), never the
 gate weakened.
 
+## STAGE 36 — a NON-HTTP node's specs/*.md is COMPILED FROM the machine
+behaviour carrier (Gherkin + typed symbols), prose stays derived (node N4,
+`test_prose_derived_non_http.py`)
+
+The format-flip finale. K3/S23 flipped the format for HTTP nodes ONLY: a node
+carrying an OpenAPI document renders `## Interface (compiled from the machine
+OpenAPI)` straight from the artifact. A NON-HTTP code leaf (storage/lib, the
+v166 db_layer class) owns no OpenAPI — N3/S32 gave that class its OWN machine
+carrier (`node["behavior"]`, a Gherkin feature; typed `node["symbols"]["exposes"]`),
+but the .md was still written ONLY from the decomposer PROSE, so behaviour and
+API drifted the way get_ping drifted in v165. S36 compiles the .md FROM that
+carrier: two deterministic engine helpers — `_gherkin_behaviour_markdown`
+(renders each Scenario's Given/When/Then from the feature) and
+`_symbols_api_markdown` (renders each callable's typed signature + raises from
+symbols.exposes) — emit `## Behaviour (compiled from the machine Gherkin)` and
+`## API (compiled from symbols)` ABOVE the human prose. Reds cover both
+directions: a carrier renders (S36.1/.2), the sections are a FUNCTION OF THE
+CARRIER ONLY — byte-identical under two different proses over the same carrier
+(S36.3, the derived-not-source invariant), a bare node grows NO phantom section
+(S36.4, the silent-on-empty edge), and the prose sits BELOW as a secondary
+reader (S36.5). Parallels K3's `_openapi_interface_markdown` — same flip, the
+non-HTTP class's carrier.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.

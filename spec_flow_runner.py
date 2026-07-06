@@ -1461,6 +1461,82 @@ def _openapi_interface_markdown(doc: "Optional[dict]") -> "list":
     return out
 
 
+def _gherkin_behaviour_markdown(feature: "Optional[str]") -> "list":
+    """N4: compile a non-HTTP node's Behaviour section DETERMINISTICALLY FROM
+    its machine Gherkin ``behavior`` feature (the carrier N3/S32 validates).
+
+    Why: K3 flipped the format for HTTP nodes only — an OpenAPI document renders
+    the Interface section. A non-HTTP code leaf (storage/lib) owns no OpenAPI;
+    N3 gave it a Gherkin ``behavior`` feature as its machine carrier, but the
+    behaviour still reached the .md only as decomposer PROSE (the same drift
+    that lost get_ping in v165). Rendering the behaviour FROM the feature text
+    makes the prose a downstream reader: the same feature always yields the
+    same section, and editing the prose can no longer change what it says.
+    What: passes each Scenario's title line and its Given/When/Then steps
+    through verbatim (the feature is a validated machine artifact — every value
+    is read, none guessed). Empty/absent feature yields NO section, so nodes
+    without a behaviour carrier keep their historical output.
+    Test: tests/audit/test_prose_derived_non_http.py (S36)."""
+    text = str(feature or "").strip()
+    if not text:
+        return []
+    out: "list" = ["", "## Behaviour (compiled from the machine Gherkin)", "",
+                   "_Derived from this node's Gherkin `behavior` feature — edit"
+                   " the feature, not this text._", ""]
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("Feature:"):
+            continue
+        if line.startswith("Scenario:"):
+            out.append("- **%s**" % line[len("Scenario:"):].strip())
+        elif line.split(" ", 1)[0] in ("Given", "When", "Then", "And", "But"):
+            out.append("  - %s" % line)
+    return out
+
+
+def _symbols_api_markdown(symbols: "Optional[dict]") -> "list":
+    """N4: compile a non-HTTP node's API section DETERMINISTICALLY FROM its
+    typed ``symbols.exposes`` carrier (the callables N3/S32 requires typed).
+
+    Why: a weak LLM building a storage/lib leaf must know each callable's exact
+    signature; leaving it to prose is the v166 db_layer hole (guessed types).
+    ``symbols.exposes`` is DATA — name, typed args, return type, declared error
+    surface — so the signature renders straight from it, never inferred later.
+    What: renders each exposed callable as ``name(args) -> returns`` plus its
+    declared ``raises``. Empty/absent exposes yields NO section, so a node that
+    exposes no typed callables keeps its historical output.
+    Test: tests/audit/test_prose_derived_non_http.py (S36)."""
+    if not isinstance(symbols, dict):
+        return []
+    exposes = symbols.get("exposes")
+    if not isinstance(exposes, list) or not exposes:
+        return []
+    out: "list" = ["", "## API (compiled from symbols)", "",
+                   "_Derived from this node's typed `symbols.exposes` — edit the"
+                   " symbols, not this text._", ""]
+    for ent in exposes:
+        if not isinstance(ent, dict):
+            continue
+        name = str(ent.get("name") or "").strip()
+        if not name:
+            continue
+        args = ent.get("args")
+        arg_txt = ", ".join(str(a) for a in args) if isinstance(args, list) \
+            else ""
+        sig = "%s(%s)" % (name, arg_txt)
+        returns = str(ent.get("returns") or "").strip()
+        if returns:
+            sig += " -> %s" % returns
+        out.append("- `%s`" % sig)
+        raises = ent.get("raises")
+        if isinstance(raises, list) and raises:
+            out.append("  - raises: %s"
+                       % ", ".join("`%s`" % str(r) for r in raises))
+    return out
+
+
 def _route_success_status(method: str) -> int:
     """The ONE contracted success status for a route, by HTTP method — the
     single source BOTH the coder (via the route binding text) and the leaf
@@ -2329,6 +2405,13 @@ class Workspace:
         # carried by prose. Same document -> same section; prose can no longer
         # be the interface source (v165: get_ping was lost as prose drift).
         lines += _openapi_interface_markdown(node.get("openapi"))
+        # N4: the SAME format-flip for the NON-HTTP class. A code leaf owns no
+        # OpenAPI; N3 gave it a machine carrier — a Gherkin `behavior` feature
+        # and typed `symbols.exposes`. Compile BOTH into the .md straight from
+        # that carrier, so behaviour + API are derived (same carrier -> same
+        # section) and the prose below is a strictly secondary reader.
+        lines += _gherkin_behaviour_markdown(node.get("behavior"))
+        lines += _symbols_api_markdown(node.get("symbols"))
         worker_md = str(node.get("spec_markdown") or "").strip()
         if worker_md:
             # the level spec AUTHORED by the decomposer worker (per the
