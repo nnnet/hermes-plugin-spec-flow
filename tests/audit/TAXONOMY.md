@@ -1786,6 +1786,36 @@ precedent), never a silent pass to prose.
   (the S14.7 optional-oracle contract). `spec_ir` widens the closed world to
   admit `behavior` and the `returns`/`raises`/`signature` expose keys; the
   PRESENCE requirement lives in `spec_gherkin`, not the closed schema.
+## STAGE 33 — Dashboard SHOWS the standardized spec, not prose
+(`tests/dashboard/test_dashboard_standard_spec.py`)
+The single criterion (user 2026-07-06) is that a spec is complete for a weak
+model as MACHINE DATA in a STANDARD; the dashboard must therefore SHOW that
+machine completeness in the standard, never a textual description. Node N5.
+- S33.1 the IR-tab hint is HONEST about the LIVE increment: after I1/I2/I3
+  ir.json is a live incremental artifact, re-dumped under `_ir_write_lock`
+  after EVERY processed leaf (`_write_ir_incremental` in `_visit`) — it GROWS
+  as leaves close, empty only until the first leaf is realized. The placeholder
+  must NOT describe the superseded end-of-run write ("after the tree is
+  realized"); it states the per-leaf increment under the lock. RED before N5:
+  the hint said the artifact is written after the tree is realized.
+- S33.2 a node's spec panel shows the MACHINE STANDARD, prose secondary:
+  `_node_standard_spec_html` renders an HTTP node's OpenAPI routes table (K3)
+  and a non-HTTP node's Gherkin Given/When/Then scenarios + typed `symbols`
+  signatures — the machine carrier a weak model needs; `_build_state` carries
+  it per node as `spec_standard`, and the client spec panel renders it BEFORE
+  the `.md`, which is marked derived. RED before N5: the panel rendered only
+  prose; a non-HTTP node's standard block showed no Given/When/Then.
+- S33.3 a per-standard validation badge names the standard + error count over
+  the read ir.json, run by the SAME oracles the engine uses
+  (`spec_openapi.validate_openapi_library`, `spec_ir.gherkin_errors`,
+  `spec_ir.jsonschema_errors`): an HTTP node gets 'OpenAPI 3.1', a non-HTTP one
+  gets 'Gherkin' and marks the missing HTTP interface as legitimate ('no HTTP
+  interface'), never a defect; both carry the 'JSON Schema' structural verdict.
+  0 errors = green, N = red, absent oracle = a muted '—' (degrade, never a
+  false green). RED before N5: no standard badge on the non-HTTP node.
+- S33.4 no existing tab is removed — the panel only GAINS the standard block +
+  badge; the IR tab, provenance (M1) and validation (M3) badges, and every
+  other tab (graph/flow/timeline/agents/hitl/idle/compare/report/ir) stand.
 
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
