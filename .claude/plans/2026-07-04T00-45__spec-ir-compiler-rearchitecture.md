@@ -61,9 +61,9 @@ graph:
   - {id: H3, needs: [],               parallel: "wave-h1", status: "[x]", files: [spec_ir.py, spec_openapi.py, spec_conformance.py]}
   - {id: H4, needs: [H3],             parallel: "wave-2",  status: "[x]", files: [spec_ir.py, spec_flow_runner.py]}
   - {id: H5, needs: [],               parallel: "",        status: "[ ]", files: [spec_ir.py, spec_skeletons.py, spec_flow_runner.py]}
-  - {id: H6, needs: [],               parallel: "wave-h1", status: "[~]", files: [spec_skeletons.py, spec_flow_doctor.py]}
+  - {id: H6, needs: [],               parallel: "wave-h1", status: "[~]"  # solo now, files: [spec_skeletons.py, spec_flow_doctor.py]}
   - {id: H7, needs: [],               parallel: "",        status: "[ ]", files: [spec_ir.py, tests/audit/]}
-  - {id: H8, needs: [],               parallel: "wave-h1", status: "[~]"  # solo next, files: [spec_flow_runner.py]}
+  - {id: H8, needs: [],               parallel: "wave-h1", status: "[x]", files: [spec_flow_runner.py]}
   - {id: G3, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/decomposition/]}
   - {id: G4, needs: [G3],             parallel: "",        status: "[x]", files: [tests/]}
 ```
@@ -524,3 +524,13 @@ Schemathesis, awesome-ralph.
   журнал-гейт), не молчаливый переход на regex-прозу
 - приёмка: эксплойт F4 закрыт; interface_source: prose-derived не
   появляется без явного разрешения в кейсе
+- заметки: ГОТОВ — коммит 7d117aa (RED прогнан до кода, 5 failed, но
+  одним коммитом — храповик соблюдён прогоном, не раздельным коммитом).
+  interface_policy knob (default ir-required; неизвестное значение —
+  громкий отказ в конструкторе) зеркалит review_policy (Engine +
+  run_project + case knob в run_cases). prose-derived копится в
+  _interface_prose_nodes, _interface_policy_failures утягивает verdict
+  в NOT READY под ir-required; allow-prose — явное видимое согласие,
+  историческое поведение без изменений. Веха MILESTONE (не шёпот
+  DETAIL) с активной политикой. Регрессия 621 — ни один полный build
+  не полагался на тихую прозу (все на IR-декомпозере)
