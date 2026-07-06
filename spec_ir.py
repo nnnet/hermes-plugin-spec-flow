@@ -1161,3 +1161,146 @@ def validate_ir(ir: Any) -> dict:
     errors.extend(gherkin_errors(ir))
 
     return {"errors": errors, "incomplete": incomplete}
+
+
+def _req_name(req: Any) -> str:
+    """Canonical string label of a product requirement (a plain string, or an
+    object carrying its ``name``)."""
+    if isinstance(req, dict):
+        return str(req.get("name", ""))
+    return str(req)
+
+
+def contract_closure_gaps(ir: Any, constitution: Any = None) -> list:
+    """S39 (catalog B, root of the v167 red): ONE early graph-closure check —
+    every contracted obligation must have an OWNER NODE in the realized IR.
+
+    Why: connectivity was checked in three scattered places (decomposer
+    policy, _accept_decomposer_ir, _plan_ownership_report) and NONE closed the
+    graph at decomposition-close. So a plan with a pinned file, product entry,
+    contracted route, consumed symbol, or human requirement that NO node owns
+    passed decomposition SILENTLY and only failed late at integrate_verify
+    (v167: constitution pinned ``src/db.py`` had no owner node, the run went
+    green through decomposition and blew up on the final tree). The v157
+    "consumed symbol exposed by no node" class is INTENTIONALLY filtered
+    mid-growth in _accept_decomposer_ir (a symbol may be consumed from a node
+    not proposed yet — legitimately pending). This function runs AFTER growth,
+    over the whole merged IR, where "pending" is no longer an excuse: an
+    unowned obligation is a NAMED refusal here (a milestone sibling of the
+    decomposer_* gates), not a late integrate surprise.
+
+    What: pure function over the machine IR (never prose — Charter P5).
+    Returns a list of plain-string owner-gaps (JSON-safe). Empty list = the
+    contract graph is closed. Five owner invariants:
+
+      1. pinned    — every ``product.pinned_files`` entry appears in some
+                     ``nodes[*].files`` (entry is excluded upstream: entry
+                     synthesis owns the entry module, not a leaf).
+      2. entry     — ``product.entry``, when the key is present, is a non-empty
+                     module (an empty entry declares an owner that does not
+                     exist).
+      3. route     — every route declared in a node's OpenAPI document binds a
+                     non-empty handler symbol (``x-spec-flow-handler``); an
+                     empty binding is an orphan route (contract without a
+                     synthesised handler — catalog B2).
+      4. symbol    — every consumed symbol (``nodes[*].symbols.consumes``) is
+                     exposed by some node (``nodes[*].symbols.exposes``); a
+                     phantom consume is the v157 ImportError class, refused
+                     early instead of at import time.
+      5. requirement — every ``product.requirements`` entry is claimed by at
+                     least one node (listed in some node's ``dependencies``);
+                     an unclaimed requirement is untraceable (catalog B4).
+
+    ``constitution`` is accepted for symmetry with the pinned-path extractor
+    and to let callers attribute a pinned gap to a rule; the closure itself
+    reads only the IR (pinned files are already lifted into the IR).
+    Test: tests/audit/test_contract_closure_gaps.py."""
+    gaps: list = []
+    if not isinstance(ir, dict):
+        return ["ir is not a mapping — nothing to close over"]
+
+    product = ir.get("product") if isinstance(ir.get("product"), dict) else {}
+    nodes = ir.get("nodes") if isinstance(ir.get("nodes"), dict) else {}
+
+    # Files owned across the realized plan, and the exposed-symbol universe.
+    owned_files: set = set()
+    exposed_names: set = set()
+    for node in nodes.values():
+        if not isinstance(node, dict):
+            continue
+        for f in (node.get("files") or []):
+            owned_files.add(str(f))
+        syms = node.get("symbols")
+        if isinstance(syms, dict):
+            for ent in (syms.get("exposes") or []):
+                if isinstance(ent, dict) and ent.get("name") is not None:
+                    exposed_names.add(str(ent["name"]))
+
+    # 1. pinned files — every constitution-pinned module has an owner node.
+    for pf in (product.get("pinned_files") or []):
+        if str(pf) not in owned_files:
+            gaps.append(
+                "pinned file %s has no owner node — no node builds it "
+                "(the v167 class: a constitution-pinned module the realized "
+                "plan never gave a leaf)" % pf)
+
+    # 2. product entry — a declared entry names an owner that must exist.
+    if "entry" in product and not str(product.get("entry") or "").strip():
+        gaps.append(
+            "product entry is declared but empty — the entry module has no "
+            "owner")
+
+    # 3 & 4. per-node routes and consumed symbols.
+    for nid, node in nodes.items():
+        if not isinstance(node, dict):
+            continue
+        openapi = node.get("openapi")
+        if isinstance(openapi, dict):
+            paths = openapi.get("paths")
+            if isinstance(paths, dict):
+                for path, methods in paths.items():
+                    if not isinstance(methods, dict):
+                        continue
+                    for method, op in methods.items():
+                        handler = ""
+                        if isinstance(op, dict):
+                            handler = str(
+                                op.get("x-spec-flow-handler") or "").strip()
+                        if not handler:
+                            gaps.append(
+                                "route %s %s (node %s) has no handler symbol — "
+                                "the contract declares it but no handler was "
+                                "synthesised (orphan route)"
+                                % (str(method).upper(), path, nid))
+        syms = node.get("symbols")
+        if isinstance(syms, dict):
+            for ent in (syms.get("consumes") or []):
+                if not isinstance(ent, dict):
+                    continue
+                name = ent.get("name")
+                if name is None:
+                    continue
+                if str(name) not in exposed_names:
+                    origin = ent.get("from")
+                    shown = ("%s.%s" % (origin, name)) if origin else str(name)
+                    gaps.append(
+                        "consumed symbol '%s' (node %s) is exposed by no node "
+                        "— the v157 ImportError class, refused at "
+                        "decomposition close instead of at import time"
+                        % (shown, nid))
+
+    # 5. human requirements — every requirement is claimed by some node.
+    claimed: set = set()
+    for node in nodes.values():
+        if not isinstance(node, dict):
+            continue
+        for dep in (node.get("dependencies") or []):
+            claimed.add(str(dep))
+    for req in (product.get("requirements") or []):
+        rn = _req_name(req)
+        if rn and rn not in claimed:
+            gaps.append(
+                "requirement %r is claimed by no node — no leaf traces to it "
+                "(untraceable human requirement)" % rn)
+
+    return gaps

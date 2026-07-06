@@ -99,7 +99,7 @@ openapi-core, уже частично в `CONTRACT_VALIDATORS`.
 graph:
   - {id: Q1, needs: [], parallel: "",   status: "[ ]", files: [tests/harness/role_worker.py, spec_flow_runner.py, tests/audit/]}
   - {id: Q2, needs: [], parallel: "q",   status: "[ ]", files: [spec_ir.py, spec_registry.py, spec_flow_runner.py, tests/audit/]}
-  - {id: Q3, needs: [], parallel: "q",   status: "[ ]", files: [spec_ir.py, spec_flow_runner.py, tests/audit/]}
+  - {id: Q3, needs: [], parallel: "q",   status: "[x]", files: [spec_ir.py, spec_flow_runner.py, tests/audit/]}
   - {id: Q4, needs: [Q1], parallel: "",  status: "[ ]", files: [spec_conformance.py, tests/harness/, tests/requirements-dev.txt, tests/audit/]}
   - {id: Q5, needs: [Q1], parallel: "",  status: "[ ]", files: [tests/harness/role_worker.py, tests/requirements-dev.txt, tests/audit/]}
   - {id: Q6, needs: [],   parallel: "",  status: "[x]", files: [tests/harness/llm_backend.py, tests/audit/]}
@@ -137,6 +137,19 @@ Q3 → Q2 → Q1. Q4/Q5 после Q1.
 - готовое: идея SpecLoom — requirement=anchor, код stamped IR-хэшем, verify-gate
   ловит ORPHAN (req без узла) + STALE (спека сменилась, код старый); трассировка
   requirement→scenario→node (подход OpenSpec, ~80% уже в полях owners/requirements)
+- заметки: Stage S39. Готово. Единая функция `spec_ir.contract_closure_gaps(ir,
+  constitution)` — чисто по IR, 5 owner-инвариантов (pinned/entry/route/consumed-
+  symbol/human-requirement). Вызов в `spec_flow_runner._run` СРАЗУ после
+  `_write_ir()` (закрытие декомпозиции, до сборки/integrate) → веха
+  `decomposition_closure`/FAIL + loop + doctor_advise, если граф не замкнут.
+  Mid-growth фильтр «is exposed by no node» в `_accept_decomposer_ir` НЕ трогал
+  (там pending легитимен); closure — точка ПОСЛЕ роста, где pending уже не
+  оправдание. Храповик доказан: 6/6 RED-тестов падают против no-op заглушки
+  closure, 11/11 зелёные с логикой. tests/audit/test_contract_closure_gaps.py.
+  Прогон: audit 596 passed / 11 skipped, nodes+decomposition 150 passed,
+  dashboard 109 passed. Существующие фикстуры не покраснели (их деревья несут
+  владельцев либо не имеют pinned/req — легально). НЕ трогал completeness/carrier/
+  verdict (зона Q2). Commit S39.
 
 ### Q4 `conformance-from-contract` — Schemathesis + pytest-bdd против кода
 - выход: conformance листа проверяет код против МАШИННОГО контракта: Schemathesis
