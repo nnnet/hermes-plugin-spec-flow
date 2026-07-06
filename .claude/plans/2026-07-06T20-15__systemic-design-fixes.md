@@ -101,7 +101,7 @@ graph:
   - {id: Q2, needs: [], parallel: "q",   status: "[x]", files: [spec_ir.py, spec_registry.py, spec_flow_runner.py, tests/audit/]}
   - {id: Q3, needs: [], parallel: "q",   status: "[x]", files: [spec_ir.py, spec_flow_runner.py, tests/audit/]}
   - {id: Q4, needs: [Q1], parallel: "",  status: "[x]", files: [spec_conformance.py, tests/harness/, tests/requirements-dev.txt, tests/audit/]}
-  - {id: Q5, needs: [Q1], parallel: "",  status: "[ ]", files: [tests/harness/role_worker.py, tests/requirements-dev.txt, tests/audit/]}
+  - {id: Q5, needs: [Q1], parallel: "",  status: "[x]", files: [tests/harness/role_worker.py, tests/requirements-dev.txt, tests/audit/]}
   - {id: Q6, needs: [],   parallel: "",  status: "[x]", files: [tests/harness/llm_backend.py, tests/audit/]}
 ```
 Зоны Q1/Q2/Q3 толкаются в `spec_flow_runner.py` → worktree, порядок влития
@@ -213,6 +213,14 @@ Q3 → Q2 → Q1. Q4/Q5 после Q1.
   детерминизм и переносимость на слабые модели. Сравнить с Q1-подходом на p6
 - приёмка: пилот-прогон p6 depth=spec/execute, метрики реализации листа vs
   текущий; решение расширять/нет; Stage
+- заметки: S43 (633 audit green). Выбор пользователя — ЛЁГКИЙ СРЕЗ без dspy.
+  `_signature_block(ctx, fn)` в role_worker: детерминированный типизированный
+  INPUT→OUTPUT (contract/data_schema/dependencies/acceptance/env → code/tests/
+  exposes) из IR-носителя. Env-гейт `SPEC_FLOW_SIGNATURE_PROMPT`, ПУСТ по
+  умолчанию (пилот, ноль влияния на живой промпт), при включении предшествует
+  носителю. Ноль новых зависимостей (dspy НЕ импортируется). Тест:
+  tests/audit/test_signature_prompt.py. Полный DSPy-фреймворк (LLM-оптимизатор)
+  — отдельный follow-up по явному запросу пользователя
 
 ### [x] Q6 `prompt-capture` — каждый вызов ЛЛМ сохраняется в файл, связан с логом
 - выход: КАЖДЫЙ вызов модели (implementer/reviewer/decomposer/diagnoser/tester —

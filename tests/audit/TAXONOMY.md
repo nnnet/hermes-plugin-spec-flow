@@ -2017,6 +2017,23 @@ Follow-up (not in this atom): schemathesis property-fuzzing and openapi-core
 request/response round-trip against the ASSEMBLED app at integrate — the
 response-schema oracle here is the leaf-level slice.
 
+## S43 — typed INPUT->OUTPUT signature (pilot, node Q5)
+Plan 2026-07-06T20-15. The dspy.Signature idea — hand a weak model an explicit
+CONTRACT OF GENERATION (typed inputs it is given, typed outputs it must produce)
+— delivered DETERMINISTICALLY from the IR carrier, with NO heavyweight dspy
+dependency (the framework's LLM optimizer is a deferred, opt-in follow-up).
+- S43.1 (default off) — `_signature_block` is empty unless
+  SPEC_FLOW_SIGNATURE_PROMPT is set; the pilot changes no live prompt until it
+  is measured against the plain Q1 carrier.
+- S43.2 (typed when on) — the block carries a typed INPUTS section (machine
+  contract, data schema, dependencies, acceptance, env) and a typed OUTPUT
+  section (code module, pytest module, the exact symbols to expose), all read
+  off the IR carrier.
+- S43.3 (heads the task) — when enabled the signature PRECEDES the machine
+  carrier in the assembled coder prompt.
+- S43.4 (zero new dep) — role_worker never imports dspy; the pilot is pure
+  deterministic rendering.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.

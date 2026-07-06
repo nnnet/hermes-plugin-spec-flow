@@ -1259,15 +1259,67 @@ def _machine_carrier_block(ctx: dict) -> str:
     return "".join(parts)
 
 
+def _signature_block(ctx: dict, fn: str = "") -> str:
+    """Q5 (S43, pilot): frame the leaf as a typed INPUT -> OUTPUT signature —
+    the essence of a dspy.Signature, derived deterministically from the IR
+    carrier, so a weak model reads an explicit CONTRACT OF GENERATION (typed
+    inputs it is given, typed outputs it must produce) instead of inferring the
+    shape from prose. Env-gated (``SPEC_FLOW_SIGNATURE_PROMPT``) and EMPTY by
+    default: an opt-in pilot that changes no live prompt until it is measured
+    against the plain Q1 carrier. The heavyweight dspy framework itself (its LLM
+    optimizer) is a deliberate deferred follow-up — kept out of the deps.
+    Test: tests/audit/test_signature_prompt.py."""
+    if not os.environ.get("SPEC_FLOW_SIGNATURE_PROMPT"):
+        return ""
+    car = ctx.get("carrier") if isinstance(ctx.get("carrier"), dict) else {}
+    ins = []
+    if car.get("openapi") or car.get("behavior") or car.get("scenarios"):
+        kinds = ", ".join(k for k in ("openapi", "behavior", "scenarios")
+                          if car.get(k))
+        ins.append("contract: MachineContract   # %s (authoritative, above)"
+                   % kinds)
+    if car.get("schema"):
+        ins.append("data_schema: JSONSchema      # entity/request shape")
+    consumes = (car.get("symbols") or {}).get("consumes") \
+        if isinstance(car.get("symbols"), dict) else None
+    if consumes or ctx.get("available_interfaces"):
+        ins.append("dependencies: list[Symbol]   # sibling symbols to import"
+                   " EXACTLY")
+    if ctx.get("acceptance"):
+        ins.append("acceptance: list[Criterion]  # every item must hold")
+    if car.get("env"):
+        ins.append("env: list[str]               # variables it reads")
+    if not ins:
+        ins.append("intent: ProseSpec            # the secondary prose spec")
+
+    exposes = (car.get("symbols") or {}).get("exposes") \
+        if isinstance(car.get("symbols"), dict) else None
+    exposes = exposes or ctx.get("declared_exposes") or []
+    code_path = ("src/%s.py" % fn) if fn else "src/<module>.py"
+    test_path = ("tests/test_%s.py" % fn) if fn else "tests/test_<module>.py"
+    outs = ["code: PythonModule          # %s" % code_path,
+            "tests: PytestModule         # %s (must pass)" % test_path]
+    if exposes:
+        outs.append("exposes: list[Symbol]        # MUST define EXACTLY: %s"
+                    % ", ".join(str(s) for s in exposes))
+
+    return ("\n\nTASK SIGNATURE (typed input -> output contract; satisfy it"
+            " exactly):\n  INPUTS:\n    "
+            + "\n    ".join(ins)
+            + "\n  OUTPUT:\n    " + "\n    ".join(outs) + "\n")
+
+
 def _coder_chat_prompt(ctx: dict, ws_root: str, nid: str, fn: str) -> str:
     """Q1 (S41): the coder's base prompt HEAD — the MACHINE carrier LEADS
     (authoritative), then the prose spec body. Shared by the single-call chat
     path and the orchestra so both lead with the SAME machine source; each site
-    appends its own derived blocks (interfaces / card / skeleton) after."""
+    appends its own derived blocks (interfaces / card / skeleton) after.
+    Q5 (S43): an env-gated typed signature can precede it as an opt-in pilot."""
     spec_body = _inline_file(ws_root, ctx.get("spec", ""))
-    return _machine_carrier_block(ctx) + _IMPLEMENT_CHAT_TASK.format(
-        title=ctx["title"], id=nid, spec=ctx.get("spec", ""),
-        spec_body=spec_body, fn=fn)
+    return _signature_block(ctx, fn) + _machine_carrier_block(ctx) \
+        + _IMPLEMENT_CHAT_TASK.format(
+            title=ctx["title"], id=nid, spec=ctx.get("spec", ""),
+            spec_body=spec_body, fn=fn)
 
 
 _ARCHITECT_TASK = """You are the ARCHITECT sub-role of the implementer team for
@@ -1954,7 +2006,7 @@ def make_implementer(channel: Any = None) -> Callable[[dict], Any]:
         model = _model_for("implementer", specialty, tier)
         # Q1 (S41): the machine carrier LEADS (authoritative) even on the
         # file-reading path — the prose specs/*.md the task names is secondary.
-        prompt = _machine_carrier_block(ctx) \
+        prompt = _signature_block(ctx, fn) + _machine_carrier_block(ctx) \
             + _IMPLEMENT_TASK.format(title=ctx["title"], id=nid,
                                      spec=ctx["spec"], fn=fn) \
             + _interfaces_block(ctx) + _card_block(ctx) \
