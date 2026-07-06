@@ -1,0 +1,23 @@
+spec_openapi.py
+  s_a0fd4933cab6db::t_df08c0c780e143 248-277
+tests/audit/TAXONOMY.md
+  s_a0fd4933cab6db::t_2a4a3fd0eebbe3 1036-1046
+tests/audit/test_openapi_library_validator.py
+  s_a0fd4933cab6db::t_7652a1534b8a9b 1-77
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "84bc00319d7def5b7700430ce580dc8b51802fad",
+  "prompts": {},
+  "sessions": {
+    "s_a0fd4933cab6db": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f44efdfd-5e4c-4895-8a1a-c149a64ab4a0",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
