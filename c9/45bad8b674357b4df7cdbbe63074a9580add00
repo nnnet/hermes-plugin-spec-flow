@@ -1,0 +1,31 @@
+spec_skeletons.py
+  s_a0fd4933cab6db::t_5a2eb1a2889bdb 139-143
+spec_flow_runner.py
+  s_a0fd4933cab6db::t_cf6396ac05433d 10639-10643
+tests/audit/test_ir_dependencies.py
+  s_a0fd4933cab6db::t_a40f9c69da5509 1-106
+  s_a0fd4933cab6db::t_2cb9a3b0b7761b 107-124
+tests/audit/TAXONOMY.md
+  s_a0fd4933cab6db::t_c0e76618640f1e 792-805
+spec_ir.py
+  s_a0fd4933cab6db::t_dcebb65ad2dd25 63-70
+  s_a0fd4933cab6db::t_21174f2c7d028c 209-229
+  s_a0fd4933cab6db::t_946bd46745b330 589-601
+  s_a0fd4933cab6db::t_243faecab3872d 550,554-568
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "c945bad8b674357b4df7cdbbe63074a9580add00",
+  "prompts": {},
+  "sessions": {
+    "s_a0fd4933cab6db": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f44efdfd-5e4c-4895-8a1a-c149a64ab4a0",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
