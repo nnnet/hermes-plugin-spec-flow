@@ -2059,6 +2059,25 @@ non-deterministic (conflict with the reproducible-run rule) and its 4.x API is
 heavier; the deterministic contracted-example round-trip above is the
 higher-value slice and lands first.
 
+## S45 — OPT-IN schemathesis property-fuzz of the assembled product (node Q4 fuzz)
+Plan 2026-07-06T20-15. S44 replays the contracted EXAMPLES; S45 lets
+schemathesis GENERATE inputs (derandomized — a fixed seed, so reproducible) to
+reach the edge cases the examples miss. Off by default (a fuzz pass costs time;
+the deterministic S44 gate is the default); enabled by
+SPEC_FLOW_SCHEMATHESIS_FUZZ, budget via SPEC_FLOW_SCHEMATHESIS_MAX.
+- S45.1 (union doc) — `_assembled_openapi_doc` unions the IR fragments into one
+  OpenAPI 3.1 document schemathesis generates from; no routes -> no doc.
+- S45.2 (opt-in) — `_assembled_fuzz` returns green untouched unless the env flag
+  is set.
+- S45.3 (runner shape) — the fuzz subprocess runs under sys.executable (the
+  .venv has schemathesis + the oracle, the isolated python3 probe does not),
+  uses schemathesis ONLY for derandomized request generation, and takes the
+  VERDICT from the ready openapi-schema-validator (schemathesis' CheckContext
+  API is version-fragile): a fuzzed request must never 5xx and a 2xx body must
+  conform. Markers FUZZ_OK / FUZZ_FAIL (a real violation) / FUZZ_ERROR (the tool
+  could not run — fail-closed, a red, never a silent pass).
+- S45.4 (live) — a violating assembled app reds, a conforming one passes.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.

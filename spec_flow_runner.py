@@ -2968,6 +2968,122 @@ print("BOOTGATE_OK")
 '''
 
 
+# Q4 fuzz (S45): OPT-IN schemathesis property-fuzz of the assembled app. Unlike
+# the boot probe this runs under the engine's OWN interpreter (sys.executable /
+# .venv) because it needs schemathesis + the openapi oracle — both dev deps the
+# isolated python3 probe lacks. Schemathesis is used ONLY for what it is uniquely
+# good at: DERANDOMIZED (fixed-seed, reproducible) request generation from each
+# OpenAPI operation. The verdict is ours: a fuzzed request must never 5xx, and a
+# 2xx body must conform to its response schema via the SAME openapi-schema-
+# validator oracle as S42/S44 (schemathesis' own CheckContext API is version-
+# fragile, so we do not depend on it). Markers: FUZZ_OK / FUZZ_FAIL <detail>
+# (a real contract violation) / FUZZ_ERROR <detail> (the tool itself could not
+# run — treated fail-closed by the engine, never a silent pass).
+_SCHEMATHESIS_FUZZ = r'''
+import glob, importlib.util, json, os, sys
+root, cfg = sys.argv[1], json.loads(sys.argv[2])
+os.chdir(root)
+sys.path.insert(0, os.path.join(root, "src"))
+sys.path.insert(0, root)
+
+def die(marker, msg):
+    print(marker + " " + msg)
+    raise SystemExit(0)
+
+try:
+    import schemathesis as st
+    from hypothesis import given, settings, HealthCheck
+    from openapi_schema_validator import OAS31Validator
+except Exception as exc:                       # oracle/tool missing -> not run
+    die("FUZZ_ERROR", "schemathesis/oracle unavailable: %r" % exc)
+
+callables = cfg.get("callable") or ["wsgi_app", "application", "app"]
+stem = cfg.get("entry_stem") or "app"
+app = None
+for cand in [os.path.join(root, "src", stem + ".py")] + sorted(
+        glob.glob(os.path.join(root, "src", "*.py"))):
+    try:
+        spec = importlib.util.spec_from_file_location("_asm_%d" % len(cand),
+                                                      cand)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    except Exception:
+        continue
+    for name in callables:
+        fn = getattr(mod, name, None)
+        if callable(fn):
+            app = fn
+            break
+    if app is not None:
+        break
+if app is None:
+    die("FUZZ_ERROR", "assembled WSGI callable not importable")
+
+doc = cfg.get("openapi") or {}
+schemas = {}
+for row in cfg.get("response_schemas") or []:
+    try:
+        schemas[(row["route"][0].upper(), row["route"][1])] = row["schema"]
+    except Exception:
+        pass
+max_examples = int(cfg.get("max_examples") or 8)
+
+try:
+    schema = st.openapi.from_dict(doc)
+    schema.app = app
+    operations = [r.ok() for r in schema.get_all_operations()]
+except Exception as exc:
+    die("FUZZ_ERROR", "schema load failed: %r" % exc)
+
+_bad = []
+
+def _check(case):
+    resp = case.call(app=app)
+    method = str(case.method).upper()
+    path = str(case.path)
+    label = "%s %s" % (method, path)
+    if resp.status_code >= 500:
+        _bad.append("%s -> %d on fuzzed input (server error)"
+                    % (label, resp.status_code))
+        return
+    schema_for = schemas.get((method, path))
+    if schema_for is not None and 200 <= resp.status_code < 300:
+        try:
+            body = json.loads(resp.content) if resp.content else None
+        except Exception:
+            return
+        if isinstance(body, (dict, list)):
+            errs = sorted(OAS31Validator(schema_for).iter_errors(body),
+                          key=str)
+            if errs:
+                _bad.append("%s -> response violates schema: %s"
+                            % (label, errs[0].message))
+
+for op in operations:
+    try:
+        strat = op.as_strategy()
+    except Exception:
+        continue
+
+    @settings(max_examples=max_examples, derandomize=True, deadline=None,
+              suppress_health_check=list(HealthCheck))
+    @given(case=strat)
+    def _run(case):
+        _check(case)
+
+    try:
+        _run()
+    except AssertionError:
+        pass                                   # collected in _bad already
+    except Exception as exc:
+        die("FUZZ_ERROR", "%s: fuzz engine raised %r" % (op.label, exc))
+    if _bad:
+        die("FUZZ_FAIL", _bad[0])
+
+print("FUZZ_OK")
+'''
+
+
 class Engine:
     def __init__(self, tools: Any = None, *, workspace: Any,
                  depth: Any = DEPTH_SPEC, agents: Optional[dict] = None,
@@ -12049,6 +12165,34 @@ def %(callable)s(environ, start_response):
                         break        # the one contracted success status
         return out
 
+    def _assembled_openapi_doc(self) -> dict:
+        """Q4 fuzz (S45): the union OpenAPI 3.1 document of every contracted
+        route across the assembled product, from the accepted IR fragments.
+        Schemathesis generates request cases from THIS; empty paths -> no doc."""
+        paths: dict = {}
+        reg = self.__dict__.get("_decomposer_ir_nodes") or {}
+        for frag in reg.values():
+            fp = ((frag or {}).get("openapi") or {}).get("paths") or {}
+            if not isinstance(fp, dict):
+                continue
+            for path, item in fp.items():
+                if not isinstance(item, dict):
+                    continue
+                dst = paths.setdefault(str(path), {})
+                for method, op in item.items():
+                    if isinstance(op, dict):
+                        dst.setdefault(str(method).lower(), op)
+        if not paths:
+            return {}
+        try:
+            import spec_ir
+            _ver = spec_ir.OPENAPI_VERSION
+        except Exception:            # noqa: BLE001
+            _ver = "3.1.0"
+        return {"openapi": _ver,
+                "info": {"title": "assembled product", "version": "1"},
+                "paths": paths}
+
     def _response_probe_rows(self, schemas: dict) -> list:
         """Q4 (S44): [[METHOD, path, payload]] to drive each route that carries
         a response schema. The body payload reuses the contracted request-shape
@@ -12104,6 +12248,45 @@ def %(callable)s(environ, start_response):
                         % (method, path, owner,
                            "; ".join(e.message for e in errors[:3])))
         return ""
+
+    def _assembled_fuzz(self, ws, c: dict) -> "tuple":
+        """Q4 fuzz (S45): OPT-IN schemathesis property-fuzz of the booted
+        product. Off unless ``SPEC_FLOW_SCHEMATHESIS_FUZZ`` is set — its
+        derandomized inputs are reproducible but a fuzz pass costs time, so the
+        deterministic S44 round-trip is the default gate and this is the deeper,
+        opt-in pass. Runs under sys.executable (schemathesis + oracle live in the
+        .venv). Returns (ok, detail); FUZZ_ERROR (tool could not run) is
+        fail-closed — a red, never a silent skip."""
+        if not os.environ.get("SPEC_FLOW_SCHEMATHESIS_FUZZ"):
+            return True, ""
+        doc = self._assembled_openapi_doc()
+        if not doc:
+            return True, ""          # no HTTP contract -> nothing to fuzz
+        rows = [{"route": [m, p], "schema": s}
+                for (m, p), s in self._assembled_response_schemas().items()]
+        cfg = json.dumps({
+            "callable": c["callable"],
+            "entry_stem": Path(c["entry"]).stem,
+            "openapi": doc,
+            "response_schemas": rows,
+            "max_examples": int(os.environ.get(
+                "SPEC_FLOW_SCHEMATHESIS_MAX", "8") or "8")})
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", _SCHEMATHESIS_FUZZ, str(ws.root), cfg],
+                capture_output=True, text=True, timeout=300,
+                env=_hermetic_probe_env())
+            sout = (proc.stdout or "") + (proc.stderr or "")
+        except Exception as exc:     # noqa: BLE001
+            return False, "schemathesis fuzz could not run: %s" % exc
+        if "FUZZ_OK" in sout:
+            return True, ""
+        for marker in ("FUZZ_FAIL", "FUZZ_ERROR"):
+            if marker in sout:
+                detail = sout.split(marker, 1)[1].strip()
+                return False, ("assembled product failed property-fuzz (%s): %s"
+                               % (marker, detail[:280]))
+        return False, "schemathesis fuzz produced no verdict: " + sout.strip()[:200]
 
     def _assembled_product_boots(self) -> "tuple":
         """Un-mockable B2 at the ROOT: boot the real assembled WSGI entry in a
@@ -12214,6 +12397,10 @@ def %(callable)s(environ, start_response):
                 if bad:
                     return False, ("assembled product violates its response "
                                    "contract: " + bad[:300])
+            # Q4 fuzz (S45): opt-in deeper property-fuzz (off by default).
+            fz_ok, fz_detail = self._assembled_fuzz(ws, c)
+            if not fz_ok:
+                return False, fz_detail
             return True, ""
         marker = "BOOTGATE_FAIL"
         detail = sout.split(marker, 1)[1].strip() if marker in sout else sout.strip()

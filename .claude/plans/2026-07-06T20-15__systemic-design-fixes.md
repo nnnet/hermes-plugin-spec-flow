@@ -209,10 +209,17 @@ Q3 → Q2 → Q1. Q4/Q5 после Q1.
   openapi-schema-validator), RED с именем маршрута+владельца при дрейфе.
   Ловит то, что листовой оракул не видит: роутер завёл не тот хендлер, entry
   переформатировал тело. Тест: tests/audit/test_assembled_conformance.py.
-  ОСТАЁТСЯ (opt-in, записано): schemathesis property-fuzz того же приложения —
-  либа уже в deps, но hypothesis-входы недетерминированы (конфликт с правилом
-  воспроизводимого прогона) + 4.x API тяжелее; детерминированный round-trip по
-  контрактным примерам ценнее и сделан первым
+  schemathesis property-fuzz ДОБАВЛЕН: S45 (646 audit green) — opt-in
+  (`SPEC_FLOW_SCHEMATHESIS_FUZZ`, бюджет `SPEC_FLOW_SCHEMATHESIS_MAX`),
+  derandomize (фиксированный seed → воспроизводимо). schemathesis только
+  генерит входы (его CheckContext API version-fragile), вердикт — тем же
+  оракулом openapi-schema-validator: фаззенный запрос не должен 5xx, 2xx-тело
+  конформит схему. Прогон под sys.executable (.venv, где есть schemathesis+
+  оракул — изолированный python3 probe их не имеет). `_assembled_openapi_doc`
+  (union IR) + `_SCHEMATHESIS_FUZZ` + `_assembled_fuzz`, хук в
+  `_assembled_product_boots` после детерминированного conform. FUZZ_ERROR =
+  fail-closed. По умолчанию ВЫКЛ (S44 — дефолтный гейт). Тест:
+  tests/audit/test_schemathesis_fuzz.py. Ничего не отложено
 - готовое: Specmatic `--strict` (contract-tests, negative-paths) + openapi-core
   (runtime-валидация ответа против схемы) + Schemathesis (property-фаззинг) +
   pytest-bdd/behave (исполнить node Gherkin против кода) — всё уже частично в
