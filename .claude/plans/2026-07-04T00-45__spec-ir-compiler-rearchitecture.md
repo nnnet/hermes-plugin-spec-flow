@@ -80,7 +80,7 @@ graph:
   - {id: M1, needs: [I3, K3],         parallel: "dash",    status: "[x]", files: [tests/lib/live_dashboard.py]}
   - {id: M2, needs: [K4],             parallel: "dash",    status: "[x]", files: [spec_flow_runner.py, tests/harness/openapi_diff.py, tests/audit/]}
   - {id: M3, needs: [M1, K1, H7],     parallel: "",        status: "[x]", files: [tests/lib/live_dashboard.py, spec_flow_runner.py, spec_ir.py, tests/audit/, tests/dashboard/]}
-  - {id: M4, needs: [M1],             parallel: "",        status: "[~]", files: [tests/lib/live_dashboard.py, tests/dashboard/]}
+  - {id: M4, needs: [M1],             parallel: "",        status: "[x]", files: [tests/lib/live_dashboard.py, tests/dashboard/]}
 ```
 
 Зоны (`files`) — что узел МЕНЯЕТ; пересечение зон = последовательность
@@ -579,6 +579,35 @@ wsgiref/ThreadingHTTPServer/pyyaml (stdlib-first, не 3rd-party NIH).
   бейджа «validated» нет, `decomposer_openapi` PASS/`ir_jsonschema`/`ir_written`
   verdict не эмитятся. GREEN после реализации: 8 passed. Существующие вехи S22/
   S27/S28 не ослаблены (FAIL-пути и M1-провенанс на месте).
+
+### M4 `spec-clickthrough` — клик по любому id-узла на дашборде ведёт на его спеку
+- выход: единый клиентский хелпер `goToNodeSpec(nid)` + делегированный обработчик
+  на `[data-gospec]`; каждый узел-id на странице несёт этот хук:
+  (а) заголовок колонки-ветки на флоу-вкладке (lane label в `_flow_timeaxis`) —
+  главное требование: клик по «core» в шапке потока → спека узла core;
+  (б) блок-веха на флоу-оси (у события `task=nid`, суффикс `:role` срезается) —
+  клик по вехе ведёт на спеку её узла; веха без разрешимого узла остаётся
+  инертной (нет хука/курсора);
+  (в) заголовок узла на IR-вкладке (`_ir_node_html` `<h4>`) + якорь
+  `id="irnode-<nid>"` на секции `.irnode` — это цель-приземление для fallback'а;
+  (г) клик по узлу дерева переведён на тот же `goToNodeSpec` (была inline-ветка
+  `SEL=id;NTAB='spec';render()`), чтобы навигация не расходилась между местами.
+  Хелпер: если прогон знает узел (`STATE.nodes[nid]`) — открывает spec-панель
+  (`SEL=nid; NTAB='spec'`), иначе деградирует на IR-вкладку и скроллит к
+  `#irnode-<nid>` — переход никогда не «в никуда».
+- приёмка: tests/dashboard/test_flow_clickthrough.py зелёный (4 теста); наборы
+  dashboard/lib/audit не сломаны (646 passed, 11 skipped); RED-ратчет проверен
+  откатом live_dashboard.py через git stash — все 4 краснели (нет data-gospec на
+  заголовках колонок/вехах, нет якоря irnode-<nid>, нет определения
+  `function goToNodeSpec`).
+- заметки: СДЕЛАНО. Места переходов ПОКРЫТЫ: шапка потока (колонки-ветки), вехи
+  флоу-оси, заголовок узла IR-вкладки, узел дерева (унифицирован на общий хелпер).
+  Уже кликабельны и не тронуты: двойной клик по узлу графа спеков (иной жест).
+  ОСОЗНАННО ОСТАВЛЕНО: contract-дрейф (M2) всплывает как per-node бейдж, уже
+  достижимый через дерево — отдельной таблицы endpoint→узел в дашборде нет, вешать
+  хук не на что. UI-подписи на русском (консистентно с `_flow_timeaxis`),
+  комментарии кода и JS — английские. Stage: S30 (S30.1-S30.4) в
+  tests/audit/TAXONOMY.md.
 
 ### Узлы K — OpenAPI 3.1 БИБЛИОТЕКОЙ, спека первична машинной (2026-07-06, СУПЕРПРИОРИТЕТ)
 
