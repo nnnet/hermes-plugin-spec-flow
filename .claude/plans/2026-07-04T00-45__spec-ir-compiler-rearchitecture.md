@@ -57,7 +57,7 @@ graph:
   - {id: F1, needs: [B3, C1, D1, E1], parallel: "",        status: "[x]", files: [tests/scenarios/, tests/lib/]}
   - {id: G2, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/nodes/]}
   - {id: H1, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py]}
-  - {id: H2, needs: [],               parallel: "",        status: "[ ]", files: [spec_ir.py, spec_flow_runner.py]}
+  - {id: H2, needs: [],               parallel: "",        status: "[x]", files: [spec_ir.py, spec_flow_runner.py]}
   - {id: H3, needs: [],               parallel: "wave-h1", status: "[x]", files: [spec_ir.py, spec_openapi.py, spec_conformance.py]}
   - {id: H4, needs: [H3],             parallel: "wave-2",  status: "[x]", files: [spec_ir.py, spec_flow_runner.py]}
   - {id: H5, needs: [],               parallel: "",        status: "[ ]", files: [spec_ir.py, spec_skeletons.py, spec_flow_runner.py]}
@@ -474,10 +474,15 @@ Schemathesis, awesome-ralph.
   спайков и затвором S9.4). Замена отвергнута: перелопачивать свежую
   механику G2 ради нулевой функциональной выгоды
 
-### [ ] H2 `status-source-flag` — происхождение success-статуса видно
+### [x] H2 `status-source-flag` — происхождение success-статуса видно
 - выход: конвенция движка (POST→201, /health-тело) помечена в артефакте
   (status_source: convention|spec)
 - приёмка: по ir.json видно, что заказала спека, а что додумал движок
+- заметки: ГОТОВ — коммит status-source. _node_openapi помечает
+  success-статус (x-spec-flow-status-source: convention) и вложенное
+  движком fixed-тело (x-spec-flow-body-source: convention). Декомпозерный
+  фрагмент идёт мимо _node_openapi → без маркера (= заказано спекой).
+  Регрессия аудит 498 + build 69, батарея чистая
 
 ### [x] H3 `closed-response-schemas` — схемы ответов непустые и запинены
 - выход: compile_openapi эмитит контрактную схему тела (не {}),
