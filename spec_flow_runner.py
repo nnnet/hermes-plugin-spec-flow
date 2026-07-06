@@ -9927,6 +9927,20 @@ def %(callable)s(environ, start_response):
                           level=L_MILESTONE)
             self.tasks[integ].status = "done"
             self._completed += 1
+            # S37/v167: the IR is LIVE on EVERY closed node, not only on a
+            # realized leaf — a branch that closed its spec stage (its
+            # OpenAPI/contract already materialised at the review gate above)
+            # must move ir.json too, else the artifact stays ABSENT until the
+            # first leaf closes (v167 checkpoints 001/002 had branch specs but
+            # no ir.json, so the dashboard IR tab was empty at spec depth).
+            # Same locked writer as the leaf arm (I1), idempotent (I2), never
+            # the final full dump; best-effort — a dump failure never sinks the
+            # branch.
+            try:
+                self._write_ir_incremental("branch closed: %s"
+                                           % node.get("id"))
+            except Exception:  # noqa: BLE001 — live snapshot is non-fatal
+                pass
         else:
             self._leaf_pipeline(node, contract_ctx, depth, parent, drv, ancestors)
             # I1/S14.6c: the IR is a LIVE artifact — re-dump after each leaf

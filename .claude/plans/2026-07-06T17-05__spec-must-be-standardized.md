@@ -112,7 +112,7 @@ graph:
   - {id: N3, needs: [N1],      parallel: "wave2", status: "[x]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py, spec_gherkin.py, spec_ir.py, tests/audit/]}
   - {id: N5, needs: [N1],      parallel: "wave2", status: "[x]", files: [tests/lib/live_dashboard.py, tests/dashboard/]}
   - {id: N4, needs: [N2, N3],  parallel: "",      status: "[x]", files: [spec_flow_runner.py, tests/audit/]}
-  - {id: N7, needs: [],        parallel: "",      status: "[~]", files: [spec_flow_runner.py, tests/audit/]}
+  - {id: N7, needs: [],        parallel: "",      status: "[x]", files: [spec_flow_runner.py, tests/audit/]}
 ```
 
 ### N7 `live-ir-on-spec` — ir.json пишется по ходу и на spec-глубине (не только realized)
@@ -123,6 +123,30 @@ graph:
   локом I1; ir.json растёт с первого закрытого листа независимо от глубины
 - приёмка: RED — после обработки листа на depth=spec ir.json пуст/не пишется;
   GREEN — непуст, отражает закрытые листья; Stage
+- заметки (исполнено): при проверке v167 уточнил природу дыры — на `depth=spec`
+  ЛИСТ всё же доходит до leaf-ветки `_visit` и триггерит инкремент (в трейсе
+  v167 — 6 дампов «leaf realized», IR рос 3→7). Реальная дыра в том, что
+  **ветка** (branch) закрывает spec-стадию (openapi/contract материализованы на
+  review-gate), но `_write_ir_incremental` в branch-ветке НЕ вызывался → живой
+  ir.json ОТСУТСТВУЕТ до первого закрытого листа: чекпоинты v167 001/002 уже
+  несут specs/ и contracts/ веток, но БЕЗ ir.json (вкладка IR пуста в начале
+  spec-прогона). Фикс: добавил `_write_ir_incremental("branch closed: …")` в
+  branch-ветку `_visit` сразу после закрытия integrate (тот же локованный
+  писатель-алиас I1, идемпотентно I2, финальный `_write_ir` не тронут) →
+  ir.json растёт с ПЕРВОГО закрытого узла (ветка или лист) независимо от
+  `--depth`. Место: `spec_flow_runner.py`, branch-ветка `_visit` (после
+  `self.tasks[integ].status = "done"`).
+- Stage: S37 (tests/audit/TAXONOMY.md; `tests/audit/test_ir_grows_on_spec_depth.py`).
+  RED краснел на S37.1 (branch-ветка `_visit` без инкремента); S37.2 (leaf
+  сохраняет инкремент, страховка I1 S14.6) и S37.3 (locked-alias) зелёные до и
+  после. После фикса — 3/3 зелёных.
+- зелёные: полный `tests/audit/` через shared `.venv` (dev-deps: gherkin/
+  openapi/jsonschema) — **581 passed, 11 skipped, 0 failed**; целевые IR-наборы
+  (I1 S14.6, I2 S25, I3 S26, closed-world + S37) — 27/27. I1/I2/I3 не ослаблены.
+  Примечание: system `python3` без dev-deps даёт единственный ложный ред
+  `test_gherkin_lib_oracle` (нет пакета `gherkin`) — не связан с N7.
+- коммит: `feat(S37): ir.json grows incrementally on spec depth too, not only
+  on leaf-realized (N7, from v167 audit)`.
 
 N6 (модель содержания) — фундамент для гейта N2: формализует ОБЯЗАТЕЛЬНЫЕ
 аспекты (см. раздел «Модель содержания») как машинную проверку. Зона N6
