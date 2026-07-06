@@ -671,6 +671,83 @@ def _log_token_usage(model: str, usage: dict,
         pass
 
 
+# ── PROMPT CAPTURE (node Q6 / S40) ───────────────────────────────────────────
+# Every ask() writes its verbatim assembled prompt to <run_dir>/prompts/ and
+# stamps the SAME deterministic call_id onto the call_start log event, so a
+# prompt file maps 1:1 to its log/trace step. run_dir is the parent of the run
+# log (SPEC_FLOW_LLM_LOG, set by run_cases to <run_dir>/llm-log.jsonl) — when the
+# log is off (ad-hoc calls, most tests) capture is a silent no-op, exactly like
+# the logging it rides beside. The seq is a per-process monotonic counter, so
+# ordering is deterministic (never Date/random — scripts are unavailable here).
+_prompt_seq = 0
+_prompt_seq_lock = threading.Lock()
+
+
+def _slug(text, *, default: str) -> str:
+    """Filesystem-safe token for a node/role name (never empty)."""
+    s = re.sub(r"[^A-Za-z0-9._-]+", "-", (str(text) or "").strip()).strip("-")
+    return s[:48] or default
+
+
+def _capture_prompt(prompt: str, system, bctx: dict):
+    """Write the full system+user prompt to <run_dir>/prompts/ and return the
+    deterministic call_id embedded in the file name. No run log configured →
+    None (capture off). Best-effort: observability must never break the call.
+
+    Why: what a weak model actually implements depends on what EXACTLY reached
+    it — capturing the assembled prompt makes Q1's "machine carrier, not prose"
+    claim auditable.
+    Test: tests/audit/test_prompt_capture.py asserts the file exists, holds the
+    verbatim system+user text, and shares its call_id with the call_start event.
+    """
+    log_path = os.environ.get("SPEC_FLOW_LLM_LOG")
+    if not log_path:
+        return None
+    global _prompt_seq
+    try:
+        with _prompt_seq_lock:
+            _prompt_seq += 1
+            seq = _prompt_seq
+        node = _slug(bctx.get("node"), default="none")
+        rolev = _slug(bctx.get("role"), default="none")
+        # deterministic call_id from seq+node+role (no clock/random source)
+        call_id = f"{seq:04d}-{node}-{rolev}"
+        run_dir = os.path.dirname(log_path)
+        pdir = os.path.join(run_dir, "prompts")
+        os.makedirs(pdir, exist_ok=True)
+        fname = f"{seq:04d}__{node}__{rolev}__{call_id}.md"
+        parts = [f"# call_id: {call_id}"]
+        for k in ("node", "depth", "purpose", "mode", "step", "model"):
+            if bctx.get(k) not in (None, ""):
+                parts.append(f"# {k}: {bctx[k]}")
+        if system:
+            parts.append("\n## system\n\n" + system)
+        parts.append("\n## user\n\n" + (prompt or ""))
+        with open(os.path.join(pdir, fname), "w", encoding="utf-8") as fh:
+            fh.write("\n".join(parts) + "\n")
+        return call_id
+    except Exception:              # noqa: BLE001 — capture never blocks the call
+        return None
+
+
+def _capture_response(call_id, reply: str) -> None:
+    """Write the model reply beside its prompt as <...>.response.md (S40b)."""
+    log_path = os.environ.get("SPEC_FLOW_LLM_LOG")
+    if not call_id or not log_path:
+        return
+    try:
+        pdir = os.path.join(os.path.dirname(log_path), "prompts")
+        for name in os.listdir(pdir):
+            if name.endswith(f"__{call_id}.md"):
+                stem = name[: -len(".md")]
+                with open(os.path.join(pdir, stem + ".response.md"),
+                          "w", encoding="utf-8") as fh:
+                    fh.write(reply or "")
+                return
+    except Exception:              # noqa: BLE001
+        return
+
+
 def ask(prompt: str, *, model: str, role: str, step: str,
         system: str | None = None, fallbacks: tuple | list = (),
         params: dict | None = None, meta: dict | None = None,
@@ -723,12 +800,17 @@ def ask(prompt: str, *, model: str, role: str, step: str,
     _bctx.setdefault("model", model)
     if step:
         _bctx.setdefault("step", step)
+    # Q6/S40: capture the verbatim assembled prompt and stamp its deterministic
+    # call_id onto call_start so the on-disk prompt file links to this log step.
+    _call_id = _capture_prompt(prompt, system, _bctx)
+    if _call_id:
+        _bctx["call_id"] = _call_id
     _b_t0 = time.monotonic()
     _llm_log.log({"event": "call_start", **_bctx, "prompt_chars": len(prompt)})
     # the outcome echoes the identity keys but NOT `model`, so a start/result
     # pair counts the request exactly once (model lives on call_start).
     _bident = {k: _bctx[k] for k in ("role", "node", "depth", "purpose", "mode",
-                                     "step") if k in _bctx}
+                                     "step", "call_id") if k in _bctx}
 
     def _ret(reply: str, used_model: str) -> str:
         # UNIVERSAL token accounting at ask()'s SINGLE exit point: use the
@@ -739,6 +821,7 @@ def ask(prompt: str, *, model: str, role: str, step: str,
         usage = getattr(_call_ctx, "last_usage", None) or {}
         _call_ctx.last_usage = None
         _log_token_usage(used_model, usage, prompt=prompt, reply=reply)
+        _capture_response(_call_id, reply)   # Q6/S40: reply beside its prompt
         _llm_log.log({"event": "call_ok", **_bident,
                       "latency_s": round(time.monotonic() - _b_t0, 2),
                       "reply_chars": len(reply)})

@@ -102,7 +102,7 @@ graph:
   - {id: Q3, needs: [], parallel: "q",   status: "[ ]", files: [spec_ir.py, spec_flow_runner.py, tests/audit/]}
   - {id: Q4, needs: [Q1], parallel: "",  status: "[ ]", files: [spec_conformance.py, tests/harness/, tests/requirements-dev.txt, tests/audit/]}
   - {id: Q5, needs: [Q1], parallel: "",  status: "[ ]", files: [tests/harness/role_worker.py, tests/requirements-dev.txt, tests/audit/]}
-  - {id: Q6, needs: [],   parallel: "",  status: "[ ]", files: [tests/harness/role_worker.py, tests/harness/llm_backend.py, spec_flow_runner.py, tests/audit/]}
+  - {id: Q6, needs: [],   parallel: "",  status: "[x]", files: [tests/harness/llm_backend.py, tests/audit/]}
 ```
 Зоны Q1/Q2/Q3 толкаются в `spec_flow_runner.py` → worktree, порядок влития
 Q3 → Q2 → Q1. Q4/Q5 после Q1.
@@ -155,7 +155,7 @@ Q3 → Q2 → Q1. Q4/Q5 после Q1.
 - приёмка: пилот-прогон p6 depth=spec/execute, метрики реализации листа vs
   текущий; решение расширять/нет; Stage
 
-### Q6 `prompt-capture` — каждый вызов ЛЛМ сохраняется в файл, связан с логом
+### [x] Q6 `prompt-capture` — каждый вызов ЛЛМ сохраняется в файл, связан с логом
 - выход: КАЖДЫЙ вызов модели (implementer/reviewer/decomposer/diagnoser/tester —
   через `llm_backend.ask`) пишет ПОЛНЫЙ промпт (system+user+контекст) в файл
   `<run_dir>/prompts/<seq>__<node>__<role>__<call-id>.md`; тот же `call-id`
@@ -166,6 +166,20 @@ Q3 → Q2 → Q1. Q4/Q5 после Q1.
   trace; GREEN — на каждый вызов есть файл + связь с логом по call-id; Stage
 - заметка: единая точка — обёртка в `llm_backend.ask`; call-id генерируется
   детерминированно (seq+node+role), не Date/random (правило скриптов)
+- РЕЗУЛЬТАТ (Stage S40): реализовано ТОЛЬКО в `tests/harness/llm_backend.py` —
+  единая дверь `ask` покрыла все роли, `role_worker.py`/`spec_flow_runner.py`
+  трогать не потребовалось (все ходят через `ask`, run_dir из env). Два helper:
+  `_capture_prompt` (пишет `<run_dir>/prompts/<seq>__<node>__<role>__<call-id>.md`
+  с полным system+user+мета, возвращает детерминированный call_id `<seq>-<node>-<role>`)
+  и `_capture_response` (кладёт `<...>.response.md` рядом в единой точке выхода `_ret`).
+  run_dir = родитель `SPEC_FLOW_LLM_LOG`; лог выключен → capture no-op (как и логирование).
+  call_id проброшен в `_bctx` ДО `call_start` и в `_bident` (call_ok) → событие
+  лога однозначно связано с файлом промпта. seq — per-process монотонный счётчик
+  под lock (детерминированный порядок). RED: `tests/audit/test_prompt_capture.py`
+  краснел «two calls -> two prompt files: 0==2» (файлов нет, call_id не связан) →
+  GREEN 4/4. Инвариант single-door (`test_single_llm_door`) цел: call_id живёт
+  внутри двери, событий call_* наружу не добавлено. Полный `tests/audit/` +
+  single-door: 587 passed / 11 skipped. Коммит `feat(S40): ...`.
 
 ## Verification
 - `.venv/bin/python -m pytest tests/audit/ tests/dashboard/ -q` зелёное.
