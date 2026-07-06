@@ -70,15 +70,21 @@ _OA_METHODS = ("get", "post", "put", "delete", "patch")
 # closed key sets — everything else is an error (S13.2)
 _TOP_KEYS = {"format", "product", "nodes"}
 _PRODUCT_KEYS = {"kind", "entry", "callable", "pinned_files", "requirements"}
+# N3/S32: a non-HTTP code leaf carries its behaviour as a machine Gherkin
+# feature (``behavior``) — the primary carrier for storage/lib nodes that own
+# no route, validated by spec_gherkin at the decomposer seam.
 _NODE_KEYS = {"children", "files", "openapi", "symbols", "env", "scenarios",
-              "dependencies", "effects"}
+              "dependencies", "effects", "behavior"}
 # H5/S13.7: a requirement is a bare name or {name, version?}.
 _REQUIREMENT_KEYS = {"name", "version"}
 # H6/S17.5: the effect classes a node may declare it is contracted to perform.
 _EFFECT_CLASSES = {"subprocess", "network", "env-write", "fs-write",
                    "dynamic-import"}
 _SYMBOLS_KEYS = {"exposes", "consumes"}
-_EXPOSE_KEYS = {"name", "args"}
+# N3/S32: an exposed callable may carry its return type and error surface so a
+# weak LLM builds it without guessing; spec_gherkin enforces their PRESENCE for
+# non-HTTP code leaves, spec_ir only widens the closed world to admit them.
+_EXPOSE_KEYS = {"name", "args", "returns", "raises", "signature"}
 _CONSUME_KEYS = {"from", "name", "args"}
 _ENV_ENTRY_KEYS = {"name", "rule"}
 _SCENARIO_KEYS = {"requirement", "given", "when", "then"}

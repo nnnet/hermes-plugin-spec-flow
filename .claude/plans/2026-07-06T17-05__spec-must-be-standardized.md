@@ -77,7 +77,7 @@ Story Mapping/User Stories и Markdown RFC — НЕ носители (это п�
 graph:
   - {id: N1, needs: [],        parallel: "",     status: "[x]", files: [spec_scenarios.py, spec_ir.py, tests/requirements-dev.txt, docs/EXTERNAL-TECH-GUIDE.md, tests/audit/]}
   - {id: N2, needs: [N1],      parallel: "",      status: "[ ]", files: [spec_flow_runner.py, spec_ir.py, tests/audit/]}
-  - {id: N3, needs: [N1],      parallel: "wave2", status: "[ ]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py, tests/audit/]}
+  - {id: N3, needs: [N1],      parallel: "wave2", status: "[x]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py, spec_gherkin.py, spec_ir.py, tests/audit/]}
   - {id: N5, needs: [N1],      parallel: "wave2", status: "[ ]", files: [tests/lib/live_dashboard.py, tests/dashboard/]}
   - {id: N4, needs: [N2, N3],  parallel: "",      status: "[ ]", files: [spec_flow_runner.py, tests/audit/]}
 ```
@@ -144,6 +144,33 @@ graph:
   крайних случаев) = отказ на шве декомпозера; GREEN — полный Gherkin, spec_lint
   не FAIL, гейт N2 зелёный; Stage
 - заметки:
+  - Stage: **S32** (`tests/audit/test_decomposer_emits_gherkin.py`, 5 тестов).
+  - Носитель не-HTTP листа = машинный Gherkin feature (поле узла `behavior`,
+    Feature + Scenario на каждую публичную функцию) + полный `symbols.exposes`
+    (каждая запись: name, типизированные `args` вида `name: type`, `returns`,
+    `raises`). Проза производна.
+  - Новый адаптер-оракул `spec_gherkin.py` (аналог `spec_openapi.py`):
+    `is_code_leaf` (files+нет openapi+нет children), `feature_library_errors`
+    (грамматика через `gherkin-official`, degrade при отсутствии либы),
+    `node_behavior_carrier_errors` (полнота: feature обязателен и грамматичен,
+    exposes непусты и полны — иначе именованные ошибки). Полнота exposes —
+    детерминированна, работает и без либы.
+  - Шов `_accept_decomposer_ir`: gherkin-блок после openapi-блока — веха
+    `decomposer_gherkin` FAIL/PASS (точный аналог `decomposer_openapi`);
+    отказ = fragment не входит в реестр, не молчаливый проход.
+  - `spec_ir`: closed-мир расширен — `behavior` в `_NODE_KEYS`, `returns`/
+    `raises`/`signature` в `_EXPOSE_KEYS` (иначе полный носитель отвергался).
+    Требование ПРИСУТСТВИЯ живёт в `spec_gherkin`, не в closed-схеме.
+  - Декомпозер-промпт: не-HTTP лист обязан эмитить `behavior` (Gherkin) +
+    типизированный exposes с returns/raises.
+  - RED краснел на: (1) прозовый db_layer (пустые symbols, нет behavior) шёл
+    через шов с ZERO ошибок — v166 молчаливый проход; (2) неполный носитель
+    (untyped exposes, нет returns/raises) не краснел; (3) полный носитель с
+    `behavior`/`returns`/`raises` отвергался closed-миром до расширения ключей.
+  - Зелёные: `tests/audit` = **555 passed, 11 skipped** (было 550+11);
+    decomposition+nodes+zone-trim = **152 passed**. K2/S22, N1/S31 целы.
+  - Коммит: `feat(S32): decomposer emits machine Gherkin+symbols for non-HTTP
+    nodes, complete-for-weak-LLM (N3)`.
 
 ### N4 `prose-derived-from-standard` — проза .md строго ПРОИЗВОДНА от стандарта
 - выход: `specs/*.md` компилируются ИЗ машинного носителя (OpenAPI + Gherkin
