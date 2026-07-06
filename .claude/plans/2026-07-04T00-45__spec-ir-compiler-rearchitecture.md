@@ -79,6 +79,7 @@ graph:
   - {id: G4, needs: [G3],             parallel: "",        status: "[x]", files: [tests/]}
   - {id: M1, needs: [I3, K3],         parallel: "dash",    status: "[x]", files: [tests/lib/live_dashboard.py]}
   - {id: M2, needs: [K4],             parallel: "dash",    status: "[x]", files: [spec_flow_runner.py, tests/harness/openapi_diff.py, tests/audit/]}
+  - {id: M3, needs: [M1, K1, H7],     parallel: "",        status: "[~]", files: [tests/lib/live_dashboard.py, spec_flow_runner.py, spec_ir.py, tests/audit/, tests/dashboard/]}
 ```
 
 Зоны (`files`) — что узел МЕНЯЕТ; пересечение зон = последовательность
