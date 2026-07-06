@@ -60,9 +60,9 @@ graph:
   - {id: H2, needs: [],               parallel: "",        status: "[x]", files: [spec_ir.py, spec_flow_runner.py]}
   - {id: H3, needs: [],               parallel: "wave-h1", status: "[x]", files: [spec_ir.py, spec_openapi.py, spec_conformance.py]}
   - {id: H4, needs: [H3],             parallel: "wave-2",  status: "[x]", files: [spec_ir.py, spec_flow_runner.py]}
-  - {id: H5, needs: [],               parallel: "",        status: "[ ]", files: [spec_ir.py, spec_skeletons.py, spec_flow_runner.py]}
+  - {id: H5, needs: [],               parallel: "",        status: "[x]", files: [spec_ir.py, spec_skeletons.py, spec_flow_runner.py]}
   - {id: H6, needs: [],               parallel: "wave-h1", status: "[x]", files: [spec_skeletons.py, spec_flow_doctor.py]}
-  - {id: H7, needs: [],               parallel: "",        status: "[ ]", files: [spec_ir.py, tests/audit/]}
+  - {id: H7, needs: [],               parallel: "",        status: "[~]", files: [spec_ir.py, tests/audit/]}
   - {id: H8, needs: [],               parallel: "wave-h1", status: "[x]", files: [spec_flow_runner.py]}
   - {id: G3, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/decomposition/]}
   - {id: G4, needs: [G3],             parallel: "",        status: "[x]", files: [tests/]}
@@ -507,7 +507,7 @@ Schemathesis, awesome-ralph.
   печёт _FIELD_TYPES и после присутствия 400-ит неверный тип с именем
   поля; JSON→Python точное (integer не берёт bool). Регрессия 567
 
-### [ ] H5 `ir-dependencies` — спека может заказать стороннюю либу
+### [x] H5 `ir-dependencies` — спека может заказать стороннюю либу
 - выход: product.requirements/node.dependencies в схеме IR + seeding
   requirements.txt + импорт-дверь из объявленных зависимостей
 - приёмка: спека с Flask/sqlite3 собирается; без декларации — отказ
@@ -529,7 +529,7 @@ Schemathesis, awesome-ralph.
   Опциональный ключ effects в spec_ir._NODE_KEYS добавляется в H5/H2
   волне (сейчас absent=deny работает без него)
 
-### [ ] H7 `jsonschema-oracle-for-ir` — внешний оракул для самой IR
+### [~] H7 `jsonschema-oracle-for-ir` — внешний оракул для самой IR
 - выход: jsonschema-валидация рядом с validate_ir (замкнутый мир
   остаётся поверх)
 - приёмка: расхождение двух валидаторов = красный тест
