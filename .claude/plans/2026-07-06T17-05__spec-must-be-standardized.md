@@ -44,7 +44,7 @@
 
 ```yaml
 graph:
-  - {id: N1, needs: [],        parallel: "",     status: "[ ]", files: [spec_scenarios.py, tests/requirements-dev.txt, docs/EXTERNAL-TECH-GUIDE.md, tests/audit/]}
+  - {id: N1, needs: [],        parallel: "",     status: "[x]", files: [spec_scenarios.py, spec_ir.py, tests/requirements-dev.txt, docs/EXTERNAL-TECH-GUIDE.md, tests/audit/]}
   - {id: N2, needs: [N1],      parallel: "",      status: "[ ]", files: [spec_flow_runner.py, spec_ir.py, tests/audit/]}
   - {id: N3, needs: [N1],      parallel: "wave2", status: "[ ]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py, tests/audit/]}
   - {id: N5, needs: [N1],      parallel: "wave2", status: "[ ]", files: [tests/lib/live_dashboard.py, tests/dashboard/]}
@@ -64,6 +64,30 @@ graph:
 - приёмка: RED — сценарий валидируется библиотекой, не рукописным разбором;
   битый Gherkin ловится либой; весь `tests/audit` зелёный; Stage в TAXONOMY
 - заметки:
+  - Либа: **`gherkin-official==41.0.0`** — официальный Cucumber-парсер, чистый
+    AST, без раннер-навязывания. Проверена pip-доступность (41.0.0), ставится и
+    импортируется в venv worktree. `behave`/`pytest-bdd` НЕ взяты: их ценность —
+    step-execution, а сценарии уже исполняет `spec_scenarios` против WSGI; нужен
+    только оракул грамматики.
+  - Что заменил: рукописный `_check_scenario` был grammar-blind (проверял только
+    ключи/типы closed-схемы, docstring гордо заявлял «not Gherkin, no parser
+    surface»). Добавлен `spec_ir.gherkin_errors(ir)`: каждый closed-сценарий
+    проецируется в канонический `.feature` (`_scenario_to_gherkin`) и парсится
+    либой; расхождение AST↔closed-структуры (не ровно 1 Feature+Scenario, или
+    keyword-последовательность шагов ≠ ожидаемой) = именованная ошибка.
+    `validate_ir` теперь вливает вердикт оракула (паттерн S13.8/S14.7 — либа
+    рядом с ручными cross-rules, не вместо них). Degrade: нет либы → `[]`,
+    ручные правила стоят (проверено).
+  - Носитель Gherkin стал источником грамматики; closed `{when{method,path,body},
+    then{status,media,body_check}}` осталась ЦЕЛЕВОЙ структурой движка.
+  - RED краснел на: (1) нет `spec_ir.gherkin_errors`; (2) нет `import gherkin`
+    в пути валидации; (3) closed-valid сценарий с `requirement="core\n  Scenario:
+    hijack"` (валидный route /health, ручной разбор молчит) → либа видит 2
+    сценария в AST → ошибка; (4) `validate_ir` не вливал вердикт оракула.
+  - Stage: **S31** (`tests/audit/test_gherkin_lib_oracle.py`, 5 тестов).
+  - Зелёные: полный `tests/audit` = **550 passed, 11 skipped** (было 545+5);
+    scenario/closed-world/L1 наборы зелёные.
+  - Коммит: см. лог ветки (feat commit S31).
 
 ### N2 `node-spec-standard-required` — гейт: спека узла ОБЯЗАНА быть в стандарте
 - выход: гейт в движке (`_product_check`/шов узла): КАЖДЫЙ узел имеет валидный

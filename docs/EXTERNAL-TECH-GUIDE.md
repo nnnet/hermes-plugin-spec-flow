@@ -14,6 +14,7 @@
 | **jsonschema** | 4.26 | Структурный оракул IR (draft 2020-12) рядом с рукописным `validate_ir`; два валидатора расходятся = сигнал | `spec_ir.jsonschema_errors` + `IR_JSON_SCHEMA` (S13.8/H7) |
 | **openapi-spec-validator** | 0.9 | Валидация скомпилированного OpenAPI **стандартной библиотекой**, а не только рукописным lint; доказывает, что наш формат — настоящий OpenAPI 3.1, не диалект | `spec_openapi.validate_openapi_library` (S16.7/K1) |
 | **openapi-schema-validator** | 0.9 | Валидация **тел ответов** сценариев против contracted-схемы (типы, closed-world) — то, что ручной subset пропускает | `spec_scenarios.py` (L1 — в работе) |
+| **gherkin-official** | 41.0 | Готовый Cucumber-парсер Gherkin (чистый AST, без раннера) — **оракул грамматики** поведенческих сценариев рядом с рукописным `_check_scenario`; закрытая G/W/T-схема проецируется в канонический `.feature` и парсится либой, а не самодельным сплиттером | `spec_ir.gherkin_errors` (S31/N1) |
 | **Schemathesis** | 4.22 | Property-based фаззинг + schema-конформанс поверх нашего OpenAPI (второй внешний оракул интерфейса) | `tests/tools/run_schemathesis.py` (B2) |
 | **Specmatic** | 2.49 (jar) | Контрактные тесты против живого продукта (OpenAPI как контракт); первый внешний оракул | `tests/tools/run_specmatic.py`, `CONTRACT_VALIDATORS` (B2) |
 | **transitions** | — | Библиотека конечного автомата жизненного цикла узла (основной путь через workflow-engine); `_FallbackMachine` — graceful-фолбэк, когда либа/движок отсутствуют | `spec_flow_node_fsm.py` |
@@ -37,7 +38,7 @@
 |---|---|---|---|
 | **OpenAPI 3.1** | Первичный машинный формат интерфейса ноды (маршрут/статус/media/тело); из него компилируются тесты/каркасы/роутер | `spec_openapi.py`, `spec_ir.py` | K1 ✅, K2/K3 в работе |
 | **JSON Schema** (2020-12) | Замкнутые формы запроса/ответа + оракул IR | `spec_ir.py`, `spec_conformance.py` | ✅ |
-| **Gherkin** (Given/When/Then) | Как **нотация** сценариев/приёмки в IR (не фреймворк Cucumber) | `spec_scenarios.py`, поле `acceptance` | ✅ (A2) |
+| **Gherkin** (Given/When/Then) | Стандарт поведенческих сценариев в IR; **грамматику проверяет готовый парсер** `gherkin-official` (не самодельный разбор) — закрытая G/W/T-схема остаётся целевой структурой движка, но её носитель парсится либой | `spec_ir.gherkin_errors`, `spec_scenarios.py` | ✅ (A2, S31/N1) |
 | **EARS** | Нотация классификации требований (5 паттернов) | `classify_ears` (Kiro-импорт) | ✅ (B4) |
 | **GitHub Spec Kit** | Опциональный внешний вход: `tasks.md` → карточки | `speckit_import` | ✅ (B1) |
 | **AWS Kiro** | Адаптер brownfield-входа (requirements/design/tasks) | `kiro_import` | ✅ (B2) |
@@ -51,7 +52,7 @@
 | Технология | Почему отвергнута | Что вместо |
 |---|---|---|
 | **spec-kit как ЗАМЕНА системы** | spec-first (спека живёт время одной задачи), нет durable-оркестрации, нет drift/respec | spec-kit только как опциональный вход (B1), исполнение — на нашем движке |
-| **Полный Cucumber / pytest-bdd** | Парсер-поверхность Gherkin избыточна; замкнутый мир требует минимальной схемы | Gherkin как **нотация** в IR + свой мини-раннер `spec_scenarios.py` |
+| **Полный Cucumber-раннер / pytest-bdd (ИСПОЛНЕНИЕ шагов)** | Раннер-фреймворк избыточен: сценарии уже исполняет свой `spec_scenarios` против WSGI-поверхности; берётся только парсер | Парсер `gherkin-official` как оракул грамматики (см. §1); step-execution — свой раннер |
 | **Собственные валидаторы контрактов** | Готовые оракулы (Specmatic/Schemathesis/openapi-spec-validator) уже решают это | Таблица `CONTRACT_VALIDATORS` подставляет внешние инструменты |
 | **graphlib.TopologicalSorter** для планировщика волн | Нужны уровни+барьер+деградация цикла в одну волну; TopologicalSorter даёт ready-stream и CycleError — адаптер длиннее самого кода; плюс сцепка с подъёмом спайков (S9.4) | Рукописный `_dependency_waves` (причина записана, H1) |
 | **diff-match-patch / unidiff** для diff_repair | Не дают: model-facing грамматику SEARCH/REPLACE, «пустой SEARCH=перезапись», отказ при 0/>1 совпадений (не fuzzy), интеграцию с write-door | Рукописный `diff_repair.py` (причина записана, H1b/S19.10) |
