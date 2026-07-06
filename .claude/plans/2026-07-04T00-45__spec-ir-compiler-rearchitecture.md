@@ -73,7 +73,7 @@ graph:
   - {id: K1b, needs: [K1],            parallel: "kl",      status: "[x]", files: [spec_scenarios.py, tests/requirements-dev.txt, tests/audit/]}
   - {id: L1, needs: [K1b],            parallel: "kl",      status: "[x]", files: [spec_scenarios.py, tests/audit/]}
   - {id: H1b, needs: [],              parallel: "kl",      status: "[x]", files: [tests/harness/diff_repair.py, tests/audit/]}
-  - {id: K4, needs: [K2],             parallel: "",        status: "[ ]", files: [tests/harness/openapi_diff.py, spec_openapi.py]}
+  - {id: K4, needs: [K2],             parallel: "",        status: "[x]", files: [tests/harness/openapi_diff.py, spec_openapi.py]}
   - {id: H8, needs: [],               parallel: "wave-h1", status: "[x]", files: [spec_flow_runner.py]}
   - {id: G3, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/decomposition/]}
   - {id: G4, needs: [G3],             parallel: "",        status: "[x]", files: [tests/]}
@@ -505,7 +505,23 @@ wsgiref/ThreadingHTTPServer/pyyaml (stdlib-first, не 3rd-party NIH).
 - выход: после K2 tests/harness/openapi_diff.py строит diff поверх машинного
   OpenAPI (compile_openapi/либа), не ручным обходом paths/responses
 - приёмка: diff полей не дублирует compile_openapi; зависит от K2
-- заметки: ждёт K2
+- заметки: СДЕЛАНО. openapi_diff.py перестроен: сырой contract-фрагмент
+  оборачивается в минимальный one-node IR (`{"nodes":{"contract":{"openapi":frag}}}`)
+  и компилируется `spec_openapi.compile_openapi`; интерфейс (эндпоинты+поля 2xx
+  JSON) читается с МАШИННОГО документа, ручной обход `paths->responses` снесён.
+  Именованные компилятором дыры (`x-spec-flow-gaps`: media-gap, empty-schema)
+  теперь всплывают как drift-запись `contract_gap` вместо ложного зелёного;
+  дубль маршрута ловится `DuplicateRouteError`→`duplicate_route`.
+  Библиотеку НЕ брал: готовой OpenAPI-diff-функции нет (spec/schema-validator
+  валидируют документ, но не считают diff против манифеста реализации), а нужный
+  интерфейс уже даёт compile_openapi — это удаление дублирования, не новая
+  рукопись. Остаточное поле-в-поле сравнение — крошечный обход по УЖЕ
+  компилированному документу (домен-объект spec-flow + gap-канал).
+  Stage: S24 (S24.1-S24.3) в tests/audit/TAXONOMY.md; тест
+  tests/audit/test_openapi_diff_compiled.py (S23 занял параллельный K3).
+  RED краснел на media-gap/empty-schema контрактах (hand-walk возвращал `[]`/exit0
+  на дырявом контракте) — GREEN после перестройки. Зелёных: audit 530 passed,
+  11 skipped (мои 3 включены); потребители (api_contract+product_depth) 15 passed.
 
 ### Узлы K — OpenAPI 3.1 БИБЛИОТЕКОЙ, спека первична машинной (2026-07-06, СУПЕРПРИОРИТЕТ)
 

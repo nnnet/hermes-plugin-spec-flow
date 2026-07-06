@@ -1526,6 +1526,42 @@ no-OpenAPI case (S23.3) was already green.
   with no `openapi` document (a non-service/library leaf) grows no interface
   section — the compiler stays silent when the node owns no routes, so the .md
   of a pure helper is unchanged.
+## STAGE 24 — Narrow OpenAPI interface diff built ON the compiled machine document (node K4, `test_openapi_diff_compiled.py`)
+- S24.1 THE DIFF'S INTERFACE IS THE COMPILER'S DOCUMENT, NOT A PRIVATE WALK:
+  `tests/harness/openapi_diff.py` no longer re-derives the endpoint/field
+  interface with its own `paths -> method -> responses.200.content...properties`
+  dict walk — a second copy of the extraction `spec_openapi.compile_openapi`
+  already performs merging node fragments. The raw contract fragment is wrapped
+  in a minimal one-node IR (`{"nodes": {"contract": {"openapi": fragment}}}`),
+  compiled, and the interface is read off the resulting machine document. One
+  source, one truth; the diff inherits router-status injection, `x-spec-flow-node`
+  ownership and duplicate-route refusal for free instead of being blind to them.
+- S24.2 A COMPILER-NAMED GAP IS DRIFT, NEVER A FALSE GREEN: a success response
+  with NO media, or an empty `{}` schema, is a hollow contract the compiler
+  NAMES in `x-spec-flow-gaps` (media gap / body-shape gap). The old hand walk
+  read both as "endpoint present, zero fields" and returned `[]`/exit 0, so ANY
+  implementation passed a shapeless contract. The rebuilt diff carries each
+  named gap as a `contract_gap` drift record with nonzero exit. Ratchet
+  evidence: RED committed against the pre-K4 hand walk (media-gap and empty-schema
+  contracts both returned `[]`) — turns GREEN only once the interface derives
+  from the compiled document.
+- S24.3 REAL FIELD DRIFT IS UNWEAKENED: for a fully-recorded contract the
+  compiled-document diff keeps exact `missing_endpoint` / `missing_field` /
+  `type_mismatch` semantics (BOTH-DIRECTIONS: exact match compiles clean,
+  each drift kind surfaces). Real fixtures (billing/orders/cart/query/
+  url_shortener) record their fields honestly and raise ZERO `contract_gap` —
+  the new record fires only on genuinely hollow contracts.
+- S24 NOTE — LIBRARY vs HAND-ROLL DECISION: no third-party OpenAPI *diff*
+  library was pulled. `openapi-spec-validator` / `openapi-schema-validator`
+  (already pinned) validate a document but do not compute an interface diff
+  against an implementation manifest; and the interface the engine cares about
+  is exactly what `compile_openapi` already produces. The remaining field-level
+  comparison is a tiny in-house walk over the COMPILED document — kept in-house
+  because the domain object it diffs (the machine OpenAPI + `x-spec-flow-gaps`)
+  is spec-flow's own, and a generic library would not know the gap channel.
+  This is duplication REMOVED (interface extraction now single-sourced), not a
+  new hand-rolled seam (contrast S19.10, where the reason to hand-roll is the
+  model-facing block format the library lacks).
 
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
