@@ -125,6 +125,63 @@ def _const_body(op: dict, status: str) -> Any:
     return None
 
 
+# JSON Schema type -> Python isinstance target, resolved ONCE (H3/S21). An
+# unknown type is absent from the map and skipped — never guessed.
+_JSON_PY = {"string": "str", "integer": "int", "number": "(int, float)",
+            "boolean": "bool", "object": "dict", "array": "list"}
+
+
+def _response_shape(op: dict, status: str) -> Optional[dict]:
+    """The CLOSED object response schema for a success status, or None.
+
+    Why: an empty ``{}`` schema pinned nothing (F1) — a weak model could
+    invent response fields and stay green. A schema is a real shape only when
+    the IR declares one of properties/required/additionalProperties:false;
+    a bare ``{}`` (honest gap) and a ``const`` (handled separately) both
+    return None so the historical isinstance/exact-const paths stay untouched.
+    Test: tests/audit/test_closed_response_schemas.py."""
+    resp = (op.get("responses") or {}).get(status)
+    content = resp.get("content") if isinstance(resp, dict) else {}
+    jm = (content or {}).get("application/json")
+    schema = jm.get("schema") if isinstance(jm, dict) else None
+    if not isinstance(schema, dict) or "const" in schema:
+        return None
+    has_shape = (schema.get("properties") or schema.get("required")
+                 or schema.get("additionalProperties") is False)
+    if not has_shape:
+        return None
+    return schema
+
+
+def _shape_body_asserts(shape: dict, label: str) -> list:
+    """Compile the pin for a closed object response schema (S21.1): required
+    fields present, declared field types hold, and — under
+    additionalProperties:false — no field outside the declared union."""
+    props = shape.get("properties") or {}
+    required = [str(f) for f in (shape.get("required") or [])]
+    lines = ["    assert isinstance(body, dict), (",
+             '        "%s: a shaped response must be a JSON object")' % label]
+    for f in required:
+        lines.append("    assert %s in body, (" % _literal(f))
+        lines.append('        "%s: contracted response field %s missing")'
+                     % (label, f))
+    for f in sorted(props):
+        sub = props[f] if isinstance(props[f], dict) else {}
+        pytype = _JSON_PY.get(str(sub.get("type") or ""))
+        if pytype:
+            lines.append("    assert %s not in body or isinstance("
+                         "body[%s], %s), (" % (_literal(f), _literal(f),
+                                               pytype))
+            lines.append('        "%s: response field %s has the wrong type")'
+                         % (label, f))
+    if shape.get("additionalProperties") is False:
+        allowed = sorted(set(required) | set(props))
+        lines.append("    assert set(body) <= set(%s), (" % _literal(allowed))
+        lines.append('        "%s: response carries a field the contract '
+                     'never declared")' % label)
+    return lines
+
+
 def _iter_steps(sc: dict):
     """Every when-shaped step of one scenario, given.state first."""
     given = sc.get("given") if isinstance(sc.get("given"), dict) else {}
@@ -246,6 +303,13 @@ def _emit_route_tests(em: _Emitter, method: str, path: str, op: dict,
             lines.append("    assert body == %s, (" % _literal(const))
             lines.append('        "the ONE contracted fixed body for %s")'
                          % label)
+        else:
+            # H3/S21: a CLOSED object response schema is pinned (required
+            # present, types hold, no invented field); a bare {} stays the
+            # isinstance-only honest gap above — nothing is invented.
+            shape = _response_shape(op, status)
+            if shape is not None:
+                lines += _shape_body_asserts(shape, label)
         em.live(name, "%s answers the contracted status %s (%s)."
                 % (label, status, media or "media not recorded in the IR"),
                 lines, {handler})

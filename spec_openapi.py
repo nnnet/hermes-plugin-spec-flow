@@ -131,13 +131,30 @@ def compile_openapi(ir: dict) -> dict:
                 responses = op.setdefault("responses", {})
                 # Honest media gap: a fragment response with no recorded
                 # content stays content-less and is NAMED, never guessed.
+                # Honest body-shape gap (H3/F1): a success response WITH media
+                # but an empty json schema ({}) pinned nothing — a weak model
+                # could invent fields and stay green. The empty schema is left
+                # untouched (nothing invented) but the silence is NAMED, the
+                # way the media gap is, so it can never read as a closed "any
+                # object" contract.
                 for status, resp in responses.items():
-                    if isinstance(resp, dict) and "$ref" not in resp \
-                            and "content" not in resp:
+                    if not (isinstance(resp, dict) and "$ref" not in resp):
+                        continue
+                    if "content" not in resp:
                         gaps.append(
                             "%s: %s %s response %s has no media recorded "
                             "— compiled without content (honest gap)"
                             % (nid, verb, path, status))
+                        continue
+                    if str(status).isdigit() and 200 <= int(status) < 300:
+                        jm = ((resp.get("content") or {})
+                              .get("application/json") or {})
+                        sch = jm.get("schema") if isinstance(jm, dict) else None
+                        if isinstance(sch, dict) and not sch:
+                            gaps.append(
+                                "%s: %s %s response %s body shape not recorded "
+                                "— compiled with an open schema (honest gap)"
+                                % (nid, verb, path, status))
                 # Router-truthful error injection: never overwrite a status
                 # the fragment already contracts; 400 only where the router
                 # actually validates required fields.

@@ -109,7 +109,7 @@ def test_declared_response_shape_is_pinned():
     out = spec_conformance.compile_leaf_tests(
         _ir({"item": _shaped_node()}), "item")
     ast.parse(out)
-    assert '"id" in body' in out and '"text" in body' in out, (
+    assert "'id' in body" in out and "'text' in body" in out, (
         "the required response fields must be asserted PRESENT — an empty "
         "schema that pinned nothing was the F1 hole")
     assert "isinstance(body[\"id\"], int)" in out or \
@@ -124,16 +124,17 @@ def test_declared_response_shape_is_pinned():
 def test_invented_response_field_fails_the_compiled_test():
     out = spec_conformance.compile_leaf_tests(
         _ir({"item": _shaped_node()}), "item")
-    # honest handler passes
-    _run_compiled(out, "item",
-                  {"get_item": lambda payload, query: {"id": 1, "text": "a"}},
-                  "test_get_item_status_200")
+    # honest handler passes (the router contract is (status, body))
+    _run_compiled(
+        out, "item",
+        {"get_item": lambda payload, query: (200, {"id": 1, "text": "a"})},
+        "test_get_item_status_200")
     # a handler that invents an extra field must FAIL the pinned test
     with pytest.raises(AssertionError):
         _run_compiled(
             out, "item",
-            {"get_item": lambda payload, query: {"id": 1, "text": "a",
-                                                 "evil": "x"}},
+            {"get_item": lambda payload, query: (200, {"id": 1, "text": "a",
+                                                       "evil": "x"})},
             "test_get_item_status_200")
 
 
