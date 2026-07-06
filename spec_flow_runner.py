@@ -729,6 +729,11 @@ class Event:
     gate: str = ""          # tool invoked, if any
     verdict: str = ""       # tool verdict, if any
     level: int = L_STEP     # verbosity weight (see L_* constants)
+    # structured per-record payload for a milestone whose drift is a LIST of
+    # facts (contract_check records: contract_gap / duplicate_route /
+    # type_mismatch, each with its route/field). The dashboard renders it
+    # generically off level/verdict, so per-file drift needs no dashboard code.
+    details: list = field(default_factory=list)
 
 
 @dataclass
@@ -3001,14 +3006,16 @@ class Engine:
             self.workspace.git_provenance = True
 
     # -- logging helpers ---------------------------------------------------
-    def emit(self, phase, profile, skill, task, action, detail="", gate="", verdict="", level=L_STEP):
+    def emit(self, phase, profile, skill, task, action, detail="", gate="", verdict="", level=L_STEP,
+             details=None):
         # single writer: with parallel children several subtrees emit at
         # once — the tick counter, event list and sink stay consistent
         with self._emit_lock:
             self._t += 1
             self.skills.add(skill) if skill in ALL_SKILLS else None
             self.profiles.add(profile) if profile in ALL_PROFILES else None
-            ev = Event(self._t, phase, profile, skill, task, action, detail, gate, verdict, level)
+            ev = Event(self._t, phase, profile, skill, task, action, detail, gate, verdict, level,
+                       list(details) if details else [])
             self.events.append(ev)
             if self.sink is not None:
                 self.sink.handle(ev)
@@ -3108,6 +3115,39 @@ class Engine:
             "changed_files": [str(self.contracts_dir / code)],
             "types": ["openapi"],
         }))
+
+    @staticmethod
+    def _contract_drift_records(res):
+        """Flatten the contract_check result into structured drift records.
+
+        Why: the validator (openapi_diff) prints a JSON LIST of drift records
+        — contract_gap / duplicate_route / missing_endpoint / missing_field /
+        type_mismatch, each naming its route/field. That list is buried inside
+        ``res["drift"][i]["detail"]`` as raw stdout; a milestone that carried
+        only the first blob (M2, node K4) hid per-file drift from the
+        dashboard. This lifts EVERY validator's records into one flat list so
+        the milestone renders per-file contract drift generically.
+        What: parse each drift entry's ``detail`` as a JSON array of record
+        dicts; a non-JSON / non-list blob becomes one ``validator_error``
+        record carrying the raw text, so nothing is dropped silently.
+        Test: tests/audit/test_contract_drift_milestone_detail.py drives a real
+        run and asserts the drift milestone carries kind+route records.
+        """
+        records = []
+        for entry in (res or {}).get("drift", []) or []:
+            raw = entry.get("detail") or ""
+            parsed = None
+            try:
+                parsed = json.loads(raw)
+            except (ValueError, TypeError):
+                parsed = None
+            if isinstance(parsed, list) and all(isinstance(r, dict) for r in parsed):
+                records.extend(parsed)
+            elif raw:
+                records.append({"kind": "validator_error",
+                                "type": entry.get("type", ""),
+                                "detail": str(raw)[:2000]})
+        return records
 
     def _research(self, reason, completed, errors):
         self.gate_calls["research_trigger_check"] += 1
@@ -9607,7 +9647,8 @@ def %(callable)s(environ, start_response):
                                      contract_here.get("code_fixed", contract_here["code_drift"]))
                 self.emit("integrate", "verifier", "spec-integrate", integ,
                           "parallel contract_check across subtree", contract_here["fixed"],
-                          "contract_check", res["status"], level=L_MILESTONE)
+                          "contract_check", res["status"], level=L_MILESTONE,
+                          details=self._contract_drift_records(res))
             verifier = self.agents.get("verifier")
             if verifier is not None:
                 # Real verifier worker: its verdict replaces the simulated
@@ -10312,10 +10353,11 @@ def %(callable)s(environ, start_response):
         # contract drift episode
         if node.get("drift") and contract_ctx:
             res = self._contract(contract_ctx["artifact"], contract_ctx["code_drift"])
+            drift_records = self._contract_drift_records(res)
             drift_detail = res["drift"][0]["detail"] if res["drift"] else ""
             self.emit("implement", "implementer", "spec-implement", impl,
                       "contract_check vs frozen L2", drift_detail, "contract_check", res["status"],
-                      level=L_MILESTONE)
+                      level=L_MILESTONE, details=drift_records)
             classify = node["drift"]["classify"]
             self.emit("drift", "implementer", "drift-gate", impl,
                       "drift-gate classify", classify, level=L_MILESTONE)
@@ -10328,7 +10370,8 @@ def %(callable)s(environ, start_response):
                 res2 = self._contract(contract_ctx["fixed"], contract_ctx["code_drift"])
                 self.emit("implement", "implementer", "spec-implement", impl,
                           "contract_check after respec", "matches corrected contract",
-                          "contract_check", res2["status"], level=L_MILESTONE)
+                          "contract_check", res2["status"], level=L_MILESTONE,
+                          details=self._contract_drift_records(res2))
             elif classify == "code_wrong":
                 # the frozen L2 stands; the code is corrected and re-checked
                 self.emit("implement", "implementer", "spec-implement", impl,
@@ -10340,7 +10383,8 @@ def %(callable)s(environ, start_response):
                                       contract_ctx.get("code_fixed", contract_ctx["code_drift"]))
                 self.emit("implement", "implementer", "spec-implement", impl,
                           "contract_check after code fix", "matches frozen contract",
-                          "contract_check", res2["status"], level=L_MILESTONE)
+                          "contract_check", res2["status"], level=L_MILESTONE,
+                          details=self._contract_drift_records(res2))
 
         # contract drift stayed in IMPLEMENT (respec/codefix self-loop)
         if drv is not None and node.get("drift") and contract_ctx:

@@ -77,6 +77,7 @@ graph:
   - {id: H8, needs: [],               parallel: "wave-h1", status: "[x]", files: [spec_flow_runner.py]}
   - {id: G3, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/decomposition/]}
   - {id: G4, needs: [G3],             parallel: "",        status: "[x]", files: [tests/]}
+  - {id: M2, needs: [K4],             parallel: "wave-m",  status: "[x]", files: [spec_flow_runner.py, tests/harness/openapi_diff.py, tests/audit/]}
 ```
 
 Зоны (`files`) — что узел МЕНЯЕТ; пересечение зон = последовательность
@@ -522,6 +523,32 @@ wsgiref/ThreadingHTTPServer/pyyaml (stdlib-first, не 3rd-party NIH).
   RED краснел на media-gap/empty-schema контрактах (hand-walk возвращал `[]`/exit0
   на дырявом контракте) — GREEN после перестройки. Зелёных: audit 530 passed,
   11 skipped (мои 3 включены); потребители (api_contract+product_depth) 15 passed.
+
+### M2 `contract-drift-milestone-detail` — движок кладёт записи дрейфа в веху
+- выход: при contract-дрейфе MILESTONE-веха contract_check несёт
+  СТРУКТУРНЫЙ список записей (contract_gap / duplicate_route / missing_endpoint /
+  missing_field / type_mismatch — каждая со своим маршрутом/полем), а не только
+  сырой текст первого валидатора; дашборд рендерит пофайловый дрейф generically
+  без правок дашборда
+- приёмка: аудит tests/audit/test_contract_drift_milestone_detail.py зелёный;
+  веха-дрейф несёт непустой details со знакомым kind и локацией
+  (endpoint/field); K4-набор (S24) не сломан
+- заметки: СДЕЛАНО. K4 дал openapi_diff.py, печатающий JSON-список записей в
+  stdout, но движок при эмиссии вехи ронял список — в свободный `detail`
+  попадал только сырой stdout ПЕРВОГО валидатора, записи второго терялись.
+  Добавлено поле `Event.details: list` (default пустой, сериализуется `asdict`
+  в jsonl-трейс, который читает дашборд) + `emit(..., details=)`; хелпер
+  `Engine._contract_drift_records(res)` разбирает `res["drift"][i]["detail"]`
+  как JSON-массив записей и сплющивает записи ВСЕХ валидаторов в один список
+  (не-JSON/не-список блоб → одна запись `validator_error`, ничего не теряется
+  молча). Все ЧЕТЫРЕ эмиссии вехи contract_check (subtree-parallel,
+  drift-vs-frozen, after-respec, after-code-fix) прикладывают details.
+  Stage: S27 (S27.1-S27.2) в tests/audit/TAXONOMY.md. RED (ратчет проверен
+  откатом runner на a419bb0): 2 из 3 тестов краснели —
+  `no drift records attached to any drift milestone` (веха несла пустой
+  details); precondition-тест дрейф-эпизода зелёный всегда. GREEN после
+  реализации: 3 passed. Зона openapi_diff.py не менялась (K4-контракт
+  stdout+exit сохранён, S24 зелёный).
 
 ### Узлы K — OpenAPI 3.1 БИБЛИОТЕКОЙ, спека первична машинной (2026-07-06, СУПЕРПРИОРИТЕТ)
 

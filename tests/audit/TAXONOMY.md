@@ -1608,6 +1608,34 @@ no-OpenAPI case (S23.3) was already green.
   mention in prose is not an offender — the gate matches the call as an
   expression head, so the ratchet does not fossilize the docstring wording.
 
+## STAGE 27 — the contract_check MILESTONE carries the per-record drift as structured detail (node M2, `test_contract_drift_milestone_detail.py`)
+  Closes the last hole after K4 (S24): the diff validator `openapi_diff.py`
+  already PRINTS a JSON list of drift records (`contract_gap` /
+  `duplicate_route` / `missing_endpoint` / `missing_field` / `type_mismatch`,
+  each naming its route/field), but the engine, when it emitted the
+  `contract_check` MILESTONE event on drift, dropped that list: only
+  `res["drift"][0]["detail"]` — the RAW stdout of the FIRST validator — reached
+  the event's free-text `detail`, and records from any second validator were
+  lost entirely. The live dashboard renders milestones generically off
+  `level` / `verdict` / structured fields, so per-file contract drift (which
+  route drifted, which field, gap vs duplicate vs type) never surfaced as data.
+  M2 adds `Event.details` (a structured list, default empty, serialized by
+  `asdict` into the jsonl trace) and `Engine._contract_drift_records`, which
+  flattens EVERY validator's drift records into one list; all four
+  `contract_check` milestone emissions (subtree-parallel, drift-vs-frozen,
+  after-respec, after-code-fix) attach it. The dashboard then shows per-file
+  contract drift with no dashboard code change.
+- S27.1 THE DRIFT MILESTONE CARRIES THE PARSED RECORD LIST: a real drift run
+  (privacy-analytics with the real `openapi_diff` wired in) produces a
+  `contract_check` drift event whose `details` is a non-empty list of record
+  dicts, not an opaque string.
+- S27.2 EACH RECORD NAMES ITS KIND AND ITS LOCATION: every attached record
+  carries a known drift `kind` and, where the validator provides one, the
+  route (`endpoint`) or `field` it drifted on — the columns the dashboard
+  renders per file.
+- Precondition guard: the audit first asserts a drift episode actually occurred,
+  so a green result is earned by real drift, never by its absence.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.
