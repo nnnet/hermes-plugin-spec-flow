@@ -18,7 +18,13 @@ What:
 
         {"ok": bool, "refused": [str], "passed": int,
          "failures":   [{requirement, node, step, expected, got}],
-         "incomplete": [{requirement, node, step, missing}]}
+         "incomplete": [{requirement, node, step, missing}],
+         "notes":      [str]}
+
+    A CLOSED response schema (S21 shape) is validated against the LIVE body
+    with the third-party openapi-schema-validator (S14.7), in addition to the
+    hand body_check; ``notes`` records the one case where that library is
+    absent and the runner fell back to the hand check alone.
 
     Failures are attributable plain JSON-safe strings (P4). A when-step
     whose body is ABSENT while the route's requestBody has required fields
@@ -218,8 +224,136 @@ def _unvalued_step(step: dict, registry: dict) -> Optional[list]:
     return required or None
 
 
-def _judge(then: dict, status: Any, media: str, text: str) -> Optional[tuple]:
-    """Judge one then-clause; returns (expected, got) on violation."""
+def _response_schema(op: Any, status: Any) -> Optional[dict]:
+    """The CLOSED JSON response schema an operation contracts for a status,
+    or None when the contract is an honest gap.
+
+    Why (nodes K1b+L1, S14.7): the runner validates the LIVE body against a
+    schema only when that schema is a REAL closed shape — the S21 gate. A bare
+    ``{}`` (honest gap) and a ``const`` (an exact value handled by the
+    equals/json_subset hand path) are deliberately NOT closed, so they keep
+    the historical behaviour and never produce a library assertion. This
+    mirrors the single source of the closed-schema decision,
+    ``spec_conformance._response_shape``, so the runtime oracle and the
+    compile-time S21 pin agree on what "closed" means.
+    What: reads ``responses[str(status)].content['application/json'].schema``
+    and returns it iff it declares properties / required /
+    additionalProperties:false and carries no ``const``; else None.
+    Test: tests/audit/test_scenario_body_oracle.py — a closed schema drives
+    library validation; a bare-{} schema leaves the hand check untouched."""
+    if not isinstance(op, dict):
+        return None
+    resp = (op.get("responses") or {}).get(str(status))
+    content = resp.get("content") if isinstance(resp, dict) else {}
+    jm = (content or {}).get("application/json")
+    schema = jm.get("schema") if isinstance(jm, dict) else None
+    if not isinstance(schema, dict) or "const" in schema:
+        return None
+    has_shape = (schema.get("properties") or schema.get("required")
+                 or schema.get("additionalProperties") is False)
+    return schema if has_shape else None
+
+
+def _any_closed_schema(ir: dict) -> bool:
+    """True when any node's OpenAPI contracts a CLOSED response schema.
+
+    Why (S14.7 honesty): only worth noting the library's absence if a closed
+    schema actually exists to validate — otherwise the hand check was always
+    the whole story and there is nothing degraded to report.
+    What: scans every operation's success responses via ``_response_schema``.
+    Test: tests/audit/test_scenario_body_oracle.py drives the present-lib
+    path; the note path is a pure projection of this predicate."""
+    for node in (ir.get("nodes") or {}).values():
+        if not isinstance(node, dict):
+            continue
+        for item in ((node.get("openapi") or {}).get("paths") or {}).values():
+            if not isinstance(item, dict):
+                continue
+            for op in item.values():
+                responses = op.get("responses") if isinstance(op, dict) else {}
+                for status in (responses or {}):
+                    if _response_schema(op, status) is not None:
+                        return True
+    return False
+
+
+# Lazily-loaded third-party JSON-Schema validator class (openapi-schema-
+# validator, an OpenAPI-flavoured wrapper over jsonschema). Cached as the
+# class, as False when the library is genuinely absent, and as None until the
+# first lookup — so a missing dev dependency degrades to the hand check
+# instead of hard-crashing the runner (S14.7 honesty clause).
+_SCHEMA_VALIDATOR: Any = None
+
+
+def _schema_validator() -> Any:
+    """The OAS31Validator class if the schema library is importable, else None.
+
+    Why: the library is a DEV/TEST oracle (tests/requirements-dev.txt), not a
+    hard runtime dependency of the shipped engine — importing it lazily and
+    tolerating its absence keeps ``run_scenarios`` usable in a bare
+    environment (falls back to the hand body_check + a note).
+    What: imports once, memoises the class (or False on ImportError).
+    Test: tests/audit/test_scenario_body_oracle.py exercises the present-lib
+    path; the absent path degrades to the historical hand check."""
+    global _SCHEMA_VALIDATOR
+    if _SCHEMA_VALIDATOR is None:
+        try:
+            from openapi_schema_validator import OAS31Validator
+            _SCHEMA_VALIDATOR = OAS31Validator
+        except Exception:  # noqa: BLE001 — optional dev/test oracle
+            _SCHEMA_VALIDATOR = False
+    return _SCHEMA_VALIDATOR or None
+
+
+def _schema_violation(schema: dict, text: str) -> Optional[tuple]:
+    """First closed-schema violation of a live body, as (expected, got), or
+    None when the body conforms / cannot be judged by the library.
+
+    Why (S14.7): catches what the hand equals/contains/json_subset cannot —
+    a WRONG type on a declared field and an EXTRA field under
+    additionalProperties:false — using the maintained library, not more
+    hand-rolled subset logic (F1 exploit at RUNTIME). Non-JSON bodies and an
+    absent library return None so this stays strictly ADDITIVE: it never
+    overrides or weakens an existing hand judgement, only adds reds the hand
+    check structurally misses. When the library is absent the caller keeps a
+    note; when the body is non-JSON there is nothing for a JSON schema to say.
+    What: runs OAS31Validator(schema).iter_errors(doc); the first error's
+    message becomes the ``got`` and the schema the ``expected``.
+    Test: tests/audit/test_scenario_body_oracle.py — extra field and wrong
+    type both red; an honest closed body returns None."""
+    validator_cls = _schema_validator()
+    if validator_cls is None:
+        return None
+    try:
+        doc = json.loads(text)
+    except Exception:  # noqa: BLE001 — a non-JSON body: nothing to validate
+        return None
+    try:
+        errors = list(validator_cls(schema).iter_errors(doc))
+    except Exception:  # noqa: BLE001 — a malformed schema is not a body red
+        return None
+    if errors:
+        return ("body matching response schema %s" % _show(schema),
+                "body %s violates schema (%s)"
+                % (_show(text), errors[0].message))
+    return None
+
+
+def _judge(then: dict, status: Any, media: str, text: str,
+           op: Any = None) -> Optional[tuple]:
+    """Judge one then-clause; returns (expected, got) on violation.
+
+    Why: status, media and the hand body_check (equals/contains/json_subset)
+    are the historical judgement; S14.7 ADDS a library check of the live body
+    against the route's CLOSED response schema (``op`` for the achieved
+    status) so a wrong-type or extra-field violation the hand subset misses
+    still reds the scenario.
+    What: runs the four hand checks unchanged, then — only when ``op``
+    declares a closed schema for ``status`` — validates the body with the
+    schema library; the library red is returned after the hand red so an
+    explicit body_check still wins the attribution.
+    Test: tests/audit/test_scenario_runner_oracle.py (hand paths) and
+    tests/audit/test_scenario_body_oracle.py (library path)."""
     want = then.get("status")
     if want is not None and str(status) != str(want):
         return ("status %s" % want, "status %s" % status)
@@ -254,6 +388,11 @@ def _judge(then: dict, status: Any, media: str, text: str) -> Optional[tuple]:
             if not _json_subset(expected, doc):
                 return ("body json_subset %s" % _show(expected),
                         "body %s" % _show(text))
+    # S14.7 — additive library check against the CLOSED response schema, run
+    # after the hand body_check so an explicit hand red keeps attribution.
+    schema = _response_schema(op, status)
+    if isinstance(schema, dict):
+        return _schema_violation(schema, text)
     return None
 
 
@@ -278,7 +417,14 @@ def run_scenarios(ir: dict, wsgi_app: Any = None,
     Test: tests/audit/test_scenario_runner_oracle.py.
     """
     res: dict = {"ok": True, "refused": [], "failures": [],
-                 "incomplete": [], "passed": 0}
+                 "incomplete": [], "passed": 0, "notes": []}
+    # S14.7 honesty: if a CLOSED response schema is contracted anywhere but
+    # the schema library is absent, the runner degrades to the hand body_check
+    # and records ONE note — never a hard crash, never a silent downgrade.
+    if _schema_validator() is None and _any_closed_schema(ir):
+        res["notes"].append(
+            "openapi-schema-validator unavailable — response bodies judged by "
+            "the hand body_check only (closed-schema validation skipped)")
     try:
         import spec_ir
     except ImportError:
@@ -393,7 +539,10 @@ def _run_one(nid: str, sc: dict, app: Any, registry: dict,
                 "expected": "a served request",
                 "got": _show("crash: %s" % exc)})
             return
-        bad = _judge(sc.get("then") or {}, status, media, text)
+        # the op for the achieved route+status carries the CLOSED response
+        # schema the live body is validated against (S14.7)
+        op = registry.get((method, path))
+        bad = _judge(sc.get("then") or {}, status, media, text, op)
         if bad:
             res["failures"].append({
                 "requirement": req, "node": nid, "step": label,
