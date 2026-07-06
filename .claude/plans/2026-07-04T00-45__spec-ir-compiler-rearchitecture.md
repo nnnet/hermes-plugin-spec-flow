@@ -67,6 +67,9 @@ graph:
   - {id: I2, needs: [I1],             parallel: "",        status: "[ ]", files: [spec_ir.py, spec_flow_runner.py]}
   - {id: I3, needs: [I2],             parallel: "",        status: "[ ]", files: [spec_flow_runner.py]}
   - {id: J1, needs: [],               parallel: "",        status: "[ ]", files: [spec_flow_runner.py, spec_skeletons.py, tests/audit/]}
+  - {id: K1, needs: [],               parallel: "",        status: "[~]", files: [spec_openapi.py, tests/audit/, tests/requirements-dev.txt]}
+  - {id: K2, needs: [K1],             parallel: "",        status: "[ ]", files: [tests/harness/llm_decomposer.py, spec_flow_runner.py, spec_ir.py]}
+  - {id: K3, needs: [K2],             parallel: "",        status: "[ ]", files: [spec_flow_runner.py]}
   - {id: H8, needs: [],               parallel: "wave-h1", status: "[x]", files: [spec_flow_runner.py]}
   - {id: G3, needs: [],               parallel: "",        status: "[x]", files: [spec_flow_runner.py, tests/decomposition/]}
   - {id: G4, needs: [G3],             parallel: "",        status: "[x]", files: [tests/]}
@@ -457,6 +460,43 @@ HITL-инъекции посреди прогона. Недостающее бе
 
 Sources: github/spec-kit, spec-driven.md, Specmatic: MCP as guardrails,
 Schemathesis, awesome-ralph.
+
+### Узлы K — OpenAPI 3.1 БИБЛИОТЕКОЙ, спека первична машинной (2026-07-06, СУПЕРПРИОРИТЕТ)
+
+Требование юзера: спеки писать/читать/валидировать стандартом OpenAPI 3.1
+ЧЕРЕЗ БИБЛИОТЕКУ, а не прозой .md и не рукописным stdlib. Корень провала
+v165: команда ноды ушла прозой (ping_text.md) → дрейф → get_ping потерян.
+Проза .md должна стать ПРОИЗВОДНОЙ, источник — машинный OpenAPI-документ ноды.
+openapi-spec-validator 0.9.0 установлен, зафиксирован в
+tests/requirements-dev.txt; проверено — библиотека ЕСТ наш compile_openapi
+без правок.
+
+### [~] K1 `openapi-lib-validator` — валидация спеки библиотекой, не рукописно
+- выход: spec_openapi валидирует документ через openapi-spec-validator
+  (стандарт-оракул) рядом с рукописным lint_openapi (наши доп-правила
+  поверх); либа ловит нарушения OpenAPI 3.1, которых рукописный lint не знает
+- приёмка: красный кейс — сломанный OpenAPI (bad $ref/тип) ловится
+  библиотекой; наш compile_openapi проходит; расхождение lib↔lint = сигнал
+- заметки: первый шаг, зона spec_openapi не пересекается с J1
+  (runner/skeletons). Начат 2026-07-06
+
+### [ ] K2 `decomposer-emits-openapi` — декомпозер выдаёт OpenAPI-документ ноды
+- выход: декомпозер эмитит машинный OpenAPI 3.1 фрагмент ноды как ПЕРВИЧНЫЙ
+  носитель интерфейса (не прозу); движок читает/валидирует его библиотекой;
+  E1 (decomposer-emits-ir) расширяется до полного OpenAPI-документа
+- приёмка: нода приходит OpenAPI-документом; невалидный по библиотеке =
+  честный отказ (не молчаливая проза); interface_policy ir-required (H8)
+  краснеет на прозе. Класс v165 (потерянный get_ping) невозможен —
+  маршрут в машинном контракте с первого шага
+- заметки: сердце требования; зона декомпозер+runner пересекается с J1 —
+  порядок влития J1 → K2
+
+### [ ] K3 `prose-is-derived` — .md генерируется ИЗ OpenAPI, не наоборот
+- выход: specs/*.md компилируются из машинного OpenAPI-документа ноды
+  (читалка для человека), источник — OpenAPI; проза больше не носитель команды
+- приёмка: .md детерминированно выводится из OpenAPI; правка .md ничего не
+  меняет в сборке (не источник)
+- заметки: замыкает переворот формата спеки
 
 ### Узлы J — разбор провала p6 v165: вброшенный маршрут не реализуется (2026-07-06)
 

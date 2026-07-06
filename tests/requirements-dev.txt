@@ -1,0 +1,8 @@
+# spec-flow dev/test deps (audit oracles + harness)
+pytest==9.1.1
+fastapi==0.139.0
+jsonschema==4.26.0
+openapi-spec-validator==0.9.0
+openapi-schema-validator==0.9.0
+uvicorn==0.50.0
+schemathesis==4.22.3
