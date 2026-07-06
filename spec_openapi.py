@@ -245,6 +245,36 @@ def _walk_refs(doc: dict, node: Any, where: str, findings: list) -> None:
             _walk_refs(doc, value, "%s[%d]" % (where, i), findings)
 
 
+def validate_openapi_library(doc: dict) -> list:
+    """K1/S16.7: validate the document with the THIRD-PARTY
+    openapi-spec-validator (a maintained OpenAPI 3.1 standard oracle),
+    returning a list of human-readable errors ([] == standard-valid).
+
+    Why: the engine hand-rolled OpenAPI lint on stdlib; the point of the
+    IR-as-OpenAPI form is that a maintained library can read it. This is the
+    external-oracle pattern (Specmatic/Schemathesis/jsonschema) applied to the
+    compiled document itself — a real 3.1 validator catches spec violations
+    our lint never enumerated, and a disagreement between the two is a signal.
+    What: runs `openapi_spec_validator.validate`; a raised OpenAPIValidation
+    error (or any validation error) becomes one error string. The library is
+    a dev/test oracle (tests/requirements-dev.txt), imported lazily so the
+    engine does not hard-depend on it at import time.
+    Test: tests/audit/test_openapi_library_validator.py."""
+    try:
+        from openapi_spec_validator import validate as _validate
+        from openapi_spec_validator.validation.exceptions import (
+            OpenAPIValidationError)
+    except ImportError as exc:  # oracle absent — report, never crash the engine
+        return ["openapi-spec-validator not installed: %s" % exc]
+    try:
+        _validate(doc)
+        return []
+    except OpenAPIValidationError as exc:
+        return [str(exc).splitlines()[0] if str(exc) else "invalid OpenAPI"]
+    except Exception as exc:  # noqa: BLE001 — any validator failure is an error
+        return ["%s: %s" % (type(exc).__name__, str(exc).splitlines()[0])]
+
+
 def lint_openapi(doc: dict) -> list:
     """Why: shipping a structurally broken document means the external
     oracles reject it before testing anything — self-check first, stdlib

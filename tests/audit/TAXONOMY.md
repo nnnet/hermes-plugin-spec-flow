@@ -1033,6 +1033,17 @@ pytest collection: `ModuleNotFoundError: No module named 'spec_openapi'`,
   `Allow` absent from both 405 cases (`got headers {'Content-Type':
   'application/json'}`) and `headers.Allow` absent from the compiled
   405 component — with the 2 green guards already passing.
+- S16.7 THE COMPILED OPENAPI IS VALIDATED BY THE STANDARD LIBRARY (node K1,
+  user superpriority 2026-07-06): `spec_openapi.validate_openapi_library(doc)`
+  runs the third-party openapi-spec-validator (a maintained OpenAPI 3.1
+  oracle, pinned in tests/requirements-dev.txt, imported lazily) alongside
+  the hand-rolled lint_openapi. Our compile_openapi output passes the library
+  unmodified (the compiled form IS standard 3.1, not a private dialect); a
+  broken document (missing required field, wrong type) is caught by the
+  library. First rung of "OpenAPI via LIBRARY, not hand-rolled": the deeper
+  переворот is the decomposer emitting an OpenAPI document as the PRIMARY
+  spec (K2) and prose .md becoming a derived readout (K3).
+  (`test_openapi_library_validator.py`)
 
 ## STAGE 17 — Skeleton compiler: the ENGINE writes the module skeleton
 (`test_skeleton_compiler.py`, `test_skeleton_write_door.py`)
