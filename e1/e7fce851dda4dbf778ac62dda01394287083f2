@@ -1,0 +1,21 @@
+tests/lib/live_dashboard.py
+  s_a0fd4933cab6db::t_f96f67fa3cd8a8 284-287,1323-1364,1382-1384,1419-1423,1733-1790,2062,3058-3059,3732-3739
+tests/dashboard/test_dashboard_carrier_error.py
+  s_a0fd4933cab6db::t_f96f67fa3cd8a8 1-182
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "e1e7fce851dda4dbf778ac62dda01394287083f2",
+  "prompts": {},
+  "sessions": {
+    "s_a0fd4933cab6db": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f44efdfd-5e4c-4895-8a1a-c149a64ab4a0",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
