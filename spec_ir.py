@@ -97,7 +97,7 @@ _PRODUCT_KEYS = {"kind", "entry", "callable", "pinned_files", "requirements"}
 # feature (``behavior``) — the primary carrier for storage/lib nodes that own
 # no route, validated by spec_gherkin at the decomposer seam.
 _NODE_KEYS = {"children", "files", "openapi", "symbols", "env", "scenarios",
-              "dependencies", "effects", "behavior"}
+              "dependencies", "effects", "behavior", "code_target"}
 # H5/S13.7: a requirement is a bare name or {name, version?}.
 _REQUIREMENT_KEYS = {"name", "version"}
 # H6/S17.5: the effect classes a node may declare it is contracted to perform.
@@ -286,7 +286,12 @@ IR_JSON_SCHEMA = {
                     "dependencies": {"type": "array",
                                      "items": {"type": "string"}},
                     "effects": {"type": "array",
-                                "items": {"enum": sorted(_EFFECT_CLASSES)}}},
+                                "items": {"enum": sorted(_EFFECT_CLASSES)}},
+                    "behavior": {"type": "string"},
+                    # Q9 (S49): the owner file an amend node edits in place; its
+                    # presence marks a carrier-less-by-design edit node (exempt
+                    # from the hollow check, like a branch/entry).
+                    "code_target": {"type": "string"}},
                 "additionalProperties": False}}},
     "required": ["format", "nodes"],
     "additionalProperties": False}
@@ -750,6 +755,13 @@ def _hollow_node_reason(nid: str, node: Any) -> "Optional[str]":
     Test: tests/audit/test_fail_closed_absence.py."""
     if not isinstance(node, dict):
         return None
+    # Q9 (S49): an AMEND node edits an existing owner IN PLACE (code_target set)
+    # — a late requirement folded into a surface another node owns. It carries
+    # no carrier of its own BY DESIGN (its carrier is the owner's), exactly like
+    # a branch or the assembly entry delegates. The engine already exempts amend
+    # nodes from the card and ownership gates; the hollow check exempts them too.
+    if str(node.get("code_target") or "").strip():
+        return None
     cls = _node_class(node)
     if cls == "branch":
         return None
@@ -904,6 +916,12 @@ def build_ir(engine: Any, sources: "dict | None" = None) -> dict:
             _ee = _entry_exposes(nid, entry.get("files"), contract)
             if _ee:
                 symbols["exposes"] = _ee
+        # Q9 (S49): carry the amend marker into the IR — a node that EDITS an
+        # existing owner in place (code_target) is carrier-less by design and is
+        # exempt from the hollow check (its carrier is the owner's).
+        _ctgt = tn.get("code_target") if isinstance(tn, dict) else None
+        if _ctgt:
+            entry["code_target"] = str(_ctgt)
         consumes: list = []
         for exp_stem in sorted(importers):
             if stem and stem in (importers.get(exp_stem) or set()):

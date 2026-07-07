@@ -2127,6 +2127,21 @@ meaningful ones and drop the noise, never fork a carrier-less leaf per injection
   overlap alone — the v171 miss where 'make the notes nice' forked instead of
   folding into web_ui), unless SPEC_FLOW_AMEND_LLM is explicitly falsey.
 
+## S49 — an AMEND node is not hollow (node Q9 completion)
+Plan 2026-07-06T20-15. Root cause of the persistent v170/v171/v172 hollow on
+req_a54f9144 ('make the notes nice to read'): the amend router DID fire ('late
+requirement routed to EDIT existing surface'), folding the requirement into an
+owner module (code_target set) — carrier-less by design (its carrier is the
+owner's). But code_target was a runtime attribute never serialised to the IR, so
+validate_ir saw a carrier-less node and the Q2 hollow check (S38) flagged it. The
+engine already exempts amend nodes from the card/ownership gates; the IR now
+carries the marker so the hollow check exempts them too (like a branch/entry).
+- S49.1 — `_hollow_node_reason` returns None for a node with code_target; the
+  same node without it is hollow (the verdict hinges on the marker).
+- S49.2 — code_target is an allowed IR node field (schema + _NODE_KEYS) and
+  build_ir serialises it from the tree node. (Also closed a latent gap: `behavior`
+  was in _NODE_KEYS but missing from the jsonschema properties.)
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.
