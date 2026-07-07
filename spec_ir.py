@@ -516,6 +516,28 @@ def _node_class(node: Any) -> str:
     return "other"
 
 
+def _entry_exposes(nid: str, files: Any, contract: Any) -> list:
+    """Q8 (S47): the product callable(s) the ASSEMBLY entry exposes, as typed
+    symbols. The entry node (id ``product_entry`` or the owner of the product
+    entry file, e.g. ``src/app.py``) wires every module's routes into ONE
+    callable (``wsgi_app`` / ``application`` / ``app``); that callable IS its
+    public surface. Recording it makes the entry a code node with a real typed
+    contract instead of a carrier-less hollow shell (it delegates like a branch,
+    but the hollow check sees a leaf). Empty for any other node or when the
+    product declared no callable — single-source: the names come from the
+    engine-declared product contract, never invented.
+    Test: tests/audit/test_entry_exposes_carrier.py."""
+    contract = contract if isinstance(contract, dict) else {}
+    entry_file = str(contract.get("entry") or "")
+    callables = [str(c) for c in (contract.get("callable") or []) if c]
+    files = files if isinstance(files, list) else []
+    is_entry = (nid == "product_entry"
+                or (entry_file != "" and entry_file in files))
+    if not (is_entry and callables):
+        return []
+    return [{"name": c, "args": None} for c in callables]
+
+
 def _http_owns_routes(node: Any) -> bool:
     """Whether an HTTP node actually declares at least one operation path."""
     doc = node.get("openapi")
@@ -875,6 +897,13 @@ def build_ir(engine: Any, sources: "dict | None" = None) -> dict:
         symbols: dict = {}
         if stem and contracts_sym.get(stem):
             symbols["exposes"] = [dict(e) for e in contracts_sym[stem]]
+        # Q8 (S47): the assembly entry exposes the declared product callable
+        # (wsgi_app/…) — record it when the module contract carried none, so the
+        # entry node is a code node with a real surface, not a hollow shell.
+        if not symbols.get("exposes"):
+            _ee = _entry_exposes(nid, entry.get("files"), contract)
+            if _ee:
+                symbols["exposes"] = _ee
         consumes: list = []
         for exp_stem in sorted(importers):
             if stem and stem in (importers.get(exp_stem) or set()):

@@ -2094,6 +2094,23 @@ a childless carrier-less node as hollow — a FALSE red from a stale tree datum.
 Note: this is not a hollow-check regression — the Q2 check is right; it was fed a
 stale tree. The fix restores the single-source timing, not the gate.
 
+## S47 — the assembly entry is not hollow (node Q8)
+Plan 2026-07-06T20-15. Root cause of the v170 false-hollow on `product_entry`:
+the entry owns the product entry file (src/app.py) and wires every module's
+routes into ONE product callable (wsgi_app), but its `symbols.exposes` was never
+recorded, so `_node_class` saw a carrier-less "other" node and the Q2 hollow
+check (S38) flagged it. The entry DOES expose the declared callable; recording
+it makes the entry a code node with a real typed contract.
+- S47.1 — `_entry_exposes(nid, files, contract)` returns the product callable(s)
+  as typed exposes for the entry (id 'product_entry' or the owner of the entry
+  file); empty for any other node or when no callable is declared. Single-source:
+  names from the declared product contract, never invented.
+- S47.2 — a node carrying those exposes classifies as code and is NOT hollow;
+  the same node without them is genuinely hollow (the verdict hinges on the
+  recorded surface).
+- S47.3 — build_ir wires `_entry_exposes` to fill the entry's exposes when the
+  module contract recorded none.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.
