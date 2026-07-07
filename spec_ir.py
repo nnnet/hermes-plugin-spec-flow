@@ -273,7 +273,11 @@ IR_JSON_SCHEMA = {
             "additionalProperties": {
                 "type": "object",
                 "properties": {
-                    "children": {"type": "object"},
+                    # Q11 (S51): children is the list of child node ids
+                    # ("children?: [child node ids]"), as build_ir writes and all
+                    # engine code reads it — NOT an object. The wrong type was
+                    # latent until Q7 made every node carry children.
+                    "children": {"type": "array", "items": {"type": "string"}},
                     "files": {"type": "array"},
                     "openapi": {"type": "object"},
                     "symbols": {"type": "object",

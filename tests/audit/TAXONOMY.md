@@ -2159,6 +2159,20 @@ IR-write). S50 pulls the machine-spec requirement UP to the per-node card gate.
   clears the gap; a branch and an amend are exempt (they carry no own carrier by
   design).
 
+## S51 — the IR jsonschema accepts `children` as a list of ids (node Q11)
+Plan 2026-07-06T20-15. The node schema declared `children: {type: object}` but
+build_ir writes and all engine code reads `children` as an ARRAY of id strings.
+Latent while `children` was usually absent; Q7 (publish the tree before the
+visit) made every node carry it, so every node reddened `ir_jsonschema`
+("[...] is not of type 'object'", 8 errors on v176) and the run "finished with
+an error" though its graph was clean (closed-world 0) and its assembled product
+tests passed. S51 corrects the schema to the documented shape
+("children?: [child node ids]").
+- S51.1/.2 — a list of ids (and an empty list, which every node now carries)
+  validates clean.
+- S51.3 — an object or a non-string child is still rejected (precise, not
+  permissive).
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.
