@@ -105,7 +105,7 @@ graph:
   - {id: Q6, needs: [],   parallel: "",  status: "[x]", files: [tests/harness/llm_backend.py, tests/audit/]}
   - {id: Q7, needs: [Q2], parallel: "",  status: "[x]", files: [spec_flow_runner.py, tests/audit/]}
   - {id: Q8, needs: [Q2], parallel: "",  status: "[x]", files: [spec_ir.py, tests/audit/]}
-  - {id: Q9, needs: [Q8], parallel: "",  status: "[ ]", files: [spec_flow_runner.py, tests/audit/]}
+  - {id: Q9, needs: [Q8], parallel: "",  status: "[~]", files: [spec_flow_runner.py, tests/audit/]}
 ```
 
 ### Q8 `entry-not-hollow` — сборочный вход экспонирует product-callable (влито, S47)

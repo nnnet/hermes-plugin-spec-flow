@@ -2111,6 +2111,22 @@ it makes the entry a code node with a real typed contract.
 - S47.3 — build_ir wires `_entry_exposes` to fill the entry's exposes when the
   module contract recorded none.
 
+## S48 — HITL injection triage: drop noise, arm the semantic owner router (node Q9)
+Plan 2026-07-06T20-15. An injection can be anything — a refinement, a feature, a
+scope change, or plain noise (a poem/joke/off-topic). The engine must fold the
+meaningful ones and drop the noise, never fork a carrier-less leaf per injection
+(the v170/v171 hollow blockers). The owner-attach machinery already existed
+(_amend_find_owner + SPEC_FLOW_AMEND_LLM); S48 adds the missing branches.
+- S48.1/.2 — `_injection_is_noise(stmt, concern)`: a content-token overlap test
+  (with a crude plural fold) drops CLEAR noise (zero overlap with the product
+  goal) in `_requirement_nodes`, emitting an `injection_triage NOISE` milestone;
+  conservative — any shared token keeps the requirement for the attach/carrier
+  path, so a real refinement is never dropped on a weak signal.
+- S48.3 — `_amend_llm_enabled()`: the semantic owner router is armed by DEFAULT
+  whenever amend is on (an injection's owner is analysed, not left to token
+  overlap alone — the v171 miss where 'make the notes nice' forked instead of
+  folding into web_ui), unless SPEC_FLOW_AMEND_LLM is explicitly falsey.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.

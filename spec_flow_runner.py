@@ -2084,6 +2084,63 @@ def _capability_probe_src(entry_module: str, symbol: str) -> str:
         % (entry_module, sym, entry_module, sym, sym, sym, sym))
 
 
+# Q9 (S48): injection triage. A HITL injection can be ANYTHING — a refinement,
+# a new feature, a scope change, or plain noise (a poem, a joke, off-topic). The
+# engine folds the MEANINGFUL ones into the plan and drops the noise, so it never
+# forks a carrier-less leaf per injection (the v170/v171 hollow blockers).
+_TRIAGE_STOP = frozenset((
+    "the", "a", "an", "to", "is", "are", "am", "be", "been", "being", "of",
+    "for", "you", "your", "it", "its", "by", "at", "here", "there", "and",
+    "or", "with", "as", "in", "on", "this", "that", "these", "those", "can",
+    "will", "shall", "should", "would", "not", "no", "do", "does", "did",
+    "why", "how", "what", "when", "where", "who", "so", "if", "then", "than",
+    "into", "from", "out", "up", "down", "add", "make", "get", "set", "use",
+    "please", "want", "need", "like", "just", "some", "any", "all", "one",
+))
+
+
+def _meaningful_tokens(text: Any) -> set:
+    """Q9 (S48): the content tokens of a phrase — lowercased alphabetic words of
+    length >= 3, minus stopwords, with a crude English plural fold (notes->note)
+    so 'a note' and 'the notes' share a token. Used to measure whether an
+    injection touches the product's concern at all."""
+    out: set = set()
+    for raw in re.findall(r"[A-Za-z]+", str(text or "").lower()):
+        if len(raw) < 3 or raw in _TRIAGE_STOP:
+            continue
+        if len(raw) > 3 and raw.endswith("s"):
+            raw = raw[:-1]          # crude plural fold: notes -> note
+        out.add(raw)
+    return out
+
+
+def _injection_is_noise(statement: Any, concern: Any) -> bool:
+    """Q9 (S48): True when an injection shares NO content token with the product
+    concern — a poem/joke/off-topic note that must not become a plan node.
+    Conservative by design: with an empty concern, or ANY shared token, the
+    injection is NOT noise (never drop a real requirement on a weak signal —
+    the owner-attach/carrier path handles the ambiguous middle)."""
+    ctoks = _meaningful_tokens(concern)
+    if not ctoks:
+        return False
+    return not (_meaningful_tokens(statement) & ctoks)
+
+
+def _amend_llm_enabled() -> bool:
+    """Q9 (S48): is the SEMANTIC owner router armed? On by DEFAULT whenever amend
+    is enabled (an injection's owner is analysed, not left to deterministic token
+    overlap alone — the v171 miss where 'make the notes nice' forked instead of
+    folding into web_ui), unless SPEC_FLOW_AMEND_LLM is explicitly falsey."""
+    amend_on = os.environ.get("SPEC_FLOW_REQ_AMEND", "") not in (
+        "", "0", "false", "False", "no")
+    explicit = os.environ.get("SPEC_FLOW_AMEND_LLM", "")
+    if explicit in ("0", "false", "False", "no"):
+        return False
+    if explicit not in ("",):
+        return True
+    return amend_on
+
+
 def _amend_find_owner(statement: str, modules: list, methods=None,
                       candidates_text=None, llm=None) -> "Optional[str]":
     """Decide which existing module (if any) owns the surface this requirement
@@ -3482,6 +3539,24 @@ class Engine:
                 continue            # already covered by an existing node
             if scope is not None and req_scope != scope:
                 continue
+            # Q9 (S48): triage — an injection unrelated to the product concern
+            # (a poem, a joke, an off-topic note) is DROPPED with a recorded
+            # reason, never materialised as a carrier-less leaf. Conservative:
+            # only CLEAR noise (zero content-token overlap with the goal) is
+            # dropped; a refinement or feature that touches the concern flows on
+            # to the normal attach (amend) / carrier path.
+            _concern = str((self.__dict__.get("_project_meta") or {}).get(
+                "goal", "") or "")
+            if _concern and _injection_is_noise(statement, _concern):
+                if name not in self.__dict__.setdefault(
+                        "_injection_noise_seen", set()):
+                    self._injection_noise_seen.add(name)
+                    self.emit("decompose", "engine", "", nid,
+                              "injection triage: dropped as off-topic noise "
+                              "(no overlap with the product concern)",
+                              " ".join(str(statement).split())[:120],
+                              "injection_triage", "NOISE", level=L_MILESTONE)
+                continue
             if nid != name and name not in self.__dict__.setdefault(
                     "_req_id_renames", set()):
                 self._req_id_renames.add(name)
@@ -3548,10 +3623,10 @@ class Engine:
         if not modules:
             return None
         cand_text = {rel: body[:400] for rel, _stem, body in modules}
-        llm = None
-        if os.environ.get("SPEC_FLOW_AMEND_LLM", "") not in (
-                "", "0", "false", "False", "no"):
-            llm = self._amend_llm_router
+        # Q9 (S48): the semantic owner router is armed by default under amend,
+        # so a refinement with no deterministic signal ('make the notes nice')
+        # still folds into its owner instead of forking a carrier-less leaf.
+        llm = self._amend_llm_router if _amend_llm_enabled() else None
         owner = _amend_find_owner(stmt, modules, candidates_text=cand_text,
                                   llm=llm)
         if owner and _entry_stem and Path(owner).stem == _entry_stem:
