@@ -5331,7 +5331,28 @@ class Engine:
                     "refused from importing an uncontracted module"
                     % (_stem, ", ".join(sorted(_imps)), _stem))
         if not self._leaf_exposed_symbols(node):
-            return out                      # exposes nothing → no card required
+            # Q10 (S50): HARD rule — a leaf may not pass spec_lint without a
+            # validated MACHINE spec. A leaf that exposes no typed symbols must
+            # still carry a machine carrier: an HTTP route (openapi paths) or
+            # executable scenarios/behaviour (Gherkin). A leaf with NONE is
+            # carrier-less — prose is not a spec. Amend leaves (code_target)
+            # edit an owner whose card was gated, so they are exempt. The gap is
+            # fillable (the decomposer adds a route/scenarios on the same rework
+            # round that fills a card) or the leaf is re-decomposed; it MUST NOT
+            # pass silently (v174/web_ui reached PASS as an empty {children:[]}).
+            if not node.get("code_target"):
+                _oa_paths = (node.get("openapi") or {}).get("paths") or {}
+                _exposes = (node.get("symbols") or {}).get("exposes")
+                if not (_oa_paths or node.get("scenarios")
+                        or node.get("behavior") or _exposes):
+                    out.append(
+                        "atomic leaf carries NO machine spec — it exposes no "
+                        "typed symbols, owns no HTTP route (openapi paths), and "
+                        "declares no executable scenarios/behaviour (Gherkin); a "
+                        "machine spec is MANDATORY (prose is not a spec). Add a "
+                        "route + scenarios, or typed `exposes`, or return "
+                        "CHILDREN.")
+            return out                      # exposes nothing → carrier-checked
         acc = node.get("acceptance")
         if not acc or not [a for a in (acc if isinstance(acc, list) else [acc])
                            if str(a).strip()]:

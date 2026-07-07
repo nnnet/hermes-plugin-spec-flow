@@ -2142,6 +2142,23 @@ carries the marker so the hollow check exempts them too (like a branch/entry).
   build_ir serialises it from the tree node. (Also closed a latent gap: `behavior`
   was in _NODE_KEYS but missing from the jsonschema properties.)
 
+## S50 — a leaf may NOT pass spec_lint without a validated MACHINE spec (node Q10)
+HARD project rule (owner): prose is not a spec; a node cannot pass spec_lint
+without a validated machine spec. Observed on v174/web_ui: a late-injected
+HTML-page leaf reached spec_lint PASS while its IR node was {children: []} — no
+route, no scenarios, no typed exposes. The card gate was INERT for a leaf that
+exposes nothing (it only demanded acceptance when a surface already existed), so
+a carrier-less leaf sailed through and only reddened far downstream (hollow at
+IR-write). S50 pulls the machine-spec requirement UP to the per-node card gate.
+- S50.1 — `_card_completeness_findings`: an atomic leaf that is neither a branch
+  (children) nor an amend (code_target) and carries NO machine spec — no HTTP
+  route (openapi paths), no scenarios, no Gherkin behaviour, no typed exposes —
+  yields a card gap. Fillable on the same decomposer rework round that fills a
+  card, or the leaf is re-decomposed; it never passes silently.
+- S50.2/.3 — any real carrier (route / scenarios / behaviour / typed exposes)
+  clears the gap; a branch and an amend are exempt (they carry no own carrier by
+  design).
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.
