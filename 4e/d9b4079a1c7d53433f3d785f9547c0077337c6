@@ -1,0 +1,24 @@
+spec_ir.py
+  s_a0fd4933cab6db::t_7cb91c535d9374 519-540
+  s_a0fd4933cab6db::t_6dd0296f3c495c 900-906
+tests/audit/test_entry_exposes_carrier.py
+  s_a0fd4933cab6db::t_fad9a02b95ff89 1-79
+tests/audit/TAXONOMY.md
+  s_a0fd4933cab6db::t_f1c026087f17cc 2097-2113
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "4ed9b4079a1c7d53433f3d785f9547c0077337c6",
+  "prompts": {},
+  "sessions": {
+    "s_a0fd4933cab6db": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f44efdfd-5e4c-4895-8a1a-c149a64ab4a0",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
