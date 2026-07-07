@@ -281,6 +281,10 @@ def _flatten(node: dict, depth: int, out: dict, parent: str | None) -> None:
         "verdict": "branch" if node.get("children") else "leaf",
         "episodes": eps,
         "metrics": node.get("metrics", {}),
+        # carried so the spec panel can tell a mid-build leaf (pending) from a
+        # finished leaf with no machine carrier (a terminal error) — see
+        # _node_spec_fields.
+        "pending": bool(node.get("pending")),
     }
     for c in node.get("children", []) or []:
         _flatten(c, depth + 1, out, nid)
@@ -1316,6 +1320,48 @@ def _node_is_http(node: dict) -> bool:
     return bool(paths)
 
 
+def _node_has_machine_carrier(node: dict) -> bool:
+    """True iff the node carries a VALIDATED machine spec surface in the IR.
+
+    Why (user 2026-07-06, HARD): the panel must render the MACHINE spec — the
+    node's OpenAPI operations, its Gherkin scenarios or its typed symbols. Prose
+    is NOT a spec. A node with none of those has NO machine carrier; that is an
+    ERROR state to surface honestly, never to hide behind the derived `.md`.
+    What: True when the node has a non-empty OpenAPI paths map, at least one
+    Given/When/Then scenario, or at least one exposed/consumed typed symbol.
+    Test: tests/dashboard/test_dashboard_carrier_error.py.
+    """
+    if not isinstance(node, dict):
+        return False
+    if _node_is_http(node):
+        return True
+    if node.get("scenarios"):
+        return True
+    symbols = node.get("symbols") or {}
+    if isinstance(symbols, dict) and (symbols.get("exposes")
+                                      or symbols.get("consumes")):
+        return True
+    return False
+
+
+def _node_no_carrier_html(nid: str) -> str:
+    """Honest ERROR block for a node with NO validated machine carrier (HARD).
+
+    Why: a missing machine spec is an ERROR — it must be shown as such (red),
+    NOT hidden, NOT faked green, NOT filled with `.md` prose. This block is what
+    the spec panel renders in place of a machine standard when the node carries
+    no OpenAPI/Gherkin/symbols surface, so the reader sees the gap plainly.
+    What: a red <div class="specstd specstd-missing"> stating no machine spec.
+    Test: tests/dashboard/test_dashboard_carrier_error.py.
+    """
+    return ('<div class="specstd specstd-missing" '
+            'title="узел не несёт машинного носителя спеки '
+            '(ни OpenAPI, ни Gherkin, ни типизированных символов)">'
+            '<b>❌ нет машинной спеки</b> — узел <code>%s</code> не несёт '
+            'валидированного носителя (OpenAPI 3.1 / Gherkin / symbols). '
+            'Проза specs/*.md спекой не является.</div>' % _esc(nid))
+
+
 def _node_standard_spec_html(nid: str, node: dict) -> str:
     """Render a node's spec as MACHINE STANDARD, not prose (N5, S33).
 
@@ -1333,6 +1379,9 @@ def _node_standard_spec_html(nid: str, node: dict) -> str:
     node's block carries When/Then and the exposed symbol; an HTTP node's block
     carries its routes table.
     """
+    # HARD: no machine carrier -> honest ERROR, never a soft note, never prose.
+    if not _node_has_machine_carrier(node):
+        return _node_no_carrier_html(nid)
     parts: list = ['<div class="specstd">']
     openapi = node.get("openapi") or {} if isinstance(node, dict) else {}
     if _node_is_http(node):
@@ -1367,8 +1416,11 @@ def _node_standard_spec_html(nid: str, node: dict) -> str:
             parts.append("<p class=muted>сценарии (Gherkin Given/When/Then):</p>"
                          + "".join(_ir_scenario_html(s) for s in scenarios))
         if not exposes and not consumes and not scenarios:
-            parts.append('<p class=dim>машинный носитель ещё не выгружен — '
-                         'ir.json наполняется по ходу.</p>')
+            # Defence in depth: the carrier guard above already returns the
+            # error block, so this branch is unreachable — but if a future
+            # carrier kind slips past it, still surface the gap honestly,
+            # never a soft 'not yet dumped' note that reads like a transient.
+            return _node_no_carrier_html(nid)
     parts.append('</div>')
     return "".join(parts)
 
@@ -1678,6 +1730,64 @@ def _ir_report_html(run_dir: pathlib.Path) -> str:
     return "".join(out)
 
 
+def _node_spec_fields(nid: str, ir_nodes: dict, meta_node: dict) -> dict:
+    """The three spec-panel data (`spec_primary`/`spec_validated`/`spec_standard`)
+    for one node, with the HARD 'no machine carrier = error' rule enforced.
+
+    Why (user 2026-07-06): the panel must show the MACHINE spec and NOTHING may
+    fall through to prose. A node absent from ir.json, or present with no OpenAPI
+    /Gherkin/symbols surface, has NO machine carrier — an ERROR to show honestly,
+    never an empty string that lets the client render `.md` prose as the spec.
+    A branch node (owns children, not a leaf) delegates its surface to its leaves
+    and is not itself carrier-less; a still-pending leaf is mid-build, marked as
+    such rather than as a terminal error (constraint 4).
+    What: returns spec_primary (provenance), spec_validated (M3 badge) and
+    spec_standard (machine block). For a carrier-less leaf, spec_standard is the
+    red no-carrier block and spec_validated is empty (no green to fake); a
+    branch or a pending leaf yields a muted note, never a false green.
+    Test: tests/dashboard/test_dashboard_carrier_error.py.
+    """
+    node = ir_nodes.get(nid) or {}
+    is_branch = str(meta_node.get("verdict")) == "branch"
+    is_pending = bool(meta_node.get("pending"))
+    if _node_has_machine_carrier(node):
+        return {
+            "spec_primary": _node_spec_provenance_html(node),
+            "spec_validated": _node_spec_validation_html(nid, node),
+            "spec_standard": (_node_standard_badge_html(nid, node)
+                              + _node_standard_spec_html(nid, node)),
+        }
+    if is_branch:
+        # A branch owns children; its machine surface lives in its leaves. This
+        # is not a carrier error — note it, do not fake a green leaf spec.
+        return {
+            "spec_primary": "",
+            "spec_validated": "",
+            "spec_standard": ('<div class="specstd" title="ветвь делегирует '
+                              'интерфейс листьям">'
+                              '<p class=muted>ветвь: машинная спека собирается '
+                              'из листьев-потомков</p></div>'),
+        }
+    if is_pending:
+        # A leaf still being processed: mid-build, not a terminal failure — but
+        # the absence is still surfaced (never silently ok, never prose).
+        return {
+            "spec_primary": "",
+            "spec_validated": "",
+            "spec_standard": ('<div class="specstd specstd-pending" '
+                              'title="лист ещё обрабатывается">'
+                              '<p class=muted>⏳ лист обрабатывается — '
+                              'машинный носитель ещё не выгружен в ir.json; '
+                              'проза спекой не является</p></div>'),
+        }
+    # A finished leaf with NO machine carrier: this is an ERROR, shown honestly.
+    return {
+        "spec_primary": "",
+        "spec_validated": "",
+        "spec_standard": _node_no_carrier_html(nid),
+    }
+
+
 def _build_state(run_dir: pathlib.Path) -> dict:
     events = _read_jsonl(run_dir / "trace.jsonl")
     llm = _read_jsonl(run_dir / "llm-log.jsonl")
@@ -1949,15 +2059,7 @@ def _build_state(run_dir: pathlib.Path) -> dict:
         # its per-standard validation badge — the panel shows the machine spec
         # in its standard, the .md prose being a derived secondary view.
         "nodes": {nid: {**meta[nid], "files": files.get(nid, {}),
-                        "spec_primary": _node_spec_provenance_html(
-                            ir_nodes.get(nid, {})),
-                        "spec_validated": (
-                            _node_spec_validation_html(nid, ir_nodes[nid])
-                            if nid in ir_nodes else ""),
-                        "spec_standard": (
-                            _node_standard_badge_html(nid, ir_nodes[nid])
-                            + _node_standard_spec_html(nid, ir_nodes[nid])
-                            if nid in ir_nodes else ""),
+                        **_node_spec_fields(nid, ir_nodes, meta[nid]),
                         "events": ev_idx.get(nid, [])} for nid in meta},
         "feed": feed[-60:],
         "timeline": timeline[-250:],
@@ -2953,6 +3055,8 @@ pre.code{background:var(--panel);padding:10px;border-radius:6px;overflow:auto;wh
 .stdchip.bad{color:#f85149;border-color:#f8514966}
 .stdchip.na{color:var(--dim-2)}
 .specstd{margin:6px 0;padding:6px 8px;border-left:2px solid var(--panel-2)}
+.specstd-missing{border-left-color:var(--bad,#e5534b);background:color-mix(in srgb,var(--bad,#e5534b) 10%,transparent);color:var(--fg)}
+.specstd-pending{border-left-color:var(--warn,#d29922);background:color-mix(in srgb,var(--warn,#d29922) 8%,transparent)}
 .badge{font-size:9px;vertical-align:middle;letter-spacing:1px}
 .actv{color:var(--warn);font-weight:700}
 .errbox{background:var(--err-soft);border:1px solid color-mix(in srgb,var(--err) 40%,transparent);border-radius:6px;padding:6px 10px;margin:8px 0;font-size:12px}.errbox li{margin:2px 0}
@@ -3625,7 +3729,14 @@ async function renderNodeBody(nd){
    // M3: whether the spec is VALIDATED (green ✓ / N errors), shown above the
    // spec prose so the reader sees validation status on the spec itself.
    const valid=nd.spec_validated||'';
-   const proseHdr=(std||prov)?'<p class=muted>ниже — проза (производная от машинной спеки, вторична)</p>':'';
+   // HARD: a node with no machine carrier renders a red error block (marker
+   // class specstd-missing). In that case the .md is NOT a derived-from-spec
+   // view — there is no spec to derive from — so the prose is labelled as
+   // non-spec reference material, never presented as the node's spec.
+   const missing=std.indexOf('specstd-missing')!==-1;
+   const proseHdr=missing
+     ?'<p class=muted>ниже — проза specs/*.md как справка; она НЕ является спекой узла (машинного носителя нет)</p>'
+     :((std||prov)?'<p class=muted>ниже — проза (производная от машинной спеки, вторична)</p>':'');
    b.innerHTML=valid+std+prov+proseHdr+(await getMD(f.spec));
  }
  else if(NTAB==='code'){b.innerHTML='<pre class=code>'+esc(await getFile(f.code))+'</pre>';}
