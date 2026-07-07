@@ -1,0 +1,26 @@
+tests/audit/test_amend_node_not_hollow.py
+  s_a0fd4933cab6db::t_8672858acb54bb 1-60
+spec_ir.py
+  s_a0fd4933cab6db::t_5cc3921d17f768 100
+  s_a0fd4933cab6db::t_7cf483672c0d45 919-924
+  s_a0fd4933cab6db::t_247e08b814e610 289-294
+  s_a0fd4933cab6db::t_fa1424c9353969 758-764
+tests/audit/TAXONOMY.md
+  s_a0fd4933cab6db::t_02a9feda46fa7d 2130-2144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "a642b3ff7c5eeef5f199acaac90e4564a84dc6d4",
+  "prompts": {},
+  "sessions": {
+    "s_a0fd4933cab6db": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f44efdfd-5e4c-4895-8a1a-c149a64ab4a0",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
