@@ -2078,6 +2078,22 @@ SPEC_FLOW_SCHEMATHESIS_FUZZ, budget via SPEC_FLOW_SCHEMATHESIS_MAX.
   could not run — fail-closed, a red, never a silent pass).
 - S45.4 (live) — a violating assembled app reds, a conforming one passes.
 
+## S46 — the realized tree is visible to the IR build DURING decomposition (node Q7)
+Plan 2026-07-06T20-15. Root cause of the v168 false-hollow on L0: the decomposer
+attaches children to `root` in place, but `project["tree"] = root` was published
+only AFTER `_visit` returned — while the incremental IR writes fire INSIDE
+`_visit` at leaf realization. At that moment `_tree_nodes` read an empty tree, so
+every branch serialized childless and the Q2 hollow check (S38) correctly flagged
+a childless carrier-less node as hollow — a FALSE red from a stale tree datum.
+- S46.1 — a node with children classifies as a branch; `_hollow_node_reason`
+  returns None for it (a branch is never hollow); the same node WITHOUT children
+  is genuinely hollow — the verdict hinges on the tree datum being present.
+- S46.2 — `project["tree"] = root` is published BEFORE `self._visit(root, …)`;
+  `root` is mutated in place, so the pre-visit publish stays valid as children
+  are attached and every incremental IR write sees the growing tree.
+Note: this is not a hollow-check regression — the Q2 check is right; it was fed a
+stale tree. The fix restores the single-source timing, not the gate.
+
 ## Convention
 - A check is HONEST: it reds on a real hole, is never softened to pass.
 - Fixes are real engine capabilities, never per-case crutches.

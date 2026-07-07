@@ -103,7 +103,23 @@ graph:
   - {id: Q4, needs: [Q1], parallel: "",  status: "[x]", files: [spec_conformance.py, tests/harness/, tests/requirements-dev.txt, tests/audit/]}
   - {id: Q5, needs: [Q1], parallel: "",  status: "[~]", files: [tests/harness/role_worker.py, tests/requirements-dev.txt, tests/audit/]}
   - {id: Q6, needs: [],   parallel: "",  status: "[x]", files: [tests/harness/llm_backend.py, tests/audit/]}
+  - {id: Q7, needs: [Q2], parallel: "",  status: "[x]", files: [spec_flow_runner.py, tests/audit/]}
 ```
+
+### Q7 `tree-visible-incremental` — реализованное дерево видно IR-сборке ВО ВРЕМЯ декомпозиции
+- выход: `project["tree"] = root` публикуется ДО `_visit`, чтобы инкрементальные
+  IR-записи (идущие внутри `_visit`) видели растущее дерево; ветка не
+  сериализуется без детей
+- приёмка: RED — publish стоит ПОСЛЕ `_visit` → ветка без детей → Q2 ложный
+  hollow; GREEN — publish до visit, ветка с детьми не hollow; Stage S46
+- заметки: вскрыто прогоном v168 — L0 (корневая ветка) сериализовалась пустой
+  (`children=None`), Q2 верно бил hollow по пустому узлу, но корень — stale tree
+  datum: дерево публиковалось после обхода, а инкрементальная запись —
+  внутри. Фикс: одна перестановка (`root` мутируется на месте, publish до visit
+  даёт живой вид). 650 audit green. НЕ регресс gate — gate верный, ему давали
+  устаревшее дерево. Открыто отдельно: дашбордный false-green (C7) — «✓
+  validated» рядом с hollow-FAIL на одном узле; L0-кейс закрыт этим фиксом,
+  общий агрегат бейджей — отдельный узел при надобности
 Зоны Q1/Q2/Q3 толкаются в `spec_flow_runner.py` → worktree, порядок влития
 Q3 → Q2 → Q1. Q4/Q5 после Q1.
 

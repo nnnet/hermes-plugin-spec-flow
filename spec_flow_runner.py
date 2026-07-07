@@ -7792,11 +7792,17 @@ def %(callable)s(environ, start_response):
         # the tree either comes predefined with the case OR is built from the
         # goal by the decomposer agent, node by node (gated at every level)
         root = project.get("tree") or {"id": "L0", "title": project.get("goal", "project")}
-        self._visit(root, depth=0, contract_ctx=None, phase="decompose", parent=None)
-        # persist the REALIZED tree (the decomposer attaches children in place)
-        # so reports can render the tree the plugin actually built — in llm mode
-        # the case carried no `tree`, this is where it becomes inspectable.
+        # Q7 (S46): publish the tree BEFORE visiting. The decomposer attaches
+        # children to `root` IN PLACE, and the incremental IR writes
+        # (_write_ir / _write_ir_incremental) fire INSIDE _visit at leaf
+        # realization. Publishing here — not after _visit returns — makes the
+        # growing tree visible to every incremental build, so a branch (L0
+        # included) is never serialized childless, which the Q2 hollow check
+        # (S38) would otherwise correctly-but-falsely flag on a stale tree. The
+        # same mutable object remains the final realized tree once _visit ends,
+        # so reports still render exactly what the plugin built.
         project["tree"] = root
+        self._visit(root, depth=0, contract_ctx=None, phase="decompose", parent=None)
         # Phase A (spec-IR, S13.1): the realized plan just landed — dump the
         # merged machine IR once so every run carries the artifact.
         self._write_ir()
