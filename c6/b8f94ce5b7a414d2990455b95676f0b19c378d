@@ -1,0 +1,26 @@
+tests/audit/test_leaf_requires_machine_spec.py
+  s_a0fd4933cab6db::t_fdd226a5f61d92 1-95
+spec_flow_runner.py
+  s_a0fd4933cab6db::t_b45553927ac094 5334-5344,5346,5348-5355
+  s_a0fd4933cab6db::t_fe6c08a2488918 5345,5347
+.claude/plans/2026-07-06T20-15__systemic-design-fixes.md
+  s_a0fd4933cab6db::t_02ac31a1306166 109-110
+tests/audit/TAXONOMY.md
+  s_a0fd4933cab6db::t_2a31b914f1fc5c 2145-2161
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "c6b8f94ce5b7a414d2990455b95676f0b19c378d",
+  "prompts": {},
+  "sessions": {
+    "s_a0fd4933cab6db": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f44efdfd-5e4c-4895-8a1a-c149a64ab4a0",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "nnnet <21066097+nnnet@users.noreply.github.com>"
+    }
+  }
+}
